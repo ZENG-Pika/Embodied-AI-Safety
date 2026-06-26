@@ -17,6 +17,8 @@
 
 </div>
 
+> 🇨🇳 中文版本请见 [README_CN.md](README_CN.md)
+
 ## About
 
 InternDataEngine is a synthetic data generation engine for embodied AI, built on **NVIDIA Isaac Sim 4.5**. It unifies high-fidelity physical simulation, semantic task generation, and large-scale data production.
