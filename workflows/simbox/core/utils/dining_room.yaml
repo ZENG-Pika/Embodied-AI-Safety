@@ -1,0 +1,947 @@
+################################### dinning_room ####################################
+001
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_8617414f380062817ad173f2ad2abc28_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.455]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAAAY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.449, 1.016, 0]
+002
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_f10d8bcb55ea4f49b58ccee293583011_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.457]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAABA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [0.669, -1.355, 0]
+  euler: [0.0, 0.0, 90.0]
+003
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_80a10232595c91f5a40b75bff0dd7041_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.393]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAABI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-3.469, 1.398, 0]
+  euler: [0.0, 0.0, -90.0]
+004
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_cceaa217b9b3ab0ae78391293b54191b_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.375]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAABQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [0.962, -1.946, 0]
+  euler: [0.0, 0.0, -90.0]
+005
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_060a9f60fe3805fd5e7e9a610785ef14_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.372]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAACA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [3.499, -1.83, 0]
+  euler: [0.0, 0.0, 90.0]
+006
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_bddb0c92eb4e444a286662291d60b49a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.25]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAACQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.2, 1.67, 0]
+  euler: [0.0, 0.0, 90.0]
+007
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_7d24e5374cb6463fbbe80f437e3f0332_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.38]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAACY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.1, -1.21, 0]
+  euler: [0.0, 0.0, 0.0]
+008
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_364f0f97b6b10ad12a0b47175a3c0778_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAADA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [0.87, -0.59, 0]
+  euler: [0.0, 0.0, -90.0]
+009
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_39974d1093bba0a9a8977cca1520fba5_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.61]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAADI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [0.89, 1.94, 0]
+  euler: [0.0, 0.0, -90.0]
+010
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_3d1b722b5ed484506cfdc126de353335_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.34]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAADY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-3.39, 3.22, 0]
+  euler: [0.0, 0.0, 0.0]
+011
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_f4f6d2f01d34c0bfc215edad3042a8f7_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.42]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAAEI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.58, -0.74, 0]
+  euler: [0.0, 0.0, 0.0]
+012
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_99f950712b1df66c51fed5ac7e4b64a2_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.41]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWAX5JYKTKJZ2AABAAAAAAA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-0.55, 0.25, 0]
+  euler: [0.0, 0.0, 0.0]
+013
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_d3cf4f83205a9684207c16bde08e246a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWAX5JYKTKJZ2AABAAAAAAI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-1.92, -0.53, 0]
+  euler: [0.0, 0.0, 90.0]
+014
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_11944338718095ef0c1bd920b6a9050f_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.5]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWAX5JYKTKJZ2AABAAAAAAQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-0.52, 0.98, 0]
+  euler: [0.0, 0.0, 90.0]
+015
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_42ed4ca298f9848982d79fdc953b8990_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWAX5JYKTKJZ2AABAAAAACA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.16, -1.64, 0]
+  euler: [0.0, 0.0, 0.0]
+016
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_589c4877ac9ce500141d57e8fc7aa1e6_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWAX5JYKTKJZ2AABAAAAADA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-3.19, 0.21, 0]
+  euler: [0.0, 0.0, -90.0]
+017
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_0d99430f60b6cd3a611e74c332f54843_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.38]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWAX5JYKTKJZ2AABAAAAADI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.47, 0.3, 0]
+  euler: [0.0, 0.0, -90.0]
+018
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_7a61ca57c9510d3a33aea02584d5eaf4_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWAX5JYKTKJZ2AABAAAAADQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.69, -2.2, 0]
+  euler: [0.0, 0.0, -90.0]
+019
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_dca1a7c49e9cac6b823407d7af89f79e_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWAX5JYKTKJZ2AABAAAAADY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-1.8, 1.76, 0]
+  euler: [0.0, 0.0, 90.0]
+  020
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_c7c013caf09f90903b0760cd23239129_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWAX5JYKTKJZ2AABAAAAAEA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-0.11, -2.21, 0]
+  euler: [0.0, 0.0, -90.0]
+021
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_35565d61cac99576e47beb2a926bbf93_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.35]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWAX5JYKTKJZ2AABAAAAAEI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.27, -1.14, 0]
+  euler: [0.0, 0.0, 0.0]
+022
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_e6da468adb8d2af4a1a3f1c828f49eb7_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWBGLKQKTKJZ2AABAAAAAAA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-0.07, 0.61, 0]
+  euler: [0.0, 0.0, -90.0]
+023
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_7e22df4193305463eeacdd2a451fdeb9_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.4]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWBGLKQKTKJZ2AABAAAAAAI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.18, 0.35, 0]
+  euler: [0.0, 0.0, 0.0]
+024
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_fd0aa0be1645383ca0ff95134a426abe_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWBGLKQKTKJZ2AABAAAAAAQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.7, -1.67, 0]
+  euler: [0.0, 0.0, 180.0]
+025
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_2b9d5aa45476e4be343ac4a855c46f01_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.38]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWBGLKQKTKJZ2AABAAAAAAY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-3.42, -4.41, 0]
+  euler: [0.0, 0.0, 180.0]
+026
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_0e084f30c652d581b7c6c6b025cd3681_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWBGLKQKTKJZ2AABAAAAABA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-0.3, -0.83, 0]
+  euler: [0.0, 0.0, 0.0]
+027
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_43605fe0f62607d280497e58fa06473f_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.4]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWBGLKQKTKJZ2AABAAAAABI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.3, 4.77, 0]
+  euler: [0.0, 0.0, 90.0]
+028
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_37eeee73b74849b8ed7110a4b4827125_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.38]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWBGLKQKTKJZ2AABAAAAACA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [0.42, 0.6, 0]
+  euler: [0.0, 0.0, 90.0]
+029
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_2f0a9a5b320d0af09c7fcfcb134b5611_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAABY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-1.21, -2.52, 0]
+  euler: [0.0, 0.0, 0.0]
+030
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_29fb41f0382ef93cf8bd06cef8008b61_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.36]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAACI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-0.14, -1.85, 0]
+  euler: [0.0, 0.0, 90.0]
+031
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_fc6300caba068b4661a34781a4808ef5_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.38]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAAEA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [5.69, -6.42, 0]
+  euler: [0.0, 0.0, -90.0]
+032
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_2f0a9a5b320d0af09c7fcfcb134b5611_0.usd
+  # path: home_scenes/tables/dinning_room/model_687a7df09373b937b8c2a2bf9f69dec6_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.43]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWAX5JYKTKJZ2AABAAAAABQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.14, -2.59, 0]
+  euler: [0.0, 0.0, 180.0]
+033
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_291da4b830e03f8fa8aedc83c80fadc0_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.35]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWAX5JYKTKJZ2AABAAAAABY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-3.96, -0.51, 0]
+  euler: [0.0, 0.0, 180.0]
+034
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_7201dd4d045f851c7c4f86346ae32a17_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWBGLKQKTKJZ2AABAAAAABQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.39, -0.66, 0]
+  euler: [0.0, 0.0, 0.0]
+035
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_9d98e55f6d2026aa7675d6e35a33084c_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MWBGLKQKTKJZ2AABAAAAABY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-3.17, -1.13, 0]
+  euler: [0.0, 0.0, 90.0]
+036
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_6b2604d2a95463155020b2770700aa9e_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.38]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MV7J6NIKTKJZ2AABAAAAADA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.94, -6.33, 0]
+  euler: [0.0, 0.0, 90.0]
+037
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_2989da46b0a817ce48103cc8f2260f2f_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MV7J6NIKTKJZ2AABAAAAADI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [0.18, -11.98, 0]
+  euler: [0.0, 0.0, 90.0]
+038
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_b58d5b89f730400a1fd1da905f1b166e_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.35]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MV7J6NIKTKJZ2AABAAAAADQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.46, -1, 0]
+  euler: [0.0, 0.0, 90.0]
+039
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_52273498e78b14f0f6d6d9de22baff8c_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.39]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MV7J6NIKTKJZ2AABAAAAADY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [9.66, -1.75, 0]
+  euler: [0.0, 0.0, 0.0]
+040
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_6c6e0ad86bfda72cf00031de7fca9b42_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MV7J6NIKTKJZ2AABAAAAAEA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.67, 1.79, 0]
+  euler: [0.0, 0.0, 90.0]
+041
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_eef587b5c4bcc52eb1400975c3c71e90_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MV7J6NIKTKJZ2AABAAAAAEI8_usd_dinning_room_1.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.89, -4.8, 0]
+  euler: [0.0, 0.0, 90.0]
+042
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_3ce6e78553b30fdc01453dbd2ab0883a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.38]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAAAA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.75, -4.2, 0]
+  euler: [0.0, 0.0, 90.0]
+043
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_7edbf82df1c2cd8f2f2599f8d13ede29_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.42]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAAAI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.1, 2.66, 0]
+  euler: [0.0, 0.0, 90.0]
+044
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_ac91d35e26a97ca3cdf0451ccd7a79fe_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAAAQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.98, -0.56, 0]
+  euler: [0.0, 0.0, -90.0]
+045
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_1253acdb578d499efe7f48cc82a6ee90_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.36]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAAAY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.17, -0.9, 0]
+  euler: [0.0, 0.0, 90.0]
+046
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_f97c61131b034e8743c5281d09f792e5_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.34]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAABA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.19, 1.82, 0]
+  euler: [0.0, 0.0, -90.0]
+047
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_a3b65a4d5cbe5c575f2d5963098a4fbe_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.35]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAABQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.85, 1.2, 0]
+  euler: [0.0, 0.0, 90.0]
+048
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_aed34bf72ac5d0043d97650c61e30afc_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAABY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.26, -1.31, 0]
+  euler: [0.0, 0.0, 180.0]
+049
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_f6c7b5049ba2987f47169b68e446cf96_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.53]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAACA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-1.48, -0.19, 0]
+  euler: [0.0, 0.0, 0.0]
+050
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_6b7d82fa97a2d2424805ded6812f6575_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.44]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAACI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.1, -1.36, 0]
+  euler: [0.0, 0.0, -90.0]
+051
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_668540f0e14465ed75b85cebab4b9474_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.41]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAACQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [0.51, -1.88, 0]
+  euler: [0.0, 0.0, 0.0]
+052
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_5ecb9ba218f8e0a6a772a405a7ac0e6b_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.38]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAACY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-3.28, 3.34, 0]
+  euler: [0.0, 0.0, -90.0]
+053
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_5ac32b5baaa93b760c97d641f8d5c5d3_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.26]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAADA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [0.97, 5.43, 0]
+  euler: [0.0, 0.0, 0.0]
+054
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_071e714dd80dacd002fe5f647ddbb1cf_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.34]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAADI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-4.92, -3.55, 0]
+  euler: [0.0, 0.0, 90.0]
+055
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_e52473830620b452614edc4b5e3fea96_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.47]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAADY8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.58, 0.18, 0]
+  euler: [0.0, 0.0, 0.0]
+056
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_74515ef948287f0f700e9c45a6fdc47c_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.38]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAAEA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-3.06, -1.74, 0]
+  euler: [0.0, 0.0, -90.0]
+057
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_ff05aec86093d627c5b847eea0ff2167_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.34]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUCSQAKTKJ5EAABAAAAAEI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.82, 0.86, 0]
+  euler: [0.0, 0.0, 180.0]
+058
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_a5b5a6c7c01650448e60f61b16313301_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.35]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHL5YKTKJ5EAABAAAAAAA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-0.11,-1.95, 0]
+  euler: [0.0, 0.0, 90.0]
+059
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_f46d57d2d2fa0b7dee34ab1201e2cc14_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.36]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHL5YKTKJ5EAABAAAAAAI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-0.99,-4.08, 0]
+  euler: [0.0, 0.0, 0.0]
+060
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_abeaf02073e55b519c59edbf2ffa7b5b_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHL5YKTKJ5EAABAAAAAAQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.44, -2.33, 0]
+  euler: [0.0, 0.0, -90.0]
+061
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_5a8d318d44e6a55cf7686a8246313731_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.38]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAAAA8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [0.25, 0.58, 0]
+  euler: [0.0, 0.0, 0.0]
+062
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_42bfd814921da5caa11f98e41e207019_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.37]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAAAI8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [0.8, -3.22, 0]
+  euler: [0.0, 0.0, 0.0]
+063
+-
+  name: table
+  path: home_scenes/tables/dinning_room/model_0f92fb8b3f68510e0efe9350beceef77_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.44]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAAAQ8_usd_dinning_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-1.89, 3.76, 0]
+  euler: [0.0, 0.0, -90.0]
+################################### dinning_room ####################################

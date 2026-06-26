@@ -1,0 +1,226 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [5000, 5500]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "lift2"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [-5.0380e-05,  2.1183e+00,  9.1657e-01,  1.1151e+00, -5.0215e-04, -1.0668e-05]
+        # left_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        right_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        left_gripper_home: [0.022]
+
+    objects:
+      -
+        name: coke
+        path: basic/pour_half_coke/liangbei/liangbei_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: coke
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [1, 1, 1]
+        init_translation: [0.0, 0.13, 0.0]
+        init_orientation: [0.0, 0.0, 0.0, 1.0]
+        init_parent: "lift2/lift2/lift2/fl/link6"
+        apply_randomization: False
+
+      -
+        name: bowl
+        path: basic/pour_half_coke/bowl/bowl_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bowl
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, -90.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: False
+
+    regions:
+      # -
+      #   object: coke
+      #   target: table
+      #   random_type: A_on_B_region_sampler
+      #   random_config:
+      #     pos_range: [
+      #       [-0.30, -0.08, 0.0],
+      #       [-0.22, 0.00, 0.0]
+      #     ]
+      #     # pos_range: [
+      #     #   [-0.25, 0.05, 0.0], # 0.05
+      #     #   [-0.25, 0.05, 0.0]
+      #     # ]
+      #     yaw_rotation: [0, 0]
+      -
+        object: bowl
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.1, -0.05, 0.0],
+            [-0.05, 0.03, 0.0]
+          ]
+          # pos_range: [
+          #   [0.1, -0.0, 0.0], # 0
+          #   [0.1, -0.0, 0.0]
+          # ]
+          yaw_rotation: [0, 0]
+
+      -
+        object: lift2
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.64, -0.75],
+            [0.0, -0.64, -0.75]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    fluid:
+      container_name: coke
+      color: [0, 0, 0]
+      emissiveColor: [0.0, 0.0, 0.0]
+      opacity: 0.05
+      particleContactOffset: 0.003 # 0.005
+      numParticlesX: 4 # 12
+      numParticlesY: 4 # 12
+      numParticlesZ: 80 # 25
+      center_z: False
+      spacing_scale: 1
+      # z_offset: 0.04
+      max_velocity: 0.4
+
+    cameras:
+      -
+        name: lift2_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fl/link6"
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: lift2_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fr/link6"
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: lift2_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "lift2/lift2/lift2/h_link6"
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+
+
+    data:
+      task_dir: "pour_half_coke_bowl_wmove"
+      language_instruction: "Pour the coke from the bottle into the bowl."
+      detailed_language_instruction: "Move the bottle with the left lift2 arm, and move it above the bowl. Tilt the bottle slowly with the left lift2 arm until coke begins to flow into the glass. Maintain the tilt until the desired amount of coke is transferred. Return the bottle to an upright position and place it back on the table."
+      collect_info: "left"
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 1200
+
+    skills:
+      -
+        lift2:
+          -
+            left:
+              -
+                name: approach__rotate
+                objects: [coke, bowl]
+                success_threshold: 5e-3
+                ignore_substring: ["coke", "visual", "bowl"]
+                hold_vec_weight: [0,0,1,0,0,0]
+                rotate:
+                  type: random
+                  objects: [coke, bowl]
+                  rotate_obj_euler: [
+                    [0, 0, 180.0],
+                    [0, 0, 180.0],
+                  ] # desired orientation of obj_1
+                  success_threshold: 0.05
+                # obj_yaw_offset: 90 # adjust yaw of obj_1 so that its x-axis aligns with obj_2
+                distance: 0.05 # distance of obj_1 relative to obj_2 (along negative x-axis of obj_1)
+                approach_axis: "-x"
+                z_offset: 0.1
+
+              -
+                name: rotate__obj
+                objects: [coke]
+                rotate_obj_euler_delta: [
+                  [0, -80, 0], # -20
+                  [0, -70, 0]
+                ] # XYZ
+                obj_axis_offset: [
+                  ["z", 0.06],
+                  ]
+                trans_offset:
+                  [0, -0.02, 0.0]
+                success_threshold_move: 5e-3
+                success_threshold_rotate: 0.16
+                ignore_substring: ["coke", "visual","bowl"]
+
+              -
+                name: wait
+                objects: [coke]
+                wait_steps: 20
+                success_threshold: 5e-3
+                ignore_substring: ["coke", "visual","bowl"]
+
+# # ##################### move back ###########################
+              # -
+              #   name: rotate__obj
+              #   objects: [coke]
+              #   rotate_obj_euler_delta: [
+              #     [0, 70, 0], # -20
+              #     [0, 70, 0]
+              #   ] # XYZ
+              #   success_threshold_move: 5e-3
+              #   success_threshold_rotate: 0.15
+              #   ignore_substring: ["coke", "visual","bowl"]
+
+              -
+                name: pour__water__succ
+                gripper: close
+                container_name: bowl
+                container_radius: 0.02
+                particle_num_th_min: 50
+                particle_num_th_max: 300
+                # particle_num_threshold: 200
+                # container_up: [
+                #   ['liquors_glass', 'z', 0.98],
+                #   ['liquors', 'z', 0.98]
+                # ]

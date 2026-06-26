@@ -1,0 +1,59 @@
+# FrankaRobotiq85 robot configuration
+# Single-arm 7-DOF robot with Robotiq 2F-85 gripper
+
+# Robot info
+target_class: FrankaRobotiq85
+path: "frankarobotiq/robot.usd"
+
+# CuRobo file
+robot_file:
+  - workflows/simbox/curobo/src/curobo/content/configs/robot/frankarobotiq_left_arm.yml
+
+# Gripper parameters
+gripper_max_width: 0.085
+gripper_min_width: 0.0
+tcp_offset: 0.165
+
+# Solver parameters
+solver_position_iteration_count: 128
+solver_velocity_iteration_count: 4
+stabilization_threshold: 0.005
+
+# Joint indices
+left_joint_indices: [0, 1, 2, 3, 4, 5, 6]
+left_gripper_indices: [7, 8]
+
+# Paths
+fl_ee_path: "arm/panda_link8"
+fl_base_path: "arm/panda_link0"
+
+# Gripper keypoints
+fl_gripper_keypoints:
+  tool_head: [0.0, 0.0, 0.155, 1]
+  tool_tail: [0.0, 0.0, 0.025, 1]
+  tool_side: [0.0, 0.045, 0.155, 1]
+
+# Collision paths
+fl_filter_paths:
+  - "arm/Robotiq_2F_85/left_inner_finger_pad"
+  - "arm/Robotiq_2F_85/right_inner_finger_pad"
+fl_forbid_collision_paths:
+  - "arm/panda_link2"
+  - "arm/panda_link3"
+  - "arm/panda_link4"
+  - "arm/panda_link5"
+  - "arm/panda_link6"
+  - "arm/panda_link7"
+  - "arm/panda_link8"
+
+# Pose processing (Z-axis gripper)
+R_ee_graspnet: [[0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]]
+ee_axis: "z"
+
+# Extra depth file
+extra_depth_file: "tcp2base_offset.json"
+
+# Default joint home positions
+left_joint_home: [0, -0.785, 0, -2.356, 0, 1.571, 0.0]
+left_joint_home_std: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+left_gripper_home: [0.0, 0.0]

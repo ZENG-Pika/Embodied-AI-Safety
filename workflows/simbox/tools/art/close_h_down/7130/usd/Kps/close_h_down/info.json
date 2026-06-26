@@ -1,0 +1,30 @@
+{
+    "object_keypoints": {
+        "articulated_object_head": [
+            -0.018498502245147763,
+            -0.1530302670588388,
+            0.6257089972496033
+        ],
+        "articulated_object_tail": [
+            -0.42819953949226636,
+            -0.1526598858392625,
+            0.6257089972496033
+        ]
+    },
+    "object_scale": [
+        0.21906105089025496,
+        0.21906105089025496,
+        0.21906105089025496,
+        1.0
+    ],
+    "object_name": "oven7130",
+    "object_usd": "YOUR_PATH_TO_7130/usd/instance.usd",
+    "object_link0_rot_axis": "-x",
+    "object_link0_contact_axis": "-y",
+    "object_base_front_axis": "z",
+    "joint_index": 0,
+    "object_prim_path": "/oven7130",
+    "object_link_path": "/oven7130/instance/group_1",
+    "object_base_path": "/oven7130/instance/group_0",
+    "object_revolute_joint_path": "/oven7130/instance/group_1/RevoluteJoint"
+}

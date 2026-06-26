@@ -1,0 +1,13 @@
+{
+    "DIR": "YOUR_PATH_TO_7130/usd",
+    "USD_NAME": "7130.usd",
+    "INSTANCE_NAME": "oven7130",
+    "link0_initial_prim_path": "/root/group_1",
+    "base_initial_prim_path": "/root/group_0",
+    "revolute_joint_initial_prim_path": "/root/group_1/RevoluteJoint",
+    "joint_index": 0,
+    "LINK0_ROT_AXIS": "-x",
+    "BASE_FRONT_AXIS": "z",
+    "LINK0_CONTACT_AXIS": "-y",
+    "SCALED_VOLUME": 0.02
+}

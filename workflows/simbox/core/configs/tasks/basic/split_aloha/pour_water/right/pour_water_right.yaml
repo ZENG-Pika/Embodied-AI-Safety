@@ -1,0 +1,242 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_clean_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [5000, 5500]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "split_aloha"
+        robot_config_file: workflows/simbox/core/configs/robots/split_aloha.yaml
+        euler: [0.0, 0.0, 90.0]
+        # left_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        # right_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        # left_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        # right_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        constrain_grasp_approach: True
+
+    objects:
+      -
+        name: pot
+        path: basic/pour/pour_water/pot/pot_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: pot
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: False
+
+      -
+        name: cup
+        path: basic/pour/pour_water/cup/cup_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: cup
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: False
+
+    regions:
+      -
+        object: pot
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.22, -0.07, 0.0],
+            [0.3, -0.02, 0.0]
+          ]
+          yaw_rotation: [0, 30]
+
+      -
+        object: cup
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.1, -0.03, 0.0],
+            [0.0, 0.05, 0.0]
+          ]
+          yaw_rotation: [0, 0]
+
+      -
+        object: split_aloha
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.83, -0.75],
+            [0.0, -0.83, -0.75]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    fluid:
+      container_name: pot
+      color: [0.0, 0.5, 1.0]
+      opacity: 0.05
+      numParticlesX: 7
+      numParticlesY: 7
+      numParticlesZ: 450
+
+    cameras:
+      -
+        name: split_aloha_hand_left
+        translation: [0.0, 0.08, 0.05]
+        orientation: [0.0, 0.0, 0.965, 0.259]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_hand_right
+        translation: [0.0, 0.08, 0.04]
+        orientation: [0.0, 0.0, 0.972, 0.233]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_head
+        translation: [0.0, -0.00818, 0.1]
+        orientation: [0.658, 0.259, -0.282, -0.648]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link"  # todo: robot base frame
+
+    data:
+      task_dir: "pour_water"
+      language_instruction: "Pour the water from the pot into the cup."
+      detailed_language_instruction: "Grasp and lift the pot with the right split_aloha arm, and move it above the cup. Tilt the pot slowly with the right split_aloha arm until water begins to flow into the cup. Maintain the tilt until the desired amount of water is transferred. Return the pot to an upright position and place it back on the table."
+      collect_info: "right"
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 1200
+
+    skills:
+      -
+        split_aloha:
+          -
+            right:
+              -
+                name: manualpick
+                objects: [pot]
+                filter_y_dir: ["forward", 60] #60
+                filter_z_dir: ["forward", 60] #60
+                pre_grasp_offset: 0.0
+                post_grasp_offset_min: 0.008
+                post_grasp_offset_max: 0.008 # 0.008
+                test_mode: ik
+                update_pose_cost_metric_none: True
+                grasp_scale: 1
+                adjust_ori: ['y', 'z', 'max'] # pose_axis, base_axis, flag
+                adjust_rotate_axis: 'z'
+                adjust_angle_list_cfg: [-30,30,21]
+              -
+                name: move
+                objects: [pot, pot]
+                success_threshold: 5e-3
+                delta_trans: [[-0.03, 0, 0.04]]
+                ignore_substring: ["pot", "visual", "cup"]
+              -
+                name: approach__rotate
+                objects: [pot, cup]
+                success_threshold: 5e-3
+                ignore_substring: ["pot", "visual", "cup"]
+                rotate:
+                  type: towards
+                  objects: [pot, cup]
+                  success_threshold: 1
+                obj_yaw_offset: 90
+                distance: 0.16
+                dummy_forward:
+                  gripper_state: -1.0 # Close the gripper
+                  num_steps: 80
+              -
+                name: rotate__obj
+                objects: [pot]
+                obj_axis_offset: [
+                  ["y", -0.02],
+                  ["z", 0.03],
+                  ]
+                rotate_obj_euler_delta: [
+                  [-55, 0, 0], # -20
+                  [-55, 0, 0]
+                ] # XYZ
+                trans_offset:
+                  [0, 0, 0.04]
+                success_threshold_move: 5e-3
+                success_threshold_rotate: 0.087
+                ignore_substring: ["pot", "visual","cup"]
+                dummy_forward:
+                  ctrl_list: [
+                    [1, -50, delta],
+                    [2, 0, delta],
+                    [4, 60, delta],
+                  ]
+                  num_steps: 50
+                  gripper_state: -1.0
+              -
+                name: wait
+                objects: [pot]
+                wait_steps: 20
+                success_threshold: 5e-3
+                ignore_substring: ["pot", "visual","cup"]
+    # ##################### move back ###########################
+              -
+                name: joint__ctrl
+                objects: [pot]
+                gripper_state: -1.0 # Close the gripper
+                num_steps: 40
+                ctrl_list: [
+                  [1, -40, delta],
+                  [2, 40, delta],
+                  [4, -45, delta],
+                ]
+                success_threshold_js: 3e-2
+              -
+                name: goto__pose
+                position: [0.2124429,  0.07902812, 0.05059409]
+                quaternion: [0.35355339, 0.61237244, 0.61237244, 0.35355339]
+                ignore_substring: ["pot", "visual", "cup"]
+                max_noise_m: 0
+                max_noise_deg: 0
+                interp_nums: 4
+              -
+                name: move
+                objects: [pot, pot]
+                success_threshold: 5e-3
+                delta_trans: [[0, 0, -0.04]]
+                ignore_substring: ["pot", "visual", "cup"]
+              -
+                name: gripper__action
+                gripper_state: -1.0 # Close the gripper
+              -
+                name: pour__water__succ
+                gripper_state: -1.0 # Close the gripper
+                container_name: cup
+                particle_num_th_min: 150
+                particle_num_th_max: 4000
+                container_radius: 0.025
+                container_up: [
+                  ['cup', 'y', 0.9],
+                  ['pot', 'y', 0.8]
+                ]

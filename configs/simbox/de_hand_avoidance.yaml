@@ -1,0 +1,27 @@
+name: hand_avoidance
+load_stage:
+  scene_loader:
+    type: env_loader
+    args:
+      workflow_type: SimBoxDualWorkFlow
+      cfg_path: workflows/simbox/core/configs/tasks/hand_avoidance/split_aloha/hand_avoidance.yaml
+      simulator:
+        physics_dt: 1/30
+        rendering_dt: 1/30
+        stage_units_in_meters: 1.0
+        headless: false
+        anti_aliasing: 0
+  layout_random_generator:
+    type: env_randomizer
+    args:
+      random_num: 6
+      strict_mode: false
+plan_with_render_stage:
+  plan_with_render:
+    type: plan_with_render
+store_stage:
+  writer:
+    type: env_writer
+    args:
+      batch_async: true
+      output_dir: output/${name}/

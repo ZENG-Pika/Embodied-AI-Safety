@@ -1,0 +1,12 @@
+{
+    "Tables": [
+        {
+            "usd_path": "table0/instance.usd",
+            "scale": [
+                0.0015,
+                0.0015,
+                0.001
+            ]
+        }
+    ]
+}

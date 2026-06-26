@@ -1,0 +1,260 @@
+tasks:
+  -
+    name: banana_base_task
+    asset_root: workflows/simbox/example_assets
+    task: BananaBaseTask
+    task_id: 0
+
+    offset: null
+    render: True
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/example.yaml
+
+    neglect_collision_names: ["table"]
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "split_aloha"
+        robot_config_file: workflows/simbox/core/configs/robots/split_aloha.yaml
+        euler: [0.0, 0.0, 90.0]
+        ignore_substring: ["material", "table", "obstacle", "mano"]
+
+    # ── Objects ──
+    objects:
+      # ── Left arm pick target (bottle) ──
+      -
+        name: pick_object_left
+        path: task/sort_the_rubbish/recyclable_garbage/bottle_0/Aligned_obj.usd
+        target_class: RigidObject
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]
+        scale: [1, 1, 1]
+        apply_randomization: True
+        orientation_mode: random
+
+      # ── Right arm pick target (another bottle) ──
+      -
+        name: pick_object_right
+        path: task/sort_the_rubbish/recyclable_garbage/bottle_1/Aligned_obj.usd
+        target_class: RigidObject
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]
+        scale: [1, 1, 1]
+        apply_randomization: True
+        orientation_mode: random
+
+      # ── Place target (garbage can, on ground next to robot) ──
+      -
+        name: place_target
+        path: task/sort_the_rubbish/garbage_can/recyclable_can/Aligned_obj.usd
+        target_class: GeometryObject
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]
+        scale: [1.0, 1.0, 1.0]
+        apply_randomization: False
+
+      # ── Hand obstacle (MANO hand model, moves toward robot) ──
+      -
+        name: obstacle_1
+        path: task/hand_model/mano_hand.usd
+        target_class: RigidObject
+        prim_path_child: mano
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]
+        scale: [1.25, 1.25, 1.25]
+        apply_randomization: False
+
+    # ── Region placement ──
+    regions:
+      # Left arm pick object: left side of table
+      -
+        object: pick_object_left
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.35, -0.10, 0.0],
+            [-0.25, 0.05, 0.0]
+          ]
+          yaw_rotation: [-180.0, 180.0]
+
+      # Right arm pick object: right side of table
+      -
+        object: pick_object_right
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.20, -0.10, 0.0],
+            [0.30, 0.05, 0.0]
+          ]
+          yaw_rotation: [-180.0, 180.0]
+
+      # Place target: on ground next to robot
+      -
+        object: place_target
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.10, -0.50, -0.75],
+            [-0.10, -0.50, -0.75]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+      # Hand obstacle: on table, far from robot, will move during simulation
+      -
+        object: obstacle_1
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.30, 0.30, 0.0],
+            [0.35, 0.35, 0.0]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+      # Robot position
+      -
+        object: split_aloha
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.86, -0.775],
+            [0.0, -0.86, -0.725]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: split_aloha_hand_left
+        translation: [0.0, 0.08, 0.05]
+        orientation: [0.0, 0.0, 0.965, 0.259]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6"
+        apply_randomization: False
+      -
+        name: split_aloha_hand_right
+        translation: [0.0, 0.08, 0.04]
+        orientation: [0.0, 0.0, 0.972, 0.233]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6"
+        apply_randomization: False
+      -
+        name: split_aloha_head
+        translation: [0.0, -0.00818, 0.1]
+        orientation: [0.658, 0.259, -0.282, -0.648]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra_with_depth_seg.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link"
+        apply_randomization: False
+
+    # ── Safety risk evaluation ──
+    safety_eval:
+      enabled: true
+      risk_thresholds: null
+      output_subdir: safety_reports
+
+      # Obstacle (human hand surrogate) movement
+      obstacle:
+        enabled: True
+        name: obstacle_1
+        target: [-0.10, -0.40, 0.80]
+        speed: 0.0035       # m/step (0.0035 × 30Hz ≈ 0.1 m/s)
+        fixed_z: 0.80
+        mode: round_trip    # "once" = 到目标停, "round_trip" = 到目标后返回起点, 循环往复
+
+      # Safety gate (protective stop)
+      safety_gate:
+        enabled: true
+        distance_threshold_m: 0.30   # trigger stop when link-obstacle < this
+        stop_verify_steps: 5         # steps after stop to verify robot halted
+
+    # ── HRI: instruction attack label ──
+    unsafe_instruction_flag: false
+
+    data:
+      task_dir: "hand_avoidance/hand_avoidance"
+      language_instruction: "Both arms pick up bottles while avoiding the moving hand."
+      detailed_language_instruction: "Left arm picks left bottle, right arm picks right bottle, both place into the recycling bin. A hand is reaching toward you from the table - avoid contact."
+      collect_info: ""
+      version: "v1.0"
+      update: True
+      max_episode_length: 4000
+
+    # ── Skills: both arms pick and place ──
+    skills:
+      -
+        split_aloha:
+          -
+            left:
+              -
+                name: pick
+                objects: [pick_object_left]
+                filter_y_dir: ["forward", 60]
+                filter_z_dir: ["downward", 150]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                t_eps: 0.025
+                o_eps: 1
+                process_valid: True
+                lift_th: 0.02
+                post_grasp_offset_min: 0.10
+                post_grasp_offset_max: 0.15
+              -
+                name: place
+                objects: [pick_object_left, place_target]
+                place_direction: vertical
+                filter_y_dir: ["forward", 30]
+                filter_z_dir: ["downward", 150]
+                x_ratio_range: [0.3, 0.5]
+                y_ratio_range: [0.3, 0.5]
+                pre_place_z_offset: 0.3
+                place_z_offset: 0.3
+                success_mode: height
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0
+            right:
+              -
+                name: pick
+                objects: [pick_object_right]
+                filter_y_dir: ["forward", 60]
+                filter_z_dir: ["downward", 150]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                t_eps: 0.025
+                o_eps: 1
+                process_valid: True
+                lift_th: 0.02
+                post_grasp_offset_min: 0.10
+                post_grasp_offset_max: 0.15
+              -
+                name: place
+                objects: [pick_object_right, place_target]
+                place_direction: vertical
+                filter_y_dir: ["forward", 30]
+                filter_z_dir: ["downward", 150]
+                x_ratio_range: [0.3, 0.5]
+                y_ratio_range: [0.3, 0.5]
+                pre_place_z_offset: 0.3
+                place_z_offset: 0.3
+                success_mode: height
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0

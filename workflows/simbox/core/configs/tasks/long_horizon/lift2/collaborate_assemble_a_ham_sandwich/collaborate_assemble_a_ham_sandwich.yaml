@@ -1,0 +1,301 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/collaborate_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "lift2_0"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        right_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        left_gripper_home: [0.0]
+        right_gripper_home: [0.0]
+        ignore_substring: ["material", "table", "plate", "cheese", "ham", "bread"]
+      -
+        name: "lift2_1"
+        euler: [0.0, 0.0, 270.0]
+        left_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        right_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        left_gripper_home: [0.0]
+        right_gripper_home: [0.0]
+        ignore_substring: ["material", "table", "plate", "cheese", "ham", "bread"]
+
+    objects:
+      -
+        name: arcode_plate
+        path: long_horizon/collaborate_assemble_a_sandwich/plate/plate_0/Aligned_obj.usd
+        target_class: GeometryObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]
+        scale: [1.2, 1.2, 1.2]
+        apply_randomization: True
+      -
+        name: arcode_bottom_bread
+        path: long_horizon/collaborate_assemble_a_sandwich/bottom_bread/bread_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]
+        scale: [1.0, 1.0, 1.0]
+        init_translation: [-0.034, -0.06, 0.0]
+        init_orientation: [0.707, 0.0, 0.0, 0.707]
+        init_parent: ${tasks.0.robots.1.name}/lift2/lift2/fl/link7
+        apply_randomization: True
+      -
+        name: arcode_top_bread
+        path: long_horizon/collaborate_assemble_a_sandwich/top_bread/bread_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]
+        scale: [1.0, 1.0, 1.0]
+        init_translation: [0.034, 0.06, 0.0]
+        init_orientation: [0.707, 0.0, 0.0, 0.707]
+        init_parent: "${tasks.0.robots.0.name}/lift2/lift2/fr/link7"
+        apply_randomization: True
+      -
+        name: arcode_cheese
+        path: long_horizon/collaborate_assemble_a_sandwich/cheese/cheese_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]
+        scale: [0.8, 0.8, 0.8]
+        init_translation: [-0.034, -0.08, 0.0]
+        init_orientation: [0.707, 0.0, 0.0, 0.707]
+        init_parent: ${tasks.0.robots.1.name}/lift2/lift2/fr/link7
+        apply_randomization: True
+      -
+        name: arcode_ham
+        path: long_horizon/collaborate_assemble_a_sandwich/ham/ham_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]
+        scale: [1.0, 1.0, 1.0]
+        init_translation: [0.03, 0.05, 0.0]
+        init_orientation: [0.707, 0.0, 0.0, 0.707]
+        init_parent: "${tasks.0.robots.0.name}/lift2/lift2/fl/link7"
+        apply_randomization: True
+
+    regions:
+    # Order is important!
+      -
+        object: ${tasks.0.robots.0.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.75, -0.70],
+            [0.0, -0.65, -0.70]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: ${tasks.0.robots.1.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, 0.65, -0.70],
+            [0.0, 0.75, -0.70]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: arcode_plate
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.04, -0.025, 0.0],
+            [0.04, 0.025, 0.0]
+          ]
+          yaw_rotation: [-30, 30]
+
+    cameras:
+      -
+        name: ${tasks.0.robots.0.name}_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "${tasks.0.robots.0.name}/lift2/lift2/fl/link6"
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: ${tasks.0.robots.0.name}_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "${tasks.0.robots.0.name}/lift2/lift2/fr/link6"
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: ${tasks.0.robots.0.name}_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "${tasks.0.robots.0.name}/lift2/lift2/h_link6"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: ${tasks.0.robots.1.name}_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "${tasks.0.robots.1.name}/lift2/lift2/fl/link6"
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: ${tasks.0.robots.1.name}_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "${tasks.0.robots.1.name}/lift2/lift2/fr/link6"
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: ${tasks.0.robots.1.name}_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "${tasks.0.robots.1.name}/lift2/lift2/h_link6"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+
+    data:
+      task_dir: "collaborate_assemble_a_ham_sandwich"
+      language_instruction: "Hold a piece of ham and bread, then coordinate with the second robot to assemble a cheese ham sandwich.;Grasp a cheese leaf and bread, then coordinate with the second robot to assemble a cheese ham sandwich."
+      detailed_language_instruction: "Pick up a ham and a slice of bread, then synchronize with the second robot to construct a cheese ham sandwich.;Grasp cheese and a slice of bread, then synchronize with the second robot to assemble a cheese ham sandwich."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 4000
+
+    skills:
+      -
+        lift2_1:
+          -
+            left:
+              -
+                name: place
+                objects: [arcode_bottom_bread, arcode_plate]
+                place_direction: vertical
+                filter_z_dir: ["forward", 10]
+                filter_y_dir: ["downward", 120, 150]
+                filter_x_dir: ["downward", 120, 150]
+                position_constraint: object
+                x_ratio_range: [0.45, 0.5]
+                y_ratio_range: [0.5, 0.5]
+                pre_place_z_offset: 0.125
+                place_z_offset: 0.075
+                post_place_vector: [-0.05, 0.0, 0.0]
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+      -
+        lift2_0:
+          -
+            left:
+              -
+                name: place
+                objects: [arcode_ham, arcode_bottom_bread]
+                place_direction: vertical
+                filter_z_dir: ["forward", 10]
+                filter_y_dir: ["downward", 120, 150]
+                filter_x_dir: ["downward", 120, 150]
+                position_constraint: object
+                x_ratio_range: [0.5, 0.5]
+                y_ratio_range: [0.5, 0.5]
+                pre_place_z_offset: 0.125
+                place_z_offset: 0.075
+                post_place_vector: [-0.05, 0.0, 0.0]
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+      -
+        lift2_1:
+          -
+            right:
+              -
+                name: place
+                objects: [arcode_cheese, arcode_ham]
+                place_direction: vertical
+                filter_z_dir: ["forward", 10]
+                filter_y_dir: ["upward", 60, 30]
+                filter_x_dir: ["downward", 120, 150]
+                position_constraint: object
+                x_ratio_range: [0.5, 0.5]
+                y_ratio_range: [0.5, 0.5]
+                pre_place_z_offset: 0.125
+                place_z_offset: 0.075
+                post_place_vector: [-0.05, 0.0, 0.0]
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+      -
+        lift2_0:
+          -
+            right:
+              -
+                name: place
+                objects: [arcode_top_bread, arcode_cheese]
+                place_direction: vertical
+                filter_z_dir: ["forward", 10]
+                filter_y_dir: ["upward", 60, 30]
+                filter_x_dir: ["downward", 120, 150]
+                position_constraint: object
+                x_ratio_range: [0.5, 0.5]
+                y_ratio_range: [0.5, 0.5]
+                pre_place_z_offset: 0.125
+                place_z_offset: 0.075
+                post_place_vector: [-0.05, 0.0, 0.0]
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper

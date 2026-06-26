@@ -1,0 +1,8 @@
+camera_type: "Astra"
+camera_params: [488.52, 488.52, 323.93, 219.15]
+resolution_width: 640
+resolution_height: 480
+frequency: 30
+pixel_size: 2.0
+f_number: 2.0
+focus_distance: 0.5

@@ -1,0 +1,164 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+    # arena_file: workflows/simbox/core/configs/arenas/scene_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "lift2"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        right_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        left_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        right_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        ignore_substring: ["material"]
+
+    objects:
+      -
+        name: push_art_right
+        target_class: ArticulatedObject
+        dataset: pm
+        joint_position_range: [0.10, 0.175]
+        info_name: "push"
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        path: ""
+        category: ""
+        obj_info_path: ""
+        fix_base: True
+        art_cat: art/storagefurniture_middle
+
+    regions:
+      -
+        object: push_art_right
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.05, -0.025, 0.0],
+            [0.40, 0.125, 0.0]
+          ]
+          yaw_rotation: [-30, 30]
+      -
+        object: lift2
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.025, -0.8, -0.6],
+            [0.025, -0.80, -0.5]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: lift2_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fl/link6"  # todo
+        apply_randomization: False
+      -
+        name: lift2_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fr/link6"
+        apply_randomization: False
+      -
+        name: lift2_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "lift2/lift2/lift2/h_link6"  # todo: robot base frame
+        apply_randomization: False
+
+    data:
+      task_dir: "push_the_storagefurniture_right_arm_middle"
+      language_instruction: "Push the storagefurniture with right arm."
+      detailed_language_instruction: "Push and close the storagefurniture with the right robotic arm."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 600
+
+    skills:
+      -
+        lift2:
+          -
+            right:
+              -
+                name: close
+                objects: [push_art_right]
+                planner_setting:
+                  task_name: CloseBox
+                  category_name: Articulated
+
+                  tool_keypoint_name_list: [tool_head, tool_tail, tool_side]
+                  object_keypoint_name_list: [articulated_object_head, articulated_object_tail]
+                  success_threshold: 0.01
+                  constraint_list:
+                    - keypoint_name: tool_head
+                      target_keypoint_name: link_contact_point
+                      tolerance: 0.000001
+                      type: point2point_constraint
+                      name: fingers_contact_with_link0
+
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_side
+                      target_axis: object_link0_contact_axis
+                      tolerance: 0.0005
+                      target_inner_product: -1
+                      type: frame_axis_parallel
+                      name: hand_parallel_to_link0_edge
+
+                    - axis_from_keypoint_name: tool_tail
+                      axis_to_keypoint_name: tool_head
+                      target_axis: object_link0_move_axis
+                      tolerance: 0.3
+                      target_inner_product: 1
+                      type: frame_axis_parallel
+                      name: hand_parallel_to_link0_move_axis
+
+                  contact_pose_index: 2
+                  # pre-actuation pose list.
+                  pre_actuation_motions: [["translate_x", -0.05]] #   ["translate_z", -0.0001] , ["translate_x", -0.01],
+                  # post-actuation pose list
+                  post_actuation_motions: [["translate_x", 0.15],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05]] # ["translate_z", 0.08],
+
+                  # in link8 frame, in degree, in metre
+                  keypose_random_range:
+                    orientation:
+                      x_min: -45
+                      x_max: 45
+                      y_min: -3
+                      y_max: 3
+                      z_min: -5
+                      z_max: 5
+                    position:
+                      x_min: -0.02
+                      x_max: 0.0
+                      y_min: -0.03
+                      y_max: 0.03
+                      z_min: -0.005
+                      z_max: 0.005

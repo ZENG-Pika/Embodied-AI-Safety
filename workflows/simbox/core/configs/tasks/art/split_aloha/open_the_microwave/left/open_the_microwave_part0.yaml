@@ -1,0 +1,167 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+    # arena_file: workflows/simbox/core/configs/arenas/scene_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "split_aloha"
+        robot_config_file: workflows/simbox/core/configs/robots/split_aloha.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        right_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        left_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        right_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        ignore_substring: ["material"]
+
+    objects:
+      -
+        name: open_v_left
+        target_class: ArticulatedObject
+        dataset: pm
+        info_name: "open_v"
+        euler: [0.0, 0.0, 0.0]
+        scale: [0.001, 0.001, 0.001]
+        joint_position_range: [0.38, 0.38]
+        apply_randomization: True
+        path: ""
+        category: ""
+        obj_info_path: ""
+        art_cat: "art/microwave_gr"
+
+    regions:
+      -
+        object: open_v_left
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.30, 0.0, 0.0],
+            [0.05, 0.15, 0.0]
+          ]
+          yaw_rotation: [-20, 20]
+      -
+        object: split_aloha
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.86, -0.765],
+            [0.0, -0.86, -0.765]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: split_aloha_hand_left
+        translation: [0.0, 0.08, 0.05]
+        orientation: [0.0, 0.0, 0.965, 0.259]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_hand_right
+        translation: [0.0, 0.08, 0.04]
+        orientation: [0.0, 0.0, 0.972, 0.233]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_head
+        translation: [0.0, -0.00818, 0.1]
+        orientation: [0.658, 0.259, -0.282, -0.648]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link"  # todo: robot base frame
+
+    data:
+      task_dir: "open_the_microwave_part0"
+      language_instruction: "Open the microwave with left arm."
+      detailed_language_instruction: "Grab the upper part of the microwave door and swing it open with the left robotic arm."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480"
+      update: True
+      max_episode_length: 600
+
+    skills:
+      -
+        split_aloha:
+          -
+            left:
+              -
+                name: open
+                objects: [open_v_left]
+                # debug start: KPAMPlanner
+                planner_setting:
+                  task_name: OpenBox
+                  category_name: Articulated
+
+                  tool_keypoint_name_list: [tool_head, tool_tail, tool_side]
+                  object_keypoint_name_list: [articulated_object_head, articulated_object_tail]
+                  success_threshold: 0.52
+                  constraint_list:
+                    # ensure the gripper to be in contact with the box lid with whole fingers
+                    - keypoint_name: tool_head
+                      target_keypoint_name: articulated_object_head
+                      tolerance: 0.000001
+                      type: point2point_constraint
+                      name: fingers_contact_with_link0
+
+                    # ensure surface of the gripper to be parallel to the box lid
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_tail
+                      target_axis: link0_contact_axis
+                      tolerance: 0.3
+                      target_inner_product: -1
+                      type: frame_axis_parallel
+                      name: hand_parallel_to_link0_edge
+
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_side
+                      cross_target_axis1_from_keypoint_name: articulated_object_head
+                      cross_target_axis1_to_keypoint_name: articulated_object_tail
+                      target_axis: link0_contact_axis
+                      tolerance: 0.0005
+                      target_inner_product: 1
+                      type: frame_axis_parallel  # enforce parallelism via cross product constraint
+                      name: fingers_orthogonal_to_link0
+
+                  contact_pose_index: 2
+                  # pre-actuation pose list.
+                  pre_actuation_motions: []
+                  # post-actuation pose list
+                  post_actuation_motions: [["translate_z", 0.04], ["rotate", -0.2], ["rotate", -0.2], ["rotate", -0.2], ["rotate", -0.2], ["rotate", -0.1], ["rotate", -0.1]]
+                  keypose_random_range:
+                    orientation:  # rotation around each axis (degrees)
+                      x_min: 0.0
+                      x_max: 0.0
+                      y_min: 0.0
+                      y_max: 0.0
+                      z_min: 0.0
+                      z_max: 0.0
+                    position:
+                      x_min: 0.0
+                      x_max: 0.0
+                      y_min: 0.0
+                      y_max: 0.0
+                      z_min: 0.0
+                      z_max: 0.0

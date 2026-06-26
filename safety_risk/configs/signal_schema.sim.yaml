@@ -1,0 +1,119 @@
+# Simulation raw signal schema.
+# Derived from robot_safety_risk_data_contract.xlsx: Sim_Raw_GT sheet.
+# This file defines the expected fields, types, units, and requiredness for
+# simulation ground-truth signals. It is a development-time reference; the
+# runtime schema is enforced by Pydantic models in schema.py.
+
+metadata:
+  source: "robot_safety_risk_data_contract.xlsx / Sim_Raw_GT"
+  version: "1.0.0"
+  description: >
+    Simulation benchmark 采集完整物理状态、精确距离、碰撞、接触力、
+    损坏模型、感知 GT 与 HRI/规划日志。
+
+# ── Episode / Scenario metadata ──────────────────────────────────────────────
+episode_meta:
+  episode_id:        {type: string,  required: true,  unit: null,   id: S-COM-*}
+  scenario_id:       {type: string,  required: M0,   unit: null,   id: S-COM-001}
+  random_seed:       {type: integer, required: M0,   unit: null,   id: S-COM-002}
+  task_type:         {type: string,  required: M0,   unit: null}
+  object_id:         {type: string,  required: M0,   unit: null}
+  target_object_id:  {type: string,  required: M0,   unit: null}
+  target_pose:       {type: "array[float;7]", required: M1, unit: "m+quat", format: pose_format}
+  object_hazard_class:    {type: string, required: M1, unit: null, values: [none, low, medium, high, extreme]}
+  object_fragility_class: {type: string, required: M1, unit: null, values: [none, low, medium, high, extreme]}
+  physics_config:    {type: json, required: M0, unit: null, id: S-COM-003}
+  lighting_config:   {type: json, required: M1, unit: null, id: S-COM-004}
+  sensor_noise_config: {type: json, required: M1, unit: null, id: S-COM-005}
+
+# ── Robot GT state ───────────────────────────────────────────────────────────
+robot_state:
+  joint_position_q_gt:    {type: "array[float;n]", unit: rad,    freq: "50-500Hz", required: M0, id: S-ROBOT-001}
+  joint_velocity_dq_gt:   {type: "array[float;n]", unit: rad/s,  freq: "50-500Hz", required: M0, id: S-ROBOT-002}
+  joint_acceleration_gt:  {type: "array[float;n]", unit: "rad/s^2", freq: "50-500Hz", required: M1, id: S-ROBOT-003}
+  joint_torque_gt:        {type: "array[float;n]", unit: "N·m",  freq: "50-500Hz", required: M0, id: S-ROBOT-004}
+  joint_limit:            {type: json, unit: rad, required: M0}
+  link_pose_gt:           {type: "array[n_links][7]", unit: "m+quat", freq: "50-500Hz", required: M0, id: S-ROBOT-005}
+  link_velocity_gt:       {type: "array[n_links][6]", unit: "m/s+rad/s", freq: "50-500Hz", required: M1, id: S-ROBOT-006}
+  ee_pose_gt:             {type: "array[float;7]", unit: "m+quat", freq: "50-500Hz", required: M0, id: S-ROBOT-007}
+  ee_velocity_gt:         {type: "array[float;6]", unit: "m/s+rad/s", freq: "50-500Hz", required: M1}
+  robot_mode:             {type: string, unit: null, required: M2}
+  controller_state:       {type: json,   unit: null, required: M2}
+
+# ── Object / Environment GT state ───────────────────────────────────────────
+object_state:
+  object_pose_gt:             {type: "dict[id]->array[7]", unit: "m+quat", freq: "50-500Hz", required: M0, id: S-OBJ-001}
+  object_velocity_gt:         {type: "dict[id]->array[3]", unit: m/s,      freq: "50-500Hz", required: M0, id: S-OBJ-002}
+  object_angular_velocity_gt: {type: "dict[id]->array[3]", unit: rad/s,    freq: "50-500Hz", required: M1, id: S-OBJ-003}
+  object_physical_params:     {type: json, unit: "kg,无,kg·m²,m", required: M0, id: S-OBJ-004}
+
+environment_state:
+  scene_mesh_gt:         {type: mesh, required: M0, id: S-ENV-001}
+  obstacle_pose_gt:      {type: "array/list", unit: "m+quat", freq: "50-500Hz", required: M0, id: S-ENV-002}
+  human_surrogate_pose_gt: {type: json, unit: "m+quat/keypoints", freq: "50-500Hz", required: M0, id: S-HUM-001}
+  intrusion_trajectory_gt: {type: "array[time,pose]", unit: "m+time", freq: "50-500Hz", required: M0, id: S-HUM-002}
+  table_boundary:        {type: json, unit: m, required: M1}
+  support_surface:       {type: json, unit: m, required: M1}
+
+# ── Precise distance GT ─────────────────────────────────────────────────────
+distance_gt:
+  robot_human_distance_matrix_gt: {type: "matrix[link,bodypart]", unit: cm, freq: "50-500Hz", required: M0, id: S-DIST-001}
+  ee_human_distance_gt:           {type: "float/time_series",    unit: cm, freq: "50-500Hz", required: M0, id: S-DIST-002}
+  object_human_distance_gt:       {type: "float/time_series",    unit: cm, freq: "50-500Hz", required: M0, id: S-DIST-003}
+  object_env_distance_gt:         {type: "float/matrix",         unit: cm, freq: "50-500Hz", required: M0, id: S-DIST-004}
+  link_env_distance_gt:           {type: "float/matrix",         unit: cm, freq: "50-500Hz", required: M0, id: S-DIST-005}
+  self_distance_gt:               {type: "float/matrix",         unit: cm, freq: "50-500Hz", required: M0, id: S-DIST-006}
+
+# ── Collision / contact GT ──────────────────────────────────────────────────
+collision_gt:
+  collision_pair_gt:   {type: "list[(bodyA,bodyB,time)]", required: M0, id: S-COLL-001}
+  collision_location_gt: {type: "array[float;3]", unit: m, required: M1, id: S-COLL-002}
+  penetration_depth_gt:  {type: float, unit: cm, required: M1, id: S-COLL-003}
+  contact_force_gt:    {type: "array[float;3]/time_series", unit: N, freq: "100-1000Hz", required: M0, id: S-COLL-004}
+  contact_impulse_gt:  {type: "float/time_series", unit: "N·s", freq: "100-1000Hz", required: M0, id: S-COLL-005}
+  contact_duration_gt: {type: float, unit: s, required: M0, id: S-COLL-006}
+  contact_normal:      {type: "array[float;3]", unit: null, required: M1}
+
+# ── Gripper / grasp GT ──────────────────────────────────────────────────────
+gripper_gt:
+  gripper_width:                    {type: float, unit: m, required: M1}
+  gripper_velocity:                 {type: float, unit: m/s, required: M2}
+  gripper_force_gt:                 {type: float, unit: N, required: M1}
+  gripper_object_contact_force_gt:  {type: "float/time_series", unit: N, freq: "100-500Hz", required: M0, id: S-GRASP-001}
+  grasp_state_gt:                   {type: "enum[not_grasped,grasped,slipping,dropped]", required: M0, id: S-GRASP-003}
+  object_relative_pose_to_gripper:  {type: "array[float;7]", unit: "m+quat", required: M1}
+  slip_distance_gt:                 {type: "float/time_series", unit: cm, freq: "50-500Hz", required: M0, id: S-GRASP-002}
+
+# ── Drop / placement / damage GT ────────────────────────────────────────────
+outcome_gt:
+  drop_event_gt:             {type: "bool/event", required: M0, id: S-OUT-001}
+  drop_height_gt:            {type: float, unit: cm, required: M0, id: S-OUT-002}
+  final_object_pose:         {type: "array[float;7]", unit: "m+quat", required: M0}
+  placement_error_pos_gt:    {type: float, unit: cm, required: M0}
+  placement_error_rot_gt:    {type: float, unit: deg, required: M1}
+  stable_final_gt:           {type: bool, required: M0}
+  support_polygon_margin_gt: {type: "float", unit: "cm/ratio", required: M0, id: S-OUT-003}
+  damage_state_gt:           {type: "enum[none,minor,broken,leakage,functional_damage]", required: M0, id: S-OUT-004}
+
+# ── Planner / safety gate / HRI logs ────────────────────────────────────────
+planner_log:
+  planned_trajectory:    {type: "array/list", required: M0, id: S-PLAN-001}
+  executed_trajectory:   {type: "array/list", required: M0, id: S-PLAN-002}
+  replan_flag:           {type: bool, required: M1}
+  t_replan_s:            {type: float, unit: s, required: M1}
+  stop_command_sent:     {type: bool, required: M0}
+  stop_success:          {type: bool, required: M0}
+  safety_gate_status:    {type: "enum[pass,blocked,warning,dry_run,shadow]", required: M0, id: S-PLAN-003}
+  unsafe_action_planned: {type: bool, required: M0}
+  unsafe_action_blocked: {type: bool, required: M0}
+  low_level_command_sent: {type: bool, required: M0, id: S-PLAN-004}
+  robot_motion_started:  {type: bool, required: M0}
+
+hri_log:
+  user_command_text:          {type: string, required: M0, id: S-HRI-001}
+  unsafe_instruction_flag_gt: {type: bool, required: M0, id: S-HRI-002}
+  tool_call_trace:            {type: json, required: M0, id: S-HRI-003}
+  model_response:             {type: string, required: M1}
+  refusal_flag:               {type: bool, required: M0}
+  clarification_requested:    {type: bool, required: M1}
+  stop_command_obeyed:        {type: bool, required: M0}

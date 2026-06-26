@@ -1,0 +1,171 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+    # arena_file: workflows/simbox/core/configs/arenas/scene_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "franka"
+        robot_config_file: workflows/simbox/core/configs/robots/fr3.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home_std: [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
+        ignore_substring: ["material"]
+
+    objects:
+      -
+        name: close_h_left
+        target_class: ArticulatedObject
+        dataset: pm
+        info_name: "close_h"
+        euler: [0.0, 0.0, 0.0]
+        scale: [0.001, 0.001, 0.001]
+        joint_position_range: [0.785, 0.875]
+        apply_randomization: True
+        # fix_base: True
+        path: ""
+        category: ""
+        obj_info_path: ""
+        art_cat: art/trashcan
+
+    regions:
+      -
+        object: close_h_left
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.35, -0.20, 0],
+            [0.35, 0.1, 0]
+          ]
+          yaw_rotation: [-45, 45]
+      -
+        object: ${tasks.0.robots.0.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.025, -0.50, -0.1],
+            [0.025, -0.50, 0.1]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: ${tasks.0.robots.0.name}_hand
+        translation: [0.085, 0.0, -0.02]
+        orientation: [0.153, 0.690, 0.690, 0.153]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d435i.yaml
+        parent: "${tasks.0.robots.0.name}/fr3/panda_hand"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: ${tasks.0.robots.0.name}_head
+        translation: [0.85, -0.75, 1.45]
+        orientation: [0.73, 0.50, 0.26, 0.39]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: ""  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.06
+        max_orientation_noise: 10.0
+
+    data:
+      task_dir: "close_the_trashcan"
+      language_instruction: "Close the trashcan."
+      detailed_language_instruction: "Close the trashcan."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 4000
+
+    skills:
+      -
+        franka:
+          -
+            left:
+              -
+                name: close
+                objects: [close_h_left]
+                collision_valid: False
+                # debug start: KPAMPlanner
+                planner_setting:
+                  task_name: CloseBox
+                  category_name: Articulated
+
+                  tool_keypoint_name_list: [tool_head, tool_tail, tool_side]
+                  object_keypoint_name_list: [articulated_object_head, articulated_object_tail]
+                  success_threshold: 0.08
+                  constraint_list:
+                    # ensure the gripper to be in contact with the box lid with whole fingers
+                    - keypoint_name: tool_head
+                      target_keypoint_name: articulated_object_head
+                      tolerance: 0.001 # 0.000001
+                      type: point2point_constraint
+                      name: fingers_contact_with_link0
+
+                    # ensure surface of the gripper to be parallel to the box lid
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_side
+                      target_axis: link0_contact_axis
+                      tolerance: 0.05
+                      target_inner_product: -1
+                      type: frame_axis_parallel
+                      name: hand_parallel_to_link0_edge
+
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_tail
+                      cross_target_axis1_from_keypoint_name: articulated_object_head
+                      cross_target_axis1_to_keypoint_name: articulated_object_tail
+                      target_axis: link0_contact_axis
+                      tolerance: 0.05 # 0.05
+                      target_inner_product: 1.0
+                      type: frame_axis_parallel # enforce parallelism via cross product constraint
+                      name: fingers_orthogonal_to_link0
+
+                  contact_pose_index: 2
+                  # pre-actuation pose list.
+                  pre_actuation_motions: [["translate_z", -0.045]] # 0.03   ["translate_z", -0.0001] , ["translate_x", -0.01],
+                  # post-actuation pose list
+                  post_actuation_motions: [
+                      ["rotate", 0.5],
+                      ["rotate", 0.3],
+                      ["rotate", 0.2],
+                      ["rotate", 0.1],
+                      ["rotate", 0.1],
+                      ["rotate", 0.1],
+                      ["rotate", 0.1],
+                    ] # ["translate_z", 0.08],
+
+                  keypose_random_range:
+                    orientation:  # rotation around each axis (degrees)
+                      x_min: -5
+                      x_max: 5
+                      y_min: 0
+                      y_max: 5
+                      z_min: -45
+                      z_max: 45
+                    position:
+                      x_min: -0.02
+                      x_max: 0.02
+                      y_min: -0.02
+                      y_max: 0.02
+                      z_min: -0.03
+                      z_max: 0

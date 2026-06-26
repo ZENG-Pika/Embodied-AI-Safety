@@ -1,0 +1,135 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [5000, 5500]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "split_aloha"
+        robot_config_file: workflows/simbox/core/configs/robots/split_aloha.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        right_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        left_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        right_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        constrain_grasp_approach: True
+
+    objects:
+      []
+
+
+    regions:
+      ### robot
+      -
+        object: split_aloha
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.83, -0.8],
+            [0.0, -0.83, -0.8]
+          ]
+          # pos_range: [
+          #   [0.0, -0.86, -0.865],
+          #   [0.0, -0.78, -0.765]
+          # ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: split_aloha_hand_left
+        translation: [0.0, 0.08, 0.05]
+        orientation: [0.0, 0.0, 0.965, 0.259]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_hand_right
+        translation: [0.0, 0.08, 0.04]
+        orientation: [0.0, 0.0, 0.972, 0.233]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_head
+        translation: [0.0, -0.00818, 0.1]
+        orientation: [0.658, 0.259, -0.282, -0.648]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link"  # todo: robot base frame
+
+    data:
+      task_dir: "track_the_targets"
+      language_instruction: "Use the grippers to track the targets over the table."
+      detailed_language_instruction: "Move the left split aloha arm to track the target on the left part. Move the right split aloha arm to track the target on the right part. Keep tracking until the targets disappear."
+      collect_info: "20260113"
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 1300
+
+    skills:
+      -
+        split_aloha:
+          -
+            left:
+              -
+                name: track
+                target: target_left
+                ignore_substring: ["visual"]
+                T_tcp_2_ee:
+                  [
+                    [1, 0, 0, 0],
+                    [0, 1, 0, 0],
+                    [0, 0, 1, 0.1],
+                    [0, 0, 0, 1],
+                  ]
+                # Frame orientation is aligned with base; origin is at table center; waypoints control gripper flange pose
+                way_points_num: 3
+                way_points_trans:
+                  # min: [-0.312, -0.106, 0.174]
+                  # max: [-0.042, 0.526, 0.594]
+                  min: [-0.202, 0.026, 0.134]
+                  max: [ 0.102, 0.276, 0.204]
+                way_points_ori:
+                  [0., 0.70710678, 0.70710678, 0.]
+                max_noise_deg: 180
+            right:
+              -
+                name: track
+                target: target_right
+                ignore_substring: ["visual"]
+                T_tcp_2_ee:
+                  [
+                    [1, 0, 0, 0],
+                    [0, 1, 0, 0],
+                    [0, 0, 1, 0.1],
+                    [0, 0, 0, 1],
+                  ]
+                # Frame orientation is aligned with base; origin is at table center; waypoints control gripper flange pose
+                way_points_num: 3
+                way_points_trans:
+                  # min: [-0.312, -0.726, 0.174]
+                  # max: [-0.042, -0.106, 0.594]
+                  min: [-0.202, -0.276, 0.134]
+                  max: [ 0.102, -0.026, 0.204]
+                way_points_ori:
+                  [0., 0.70710678, 0.70710678, 0.]
+                max_noise_deg: 180

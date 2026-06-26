@@ -1,0 +1,1563 @@
+import glob
+import json
+import math
+import os
+import pickle
+import random
+import time
+from collections import defaultdict
+from copy import deepcopy
+from datetime import datetime
+from typing import Optional
+
+import numpy as np
+import yaml
+from omni.isaac.core.utils.prims import get_prim_at_path
+from omni.isaac.core.utils.transformations import (
+    get_relative_transform,
+    pose_from_tf_matrix,
+)
+from omni.physx import acquire_physx_interface
+from tqdm import tqdm
+from yaml import Loader
+
+from deps.world_toolkit.world_recorder import WorldRecorder
+from workflows.simbox.utils.task_config_parser import TaskConfigParser
+
+from .base import NimbusWorkFlow
+from .simbox.core.controllers import get_controller_cls
+from .simbox.core.loggers.lmdb_logger import LmdbLogger
+from .simbox.core.loggers.utils import log_dual_obs
+from .simbox.core.skills import get_skill_cls
+from .simbox.core.tasks import get_task_cls
+from .simbox.core.utils.collision_utils import filter_collisions
+from .simbox.core.utils.utils import set_random_seed
+
+
+# pylint: disable=unused-argument
+@NimbusWorkFlow.register("SimBoxDualWorkFlow")
+class SimBoxDualWorkFlow(NimbusWorkFlow):
+    def __init__(
+        self,
+        world,
+        task_cfg_path: str,
+        scene_info: str = "dining_room_scene_info",
+        random_seed: int = None,
+    ):
+        self.scene_info = scene_info
+        self.step_replay = False
+        self.random_seed = random_seed
+        super().__init__(world, task_cfg_path)
+
+    def parse_task_cfgs(self, task_cfg_path: str) -> list:
+        task_cfgs = TaskConfigParser(task_cfg_path).parse_tasks()
+        # Merge robot configs for each task
+        for task_cfg in task_cfgs:
+            self._merge_robot_configs(task_cfg)
+        return task_cfgs
+
+    def _merge_robot_configs(self, task_cfg: dict):
+        """Merge robot configs from robot_config_file into task_cfg['robots']."""
+        robots = task_cfg.get("robots", [])
+
+        for robot in robots:
+            robot_config_file = robot.get("robot_config_file")
+            if robot_config_file:
+                with open(robot_config_file, "r", encoding="utf-8") as f:
+                    robot_base_cfg = yaml.load(f, Loader=Loader)
+
+                # Merge: robot_base_cfg as base, task_cfg['robots'][i] overrides
+                merged_cfg = deepcopy(robot_base_cfg)
+                merged_cfg.update(robot)
+                robot.clear()
+                robot.update(merged_cfg)
+
+    def reset(self, need_preload: bool = True):
+        # source code noted this as debug, so it could be removed later
+        from omni.isaac.core.utils.viewports import set_camera_view
+
+        set_camera_view(eye=[1.3, 0.7, 2.7], target=[0.0, 0, 1.5], camera_prim_path="/OmniverseKit_Persp")
+        # Modify config — only load arena from file on the first call;
+        # subsequent calls (e.g. multiple random layouts) reuse the cached arena.
+        if "arena" not in self.task_cfg:
+            arena_file_path = self.task_cfg.get("arena_file", None)
+            with open(arena_file_path, "r", encoding="utf-8") as arena_file:
+                arena = yaml.load(arena_file, Loader=Loader)
+            self.task_cfg["arena"] = arena
+
+        for obj_cfg in self.task_cfg["objects"]:
+            if obj_cfg["target_class"] == "ArticulatedObject":
+                if obj_cfg.get("apply_randomization", False):
+                    asset_root = self.task_cfg["asset_root"]
+                    art_paths = glob.glob(os.path.join(asset_root, obj_cfg["art_cat"], "*"))
+                    art_paths.sort()
+                    path = random.choice(art_paths)
+                    info_name = obj_cfg["info_name"]
+                    info_path = f"{path}/Kps/{info_name}/info.json"
+                    with open(info_path, "r", encoding="utf-8") as f:
+                        info = json.load(f)
+                    scale = info["object_scale"][:3]
+
+                    obj_cfg["path"] = path.replace(f"{asset_root}/", "", 1) + "/instance.usd"
+                    obj_cfg["category"] = path.split("/")[-2]
+                    obj_cfg["obj_info_path"] = info_path.replace(f"{asset_root}/", "", 1)
+                    obj_cfg["scale"] = scale
+                    self.task_cfg["data"]["collect_info"] = obj_cfg["category"]
+
+        self.task_cfg.pop("arena_file", None)
+        self.task_cfg.pop("camera_file", None)
+        self.task_cfg.pop("logger_file", None)
+        # Modify config done
+        if self.task_cfg.get("fluid", None):
+            # for fluid manipulation, only gpu mode is supportive
+            physx_interface = acquire_physx_interface()
+            physx_interface.overwrite_gpu_setting(1)
+
+        self.task = get_task_cls(self.task_cfg["task"])(self.task_cfg)
+        self.stage = self.world.stage
+        self.stage.SetDefaultPrim(self.stage.GetPrimAtPath("/World"))
+        self.world.add_task(self.task)
+
+        # # Add hidden ground plane for physics simulation
+        # from omni.isaac.core.objects import GroundPlane
+        # plane = GroundPlane(
+        #     prim_path="/World/GroundPlane",
+        #     z_position=0.0,
+        #     visible=False,
+        # )
+
+        prim_paths = []  # do not collide with each other
+        global_collision_paths = []  # collide with everything
+
+        self.robots_prim_paths = []
+        for robot in self.task_cfg["robots"]:
+            robot_prim_path = self.task.root_prim_path + "/" + robot["name"]
+            prim_paths.append(robot_prim_path)
+            self.robots_prim_paths.append(robot_prim_path)
+        neglect_collision_names = self.task_cfg.get("neglect_collision_names", [])
+        candidates = self.task_cfg["objects"] + self.task_cfg["arena"]["fixtures"]
+        for candidate in candidates:
+            candidate_prim_path = self.task.root_prim_path + "/" + candidate["name"]
+            global_collision_paths.append(candidate_prim_path)
+            for neglect_collision_name in neglect_collision_names:
+                if neglect_collision_name in candidate["name"]:
+                    prim_paths.append(candidate_prim_path)
+                    global_collision_paths.remove(candidate_prim_path)
+
+        collision_root_path = "/World/collisions"
+        filter_collisions(
+            self.stage,
+            self.world.get_physics_context().prim_path,
+            collision_root_path,
+            prim_paths,
+            global_collision_paths,
+        )
+        self.world.reset()
+        self.world.step(render=True)
+        self.controllers = self._initialize_controllers(self.task, self.task_cfg, self.world)
+        self.skills = self._initialize_skills(self.task, self.task_cfg, self.controllers, self.world)
+
+        for _ in range(50):
+            self._init_static_objects(self.task)
+            self.world.step(render=False)
+
+        self.logger = LmdbLogger(
+            task_dir=self.task_cfg["data"]["task_dir"],
+            language_instruction=self.task.language_instruction,
+            detailed_language_instruction=self.task.detailed_language_instruction,
+            collect_info=self.task_cfg["data"]["collect_info"],
+            version=self.task_cfg["data"].get("version", "v1.0"),
+        )
+        # Motion vectors are large dense tensors; keep LMDB logging opt-in.
+        self.log_motion_vectors = bool(self.task_cfg["data"].get("log_motion_vectors", False))
+
+        # Safety risk evaluation config (optional)
+        self._safety_eval_cfg = self.task_cfg.get("safety_eval", {})
+        self._safety_eval_enabled = bool(self._safety_eval_cfg.get("enabled", False))
+
+        if self.random_seed is not None:
+            seed = self.random_seed
+        else:
+            seed = time.time_ns() % (2**32)
+        self.random_seed = seed
+        set_random_seed(seed)
+
+        # while True:
+        #     self.world.get_observations()
+        #     # self._init_static_objects(self.task)
+        #     self.world.step(render=True)
+
+    def _initialize_skills(self, task, task_cfg, controllers, world):
+        draw_points = False
+        if draw_points:
+            from omni.isaac.debug_draw import _debug_draw
+
+            draw = _debug_draw.acquire_debug_draw_interface()
+        else:
+            draw = None
+
+        # Initialize skills for each robot.
+        skills = []
+        for cfg_skill_dict in task_cfg["skills"]:
+            skill_dict = defaultdict(list)
+            for robot_name, robot_skill_list in cfg_skill_dict.items():
+                robot = task.robots[robot_name]
+                controller = controllers[robot_name]
+
+                for lr_skill_dict in robot_skill_list:
+                    skill_sequence = [
+                        [
+                            get_skill_cls(skill_cfg["name"])(
+                                robot,
+                                controller[lr_name],
+                                task,
+                                skill_cfg,
+                                world=world,
+                                draw=draw,
+                            )
+                            for skill_cfg in lr_skill_list
+                        ]
+                        for lr_name, lr_skill_list in lr_skill_dict.items()
+                    ]
+                    skill_dict[robot_name].append(skill_sequence)
+            skills.append(skill_dict)
+        return skills
+
+    def _initialize_controllers(self, task, task_cfg, world):
+        """Initialize controllers for each robot."""
+        controllers = {}
+        for robot in task_cfg["robots"]:
+            controllers[robot["name"]] = {}
+            for robot_file in robot["robot_file"]:
+                controller_name = "left" if "left" in robot_file else "right"
+                controllers[robot["name"]][controller_name] = get_controller_cls(robot["target_class"])(
+                    name=robot["name"],
+                    robot_file=robot_file,
+                    constrain_grasp_approach=robot.get("constrain_grasp_approach", False),
+                    collision_activation_distance=robot.get("collision_activation_distance", 0.03),
+                    task=task,
+                    world=world,
+                    ignore_substring=robot.get("ignore_substring", ["material", "Plane", "conveyor", "scene", "table"]),
+                    use_batch=robot.get("use_batch", False),
+                )
+                controllers[robot["name"]][controller_name].reset()
+        return controllers
+
+    def _initialize_world_recorder(self):
+        """
+        Initialize WorldRecorder with appropriate mode based on configuration.
+
+        Supports two modes:
+        - step_replay=False: Records prim poses for fast geometric replay (compatible with old workflow)
+        - step_replay=True: Uses preprocessed joint position data for physics-accurate replay (new default)
+        """
+        self.world_recorder = WorldRecorder(
+            self.world,
+            self.task.robots,
+            self.task.objects | self.task.distractors | self.task.visuals,
+            step_replay=self.step_replay,
+        )
+        self.world_recorder.reset()
+
+    def _reset_controllers(self, controllers):
+        """Reset all controllers."""
+        for _, controller in controllers.items():
+            for _, ctrl in controller.items():
+                ctrl.reset()
+
+    def _init_static_objects(self, task):
+        for _, obj in task.objects.items():
+            try:
+                init_translation = obj.init_translation
+                init_orientation = obj.init_orientation
+                init_parent = obj.init_parent
+                if init_translation and init_orientation and init_parent:
+                    parent_world_pose = get_relative_transform(
+                        get_prim_at_path(task.root_prim_path + "/" + init_parent), get_prim_at_path(task.root_prim_path)
+                    )
+                    parent_translation, _ = pose_from_tf_matrix(parent_world_pose)
+                    obj.set_local_pose(
+                        translation=(parent_translation + init_translation), orientation=init_orientation
+                    )
+                    obj.set_angular_velocity(np.array([0.0, 0.0, 0.0]))
+                    obj.set_linear_velocity(np.array([0.0, 0.0, 0.0]))
+            except Exception:
+                pass
+
+    def _randomization_layout_mem(self):
+        # Reset world
+        self.world.reset()
+
+        # Individual initialize
+        self.task.individual_randomize_from_mem()
+        self.task.post_reset()
+
+        self.world.step(render=False)
+
+        # Reset controllers
+        self._reset_controllers(self.controllers)
+
+        # Reset skills
+        del self.skills
+        self.skills = self._initialize_skills(self.task, self.task_cfg, self.controllers, self.world)
+
+        # Warmup
+        for _ in range(20):
+            self.world.get_observations()
+            self._init_static_objects(self.task)
+            self.world.step(render=False)
+
+        self._initialize_world_recorder()
+
+        self.logger.clear(
+            language_instruction=self.task.language_instruction,
+            detailed_language_instruction=self.task.detailed_language_instruction,
+        )
+
+        # episode_stats["current_times"] += 1
+
+    def _randomization_layout(self):
+        # Reset world
+        self.world.reset()
+
+        # Individual initialize
+        self.task.individual_randomize()
+        self.task.post_reset()
+
+        self.world.step(render=False)
+
+        # Reset controllers
+        if self.task_cfg.get("fluid", None):
+            # Fluid, Bug, Why !!!!!!
+            # For fluid manipulation, only delete controllers and reinitialize controllers can plan successfully
+            if hasattr(self, "controllers"):
+                del self.controllers
+            self.controllers = self._initialize_controllers(self.task, self.task_cfg, self.world)
+
+        # del self.controllers
+        # self.controllers = self._initialize_controllers(self.task, self.task_cfg, self.world)
+        self._reset_controllers(self.controllers)
+
+        # Reset skills
+        if hasattr(self, "skills"):
+            del self.skills
+
+        self.skills = self._initialize_skills(self.task, self.task_cfg, self.controllers, self.world)
+
+        # Warmup
+        for _ in range(20):
+            self.world.get_observations()
+            self._init_static_objects(self.task)
+            self.world.step(render=False)
+
+        if self.task_cfg.get("fluid", None):
+            self.task._set_fluid()
+            # Fluid need additional warmup
+            for _ in range(150):
+                self.world.step(render=False)
+
+        self._initialize_world_recorder()
+
+        self.logger.clear(
+            language_instruction=self.task.language_instruction,
+            detailed_language_instruction=self.task.detailed_language_instruction,
+        )
+
+        # episode_stats["current_times"] += 1
+
+    def randomization(self, layout_path=None) -> bool:
+        try:
+            if layout_path is None:
+                # Individual Reset
+                self.task.individual_reset()
+                self._randomization_layout()
+            else:
+                with open(layout_path, "rb") as f:
+                    data = pickle.load(f)
+                self.data = data
+                self.randomization_from_mem(data)
+            return True
+        except Exception as e:
+            raise e
+
+    def update_skill_states(self, skills, episode_success, should_continue):
+        """Update and manage skill states."""
+        current_skills = skills[0]
+
+        # Check if any skills remain
+        if not any(current_skills.values()):
+            skills.pop(0)
+            if skills:
+                should_continue = self.plan_first_skill(skills, should_continue)
+            return episode_success, should_continue
+
+        # Update each robot's skills
+        for _, skill_sequences in current_skills.items():
+            if not skill_sequences:
+                continue
+
+            # Update all skills first
+            for lr_skill_list in skill_sequences[0]:
+                if lr_skill_list:
+                    start_lr_skill = lr_skill_list[0]
+                    start_lr_skill.update()  # Must update regardless of completion
+                    if start_lr_skill.is_done():
+                        if not start_lr_skill.is_success():
+                            episode_success = False
+                            should_continue = False
+                        lr_skill_list.remove(start_lr_skill)
+
+                        if lr_skill_list:
+                            next_skill = lr_skill_list[0]
+                            next_skill.simple_generate_manip_cmds()
+                            if hasattr(next_skill, "visualize_target"):
+                                next_skill.visualize_target(self.world)
+                            if len(next_skill.manip_list) == 0:
+                                should_continue = not next_skill.is_ready()
+                    if hasattr(start_lr_skill, "visualize_target"):
+                        start_lr_skill.visualize_target(self.world)
+
+            # Remove empty skill sequences
+            completed_skills = []
+            for lr_skill_list in skill_sequences[0]:
+                if not lr_skill_list:
+                    completed_skills.append(lr_skill_list)
+            for completed_skill in completed_skills:
+                skill_sequences[0].remove(completed_skill)
+
+            # Move to next sequence if current is empty
+            if not skill_sequences[0]:
+                skill_sequences.pop(0)
+                if skill_sequences:
+                    for skill in skill_sequences[0]:
+                        skill[0].simple_generate_manip_cmds()
+                        if len(skill[0].manip_list) == 0:
+                            should_continue = not skill[0].is_ready()
+        return episode_success, should_continue
+
+    def plan_first_skill(self, skills, should_continue):
+        for _, robot_skill_list in skills[0].items():
+            for lr_skill_list in robot_skill_list[0]:
+                lr_skill_list[0].simple_generate_manip_cmds()
+                if hasattr(lr_skill_list[0], "visualize_target"):
+                    lr_skill_list[0].visualize_target(self.world)
+                if len(lr_skill_list[0].manip_list) == 0:
+                    should_continue = not lr_skill_list[0].is_ready()
+        return should_continue
+
+    def generate_seq(self) -> list:
+        end = False
+
+        # while True:
+        #     obs = self.world.get_observations()
+        #     # self._init_static_objects(self.task)
+        #     self.world.step(render=True)
+
+        step_id = 0
+        episode_success = True
+        should_continue = True
+        max_episode_length = self.task_cfg["data"]["max_episode_length"]
+        episode_stats = {"succeed_times": 0, "current_times": 0}
+
+        should_continue = self.plan_first_skill(self.skills, should_continue)
+
+        # Warmup
+        for _ in range(10):
+            obs = self.world.get_observations()
+            # self._init_static_objects(self.task)
+            self.world.step(render=False)
+
+        while not (step_id >= max_episode_length or (not self.skills and not episode_success) or (not should_continue)):
+            obs = self.world.get_observations()
+            action_dict = {}
+            record_flag = True
+            if self.skills and should_continue:
+                # Process current skills
+                current_skills = self.skills[0]
+                for robot_name, skill_sequences in current_skills.items():
+                    if skill_sequences and skill_sequences[0]:
+                        action = [
+                            skill[0].controller.forward(skill[0].manip_list[0])
+                            for skill in skill_sequences[0]
+                            if skill[0] and skill[0].is_ready()
+                        ]
+
+                        feasible_labels = [skill[0].is_feasible() for skill in skill_sequences[0] if skill[0]]
+                        record_labels = [skill[0].is_record() for skill in skill_sequences[0] if skill[0]]
+
+                        if False in feasible_labels:
+                            should_continue = False
+                        if False in record_labels:
+                            record_flag = False
+
+                        if action:
+                            action_dict[robot_name] = {
+                                "joint_positions": np.concatenate([a["joint_positions"] for a in action]),
+                                "joint_indices": np.concatenate([a["joint_indices"] for a in action]),
+                                "raw_action": action,
+                            }
+            elif not self.skills and episode_success:
+                print("Task is successful")
+                end = True
+                for j_idx in range(1, 7):
+                    self.world.step(render=False)
+                    obs = self.world.get_observations()
+                    log_dual_obs(self.logger, obs, action_dict, self.controllers, step_idx=step_id + j_idx)
+                    self.world_recorder.record()
+
+                episode_stats["succeed_times"] += 1
+                should_continue = False
+
+            if record_flag:
+                log_dual_obs(self.logger, obs, action_dict, self.controllers, step_idx=step_id)
+                self.world_recorder.record()
+            self.task.apply_action(action_dict)
+            self.world.step(render=False)
+
+            step_id += 1
+            if self.skills:
+                episode_success, should_continue = self.update_skill_states(
+                    self.skills, episode_success, should_continue
+                )
+
+        if end:
+            if self.step_replay:
+                return [None] * step_id
+            else:
+                # Prim poses mode: return recorded poses for compatibility
+                return self.world_recorder.prim_poses
+        else:
+            return []
+
+    def recover_seq(self, seq_path):
+        data = self.data
+        return self.recover_seq_from_mem(data)
+
+    def _record_rgb_depth(self, step_idx: int):
+        for key, value in self.task.cameras.items():
+            for robot_name, _ in self.task.robots.items():
+                if robot_name in key:
+                    camera_obs = value.get_observations()
+                    rgb_img = camera_obs["color_image"]
+                    # Special processing if enabled
+                    camera2env_pose = camera_obs["camera2env_pose"]
+                    save_camera_name = key.replace(f"{robot_name}_", "")
+                    self.logger.add_color_image(
+                        robot_name, "images.rgb." + save_camera_name, rgb_img, step_idx=step_idx
+                    )
+                    if "depth_image" in camera_obs:
+                        depth_img = camera_obs["depth_image"]
+                        depth_img = np.nan_to_num(depth_img, nan=0.0, posinf=0.0, neginf=0.0)
+                        self.logger.add_depth_image(
+                            robot_name, "images.depth." + save_camera_name, depth_img, step_idx=step_idx
+                        )
+                    if "semantic_mask" in camera_obs:
+                        seg_mask = camera_obs["semantic_mask"]
+                        self.logger.add_seg_image(
+                            robot_name, "images.seg." + save_camera_name, seg_mask, step_idx=step_idx
+                        )
+                        if "semantic_mask_id2labels" in camera_obs:
+                            self.logger.add_scalar_data(
+                                robot_name,
+                                "labels.seg." + save_camera_name,
+                                camera_obs["semantic_mask_id2labels"],
+                            )
+                    if "bbox2d_tight" in camera_obs:
+                        self.logger.add_scalar_data(
+                            robot_name, "labels.bbox2d_tight." + save_camera_name, camera_obs["bbox2d_tight"]
+                        )
+                    if "bbox2d_tight_id2labels" in camera_obs:
+                        self.logger.add_scalar_data(
+                            robot_name,
+                            "labels.bbox2d_tight_id2labels." + save_camera_name,
+                            camera_obs["bbox2d_tight_id2labels"],
+                        )
+                    if "bbox2d_loose" in camera_obs:
+                        self.logger.add_scalar_data(
+                            robot_name, "labels.bbox2d_loose." + save_camera_name, camera_obs["bbox2d_loose"]
+                        )
+                    if "bbox2d_loose_id2labels" in camera_obs:
+                        self.logger.add_scalar_data(
+                            robot_name,
+                            "labels.bbox2d_loose_id2labels." + save_camera_name,
+                            camera_obs["bbox2d_loose_id2labels"],
+                        )
+                    if "bbox3d" in camera_obs:
+                        self.logger.add_scalar_data(
+                            robot_name, "labels.bbox3d." + save_camera_name, camera_obs["bbox3d"]
+                        )
+                    if "bbox3d_id2labels" in camera_obs:
+                        self.logger.add_scalar_data(
+                            robot_name,
+                            "labels.bbox3d_id2labels." + save_camera_name,
+                            camera_obs["bbox3d_id2labels"],
+                        )
+                    if self.log_motion_vectors and "motion_vectors" in camera_obs:
+                        self.logger.add_scalar_data(
+                            robot_name, "labels.motion_vectors." + save_camera_name, camera_obs["motion_vectors"]
+                        )
+                    self.logger.add_scalar_data(
+                        robot_name, "camera2env_pose." + save_camera_name, camera2env_pose
+                    )
+                    if step_idx == 0:
+                        save_camera_name = key.replace(f"{robot_name}_", "")
+                        self.logger.add_json_data(
+                            robot_name, f"{save_camera_name}_camera_params", camera_obs["camera_params"]
+                        )
+
+                    # depth_img = get_src(value, "depth")
+                    # depth_img = np.nan_to_num(depth_img, nan=0.0, posinf=0.0, neginf=0.0)
+
+                    # # Initialize lists for new camera keys
+                    # if key not in self.rgb:
+                    #     self.rgb[key] = []
+                    # if key not in self.depth:
+                    #     self.depth[key] = []
+
+                    # # Append current frame to the corresponding camera's list
+                    # self.rgb[key].append(rgb_img)
+                    # self.depth[key].append(depth_img)
+
+    def seq_replay(self, sequence: list) -> int:
+        """
+        Replay recorded sequence with mode-specific data preparation.
+
+        Returns:
+            int: Number of steps replayed
+        """
+        if not self.step_replay:
+            self.world_recorder.prim_poses = sequence
+
+        # warmup before replay formally
+        self.world_recorder.warmup()
+
+        # Get total steps from WorldRecorder
+        total_steps = self.world_recorder.get_total_steps()
+        step_idx = 0
+
+        # Unified replay loop - WorldRecorder handles rendering internally
+        with tqdm(total=total_steps, desc="Replay Progress") as pbar:
+            while not self.world_recorder.replay():
+                # Record RGB/depth at current step
+                self._record_rgb_depth(step_idx)
+                step_idx += 1
+                pbar.update(1)
+
+        self.length = total_steps
+        print("Replay finished.")
+        return total_steps
+
+    def get_task_name(self):
+        return self.task_cfg["task"]
+
+    def save_seq(self, save_path: str) -> int:
+        ser_bytes = self.dump_plan_info()
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H_%M_%S_%f")
+        save_path = os.path.join(save_path, "plan")
+        os.makedirs(save_path, exist_ok=True)
+        path = os.path.join(save_path, f"{timestamp}.pkl")
+        with open(path, "wb") as f:
+            f.write(ser_bytes)
+        return self.world_recorder.get_total_steps()
+
+    def save(self, save_path: str) -> int:
+        os.makedirs(save_path, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H_%M_%S_%f")
+        self.logger.save(save_path, timestamp, save_img=True)
+
+        # ── Safety risk pipeline (optional) ──
+        # 串行链路: sim_raw_gt.json → sim_features.json → sim_labels.json → safety_report.json
+        if self._safety_eval_enabled:
+            self._run_safety_pipeline(save_path, timestamp)
+
+        return self.length
+
+    def _init_obstacle_origin(self):
+        """Record the obstacle's initial position for round-trip movement."""
+        obs_cfg = self._safety_eval_cfg.get("obstacle", {})
+        obs_name = obs_cfg.get("name", "obstacle_1")
+        if hasattr(self.task, 'objects') and obs_name in self.task.objects:
+            pos, _ = self.task.objects[obs_name].get_world_pose()
+            self._obstacle_origin = [pos[0], pos[1]]
+            # heading_to_target: True = going toward target, False = going back to origin
+            self._obstacle_heading_to_target = True
+        else:
+            self._obstacle_origin = None
+
+    def _move_hand_obstacle(self, step_id: int):
+        """Move hand obstacle during simulation.
+
+        Config is read from task_cfg.safety_eval.obstacle:
+            enabled: bool - whether to move the obstacle
+            name: str - object name (default "obstacle_1")
+            target: [x, y, z] - target position
+            speed: float - movement speed in m/step
+            fixed_z: float - fixed height
+            mode: str - "once" (stop at target) or "round_trip" (bounce back and forth)
+        """
+        obs_cfg = self._safety_eval_cfg.get("obstacle", {})
+        if not obs_cfg.get("enabled", True):
+            return
+
+        obs_name = obs_cfg.get("name", "obstacle_1")
+        if not hasattr(self.task, 'objects') or obs_name not in self.task.objects:
+            return
+
+        try:
+            obj = self.task.objects[obs_name]
+            current_pos, current_ori = obj.get_world_pose()
+
+            fixed_z = obs_cfg.get("fixed_z", 0.80)
+            target = obs_cfg.get("target", [-0.10, -0.40, fixed_z])
+            speed = obs_cfg.get("speed", 0.005)
+            mode = obs_cfg.get("mode", "round_trip")
+            arrive_threshold = 0.02  # 2cm
+
+            # Determine current destination
+            if mode == "round_trip":
+                if not hasattr(self, '_obstacle_origin') or self._obstacle_origin is None:
+                    self._init_obstacle_origin()
+                origin = getattr(self, '_obstacle_origin', None)
+                heading_to_target = getattr(self, '_obstacle_heading_to_target', True)
+
+                if origin is not None:
+                    if heading_to_target:
+                        dest = [target[0], target[1]]
+                    else:
+                        dest = origin
+
+                    # Check if arrived at destination → flip direction
+                    dx = dest[0] - current_pos[0]
+                    dy = dest[1] - current_pos[1]
+                    if math.sqrt(dx*dx + dy*dy) < arrive_threshold:
+                        self._obstacle_heading_to_target = not heading_to_target
+                        # Update dest for this step
+                        dest = origin if heading_to_target else [target[0], target[1]]
+                else:
+                    dest = [target[0], target[1]]
+            else:
+                dest = [target[0], target[1]]
+
+            dx = dest[0] - current_pos[0]
+            dy = dest[1] - current_pos[1]
+            dist_xy = math.sqrt(dx*dx + dy*dy)
+
+            if dist_xy > 0.005:
+                nx = dx / dist_xy
+                ny = dy / dist_xy
+                new_pos = [
+                    current_pos[0] + nx * speed,
+                    current_pos[1] + ny * speed,
+                    fixed_z,
+                ]
+                obj.set_world_pose(new_pos, current_ori)
+                if hasattr(obj, 'set_linear_velocity'):
+                    obj.set_linear_velocity([0.0, 0.0, 0.0])
+                if hasattr(obj, 'set_angular_velocity'):
+                    obj.set_angular_velocity([0.0, 0.0, 0.0])
+            else:
+                # At destination: hold position
+                obj.set_world_pose([dest[0], dest[1], fixed_z], current_ori)
+                if hasattr(obj, 'set_linear_velocity'):
+                    obj.set_linear_velocity([0.0, 0.0, 0.0])
+        except Exception:
+            pass
+
+    def _run_safety_pipeline(self, save_path: str, timestamp: str):
+        """Run the complete safety risk pipeline: Raw_GT → Features → Labels → Report."""
+        import json
+        from pathlib import Path
+
+        # Find episode directory
+        first_robot = next(iter(self.logger.proprio_data_logger), None)
+        if first_robot is None:
+            return
+
+        episode_dir = (
+            Path(save_path) / first_robot /
+            self.logger.task_dir / self.logger.collect_info / timestamp
+        )
+        if not (episode_dir / "meta_info.pkl").exists():
+            return
+
+        episode_id = f"{self.get_task_name()}_{timestamp}"
+        report_subdir = self._safety_eval_cfg.get("output_subdir", "safety_reports")
+
+        try:
+            # ── Step 1: Sim_Raw_GT ──
+            from safety_risk.raw_gt_extractor import SimRawGTExtractor
+
+            # Build task_cfg dict for the extractor
+            extractor_cfg = dict(self.task_cfg)
+            extractor_cfg["random_seed"] = self.random_seed
+            extractor_cfg["language_instruction"] = getattr(self.logger, "language_instruction", [""])[0] if hasattr(self.logger, "language_instruction") else ""
+
+            raw_extractor = SimRawGTExtractor()
+            raw_gt = raw_extractor.extract_from_lmdb(str(episode_dir), task_cfg=extractor_cfg)
+
+            # Inject episode_id (timestamp-dependent, can't be in task_cfg)
+            raw_gt["episode_meta"]["episode_id"] = episode_id
+
+            # Inject object IDs from task config
+            for obj in self.task_cfg.get("objects", []):
+                name = obj.get("name", "")
+                if name.startswith("pick_object"):
+                    raw_gt["episode_meta"]["object_id"] = name
+                    raw_gt["episode_meta"]["target_object_id"] = name
+                    break  # Use first pick object as primary
+
+            # ── Inject PhysX data into raw_gt ──
+            if hasattr(self, '_physx_collector') and self._physx_collector is not None:
+                physx_data = self._physx_collector.get_raw_data()
+
+                raw_gt["robot_state"]["joint_torque_gt"] = physx_data.get("joint_torque_gt")
+                raw_gt["robot_state"]["link_pose_gt"] = physx_data.get("link_pose_gt")
+                raw_gt["robot_state"]["link_velocity_gt"] = physx_data.get("link_velocity_gt")
+                raw_gt["collision_gt"]["collision_pair_gt"] = physx_data.get("collision_pair_gt")
+                raw_gt["collision_gt"]["collision_location_gt"] = physx_data.get("collision_location_gt")
+                raw_gt["collision_gt"]["penetration_depth_gt"] = physx_data.get("penetration_depth_gt")
+                raw_gt["collision_gt"]["contact_force_gt"] = physx_data.get("contact_force_gt")
+                raw_gt["collision_gt"]["contact_impulse_gt"] = physx_data.get("contact_impulse_gt")
+
+                # Compute contact_duration_gt from contact events
+                physx_summary = self._physx_collector.finalize()
+                contact_events = physx_summary.get("contact_events", [])
+                if contact_events:
+                    raw_gt["collision_gt"]["contact_duration_gt"] = [
+                        {"contact": e["contact"], "duration_s": e["duration_s"]}
+                        for e in contact_events
+                    ]
+
+                raw_gt["distance_gt"]["object_env_distance_gt"] = physx_data.get("object_env_distance_gt")
+                raw_gt["distance_gt"]["link_env_distance_gt"] = physx_data.get("link_env_distance_gt")
+                raw_gt["distance_gt"]["self_distance_gt"] = physx_data.get("self_distance_gt")
+
+                # Planner data
+                raw_gt["planner_log"]["planned_trajectory"] = physx_data.get("planned_trajectory")
+                raw_gt["planner_log"]["safety_gate_status"] = physx_data.get("safety_gate_status")
+                raw_gt["planner_log"]["low_level_command_sent"] = physx_data.get("low_level_command_sent")
+
+                # Safety gate / stop event data
+                raw_gt["planner_log"]["stop_success"] = physx_data.get("stop_success")
+                raw_gt["planner_log"]["stop_margin_s"] = physx_data.get("stop_margin_s")
+                raw_gt["planner_log"]["t_stop_s"] = physx_data.get("t_stop_s")
+
+                # Gripper-object contact force
+                raw_gt["gripper_gt"]["gripper_object_contact_force_gt"] = physx_data.get("gripper_object_contact_force_gt")
+
+                print(f"[safety_risk] PhysX data injected into Sim_Raw_GT")
+
+            # ── Inject USD physical params (S-OBJ-004) ──
+            try:
+                physical_params = self._read_object_physical_params()
+                if physical_params:
+                    raw_gt["object_state"]["object_physical_params"] = physical_params
+                    print(f"[safety_risk] object_physical_params injected ({len(physical_params)} objects)")
+            except Exception as e:
+                print(f"[safety_risk] Warning: object_physical_params read failed: {e}")
+
+            # ── Inject scene mesh info (S-ENV-001) ──
+            try:
+                scene_mesh = self._read_scene_mesh_info()
+                if scene_mesh:
+                    raw_gt["environment_state"]["scene_mesh_gt"] = scene_mesh
+                    print(f"[safety_risk] scene_mesh_gt injected ({len(scene_mesh)} fixtures)")
+            except Exception as e:
+                print(f"[safety_risk] Warning: scene_mesh_gt read failed: {e}")
+
+            # ── Inject support polygon margin (S-OUT-003) ──
+            try:
+                margin = self._compute_support_polygon_margin()
+                if margin is not None:
+                    raw_gt["outcome_gt"]["support_polygon_margin_gt"] = margin
+                    print(f"[safety_risk] support_polygon_margin_gt = {margin:.2f} cm")
+            except Exception as e:
+                print(f"[safety_risk] Warning: support_polygon_margin_gt failed: {e}")
+
+            # ── Compute sensor fields from segmentation (S-SENSOR-004/005/006) ──
+            try:
+                sensor_fields = self._compute_sensor_fields_from_seg(str(episode_dir), raw_gt)
+                if sensor_fields:
+                    raw_gt["sensor_gt"].update(sensor_fields)
+                    n_frames = len(sensor_fields.get("instance_id_map_gt", []))
+                    print(f"[safety_risk] sensor fields injected ({n_frames} frames: bbox, visibility, instance_id)")
+                else:
+                    print(f"[safety_risk] sensor fields: no segmentation data found")
+            except Exception as e:
+                print(f"[safety_risk] Warning: sensor fields computation failed: {e}")
+
+            raw_gt_path = episode_dir / "sim_raw_gt.json"
+            with open(raw_gt_path, "w", encoding="utf-8") as f:
+                json.dump(raw_gt, f, indent=2, ensure_ascii=False, default=str)
+            print(f"[safety_risk] 1/4 Sim_Raw_GT → {raw_gt_path}")
+
+            # ── Step 2: Sim_Features (from Raw_GT) ──
+            from safety_risk.sim_feature_extractor import SimFeatureExtractor
+
+            feature_extractor = SimFeatureExtractor()
+            features = feature_extractor.extract(raw_gt)
+
+            features_path = episode_dir / "sim_features.json"
+            with open(features_path, "w", encoding="utf-8") as f:
+                json.dump(features, f, indent=2, ensure_ascii=False, default=str)
+            print(f"[safety_risk] 2/4 Sim_Features → {features_path}")
+
+            # ── Step 3: Sim_Labels (from Raw_GT + Features) ──
+            from safety_risk.sim_label_extractor import SimLabelExtractor
+
+            label_extractor = SimLabelExtractor()
+            labels = label_extractor.extract(raw_gt, features)
+
+            labels_path = episode_dir / "sim_labels.json"
+            with open(labels_path, "w", encoding="utf-8") as f:
+                json.dump(labels, f, indent=2, ensure_ascii=False, default=str)
+            print(f"[safety_risk] 3/4 Sim_Labels → {labels_path}")
+
+            # ── Step 4: Safety Report (from Labels) ──
+            report_dir = episode_dir / report_subdir
+            report_dir.mkdir(parents=True, exist_ok=True)
+            report_path = report_dir / f"{episode_id}_risk.json"
+
+            report = self._build_report_from_labels(episode_id, raw_gt, features, labels)
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False, default=str)
+            print(f"[safety_risk] 4/4 Safety Report → {report_path}")
+
+        except Exception as e:
+            print(f"[safety_risk] Warning: pipeline failed: {e}")
+
+    def _read_object_physical_params(self) -> dict:
+        """S-OBJ-004: Read physical parameters from USD prims for all task objects.
+
+        Returns dict: {object_name: {mass_kg, friction_static, friction_dynamic,
+                                     inertia_kg_m2, bounding_box_m, collision_approx}}
+        """
+        from pxr import UsdPhysics, UsdGeom
+
+        result = {}
+        stage = self.world.stage
+        if stage is None:
+            return result
+
+        for obj_cfg in self.task_cfg.get("objects", []):
+            obj_name = obj_cfg.get("name", "")
+            if not obj_name:
+                continue
+
+            # Find the prim path for this object
+            prim_path = f"/World/task_0/{obj_name}"
+            prim = stage.GetPrimAtPath(prim_path)
+
+            if not prim or not prim.IsValid():
+                # Try alternate path
+                prim_path = f"/World/{obj_name}"
+                prim = stage.GetPrimAtPath(prim_path)
+
+            if not prim or not prim.IsValid():
+                continue
+
+            params = {}
+
+            # Read MassAPI
+            if prim.HasAPI(UsdPhysics.MassAPI):
+                mass_api = UsdPhysics.MassAPI(prim)
+                mass = mass_api.GetMassAttr()
+                if mass and mass.Get() is not None:
+                    params["mass_kg"] = float(mass.Get())
+
+                density = mass_api.GetDensityAttr()
+                if density and density.Get() is not None:
+                    params["density_kg_m3"] = float(density.Get())
+
+                inertia_diag = mass_api.GetDiagonalInertiaAttr()
+                if inertia_diag and inertia_diag.Get() is not None:
+                    inertia = inertia_diag.Get()
+                    params["inertia_kg_m2"] = [float(inertia[0]), float(inertia[1]), float(inertia[2])]
+
+            # Read RigidBodyAPI
+            if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                rb_api = UsdPhysics.RigidBodyAPI(prim)
+                # Angular damping
+                ang_damp = rb_api.GetAngularDampingAttr()
+                if ang_damp and ang_damp.Get() is not None:
+                    params["angular_damping"] = float(ang_damp.Get())
+                # Linear damping
+                lin_damp = rb_api.GetLinearDampingAttr()
+                if lin_damp and lin_damp.Get() is not None:
+                    params["linear_damping"] = float(lin_damp.Get())
+
+            # Read collision properties
+            if prim.HasAPI(UsdPhysics.CollisionAPI):
+                coll_api = UsdPhysics.CollisionAPI(prim)
+                # Friction
+                friction = coll_api.GetFrictionAttr()
+                if friction and friction.Get() is not None:
+                    params["friction_static"] = float(friction.Get())
+                    params["friction_dynamic"] = float(friction.Get())
+
+                # Restitution
+                rest = coll_api.GetRestitutionAttr()
+                if rest and rest.Get() is not None:
+                    params["restitution"] = float(rest.Get())
+
+            # Read bounding box
+            try:
+                bbox_cache = UsdGeom.BBoxCache(
+                    0.0, [UsdGeom.Tokens.default_]
+                )
+                bbox = bbox_cache.ComputeWorldBound(prim)
+                if bbox and bbox.ComputeAlignedRange().GetSize():
+                    size = bbox.ComputeAlignedRange().GetSize()
+                    params["bounding_box_m"] = [float(size[0]), float(size[1]), float(size[2])]
+            except Exception:
+                pass
+
+            # Object config info
+            params["hazard_class"] = obj_cfg.get("hazard_class", "none")
+            params["fragility_class"] = obj_cfg.get("fragility_class", "none")
+            params["target_class"] = obj_cfg.get("target_class", "RigidObject")
+
+            if params:
+                result[obj_name] = params
+
+        return result
+
+    def _read_scene_mesh_info(self) -> dict:
+        """S-ENV-001: Read scene geometry info from USD stage.
+
+        Returns dict with fixture names, bounding boxes, and prim paths
+        for table, walls, floor, and other static scene elements.
+        """
+        from pxr import UsdGeom
+
+        result = {}
+        stage = self.world.stage
+        if stage is None:
+            return result
+
+        # Known scene fixture patterns
+        fixture_keywords = ["table", "wall", "floor", "shelf", "ground", "arena"]
+
+        for prim in stage.Traverse():
+            prim_path = str(prim.GetPath())
+            prim_name = prim.GetName().lower()
+
+            # Skip task objects, robots, cameras
+            if "/task_0/" in prim_path and any(kw in prim_name for kw in fixture_keywords):
+                try:
+                    bbox_cache = UsdGeom.BBoxCache(0.0, [UsdGeom.Tokens.default_])
+                    bbox = bbox_cache.ComputeWorldBound(prim)
+                    rng = bbox.ComputeAlignedRange()
+                    if rng.GetSize():
+                        size = rng.GetSize()
+                        min_pt = rng.GetMin()
+                        max_pt = rng.GetMax()
+                        result[prim.GetName()] = {
+                            "prim_path": prim_path,
+                            "bounding_box_m": [float(size[0]), float(size[1]), float(size[2])],
+                            "min_m": [float(min_pt[0]), float(min_pt[1]), float(min_pt[2])],
+                            "max_m": [float(max_pt[0]), float(max_pt[1]), float(max_pt[2])],
+                            "type": prim.GetTypeName(),
+                        }
+                except Exception:
+                    pass
+
+            # Also capture arena/scene root prims
+            if "arena" in prim_path.lower() or "scene" in prim_path.lower():
+                if prim_path.count("/") <= 4:  # top-level only
+                    try:
+                        bbox_cache = UsdGeom.BBoxCache(0.0, [UsdGeom.Tokens.default_])
+                        bbox = bbox_cache.ComputeWorldBound(prim)
+                        rng = bbox.ComputeAlignedRange()
+                        if rng.GetSize():
+                            size = rng.GetSize()
+                            result[prim.GetName()] = {
+                                "prim_path": prim_path,
+                                "bounding_box_m": [float(size[0]), float(size[1]), float(size[2])],
+                                "type": prim.GetTypeName(),
+                            }
+                    except Exception:
+                        pass
+
+        return result
+
+    def _compute_support_polygon_margin(self) -> Optional[float]:
+        """S-OUT-003: Compute support polygon margin for the pick object.
+
+        Calculates the distance from the object's center of mass projection
+        to the nearest edge of the support surface (table).
+        Returns margin in cm, or None if cannot be computed.
+        """
+        import numpy as np
+        from pxr import UsdGeom
+
+        stage = self.world.stage
+        if stage is None:
+            return None
+
+        # Get pick object position (handles pick_object, pick_object_left, etc.)
+        if not hasattr(self.task, 'objects'):
+            return None
+
+        obj = None
+        for name in ['pick_object', 'pick_object_left', 'pick_object_right']:
+            if name in self.task.objects:
+                obj = self.task.objects[name]
+                break
+        if obj is None:
+            # Fallback: first object that starts with 'pick_'
+            for name in self.task.objects:
+                if name.startswith('pick_'):
+                    obj = self.task.objects[name]
+                    break
+        if obj is None:
+            return None
+
+        try:
+            obj_pos, _ = obj.get_world_pose()
+            obj_x, obj_y = float(obj_pos[0]), float(obj_pos[1])
+        except Exception:
+            return None
+
+        # Find table prim and get its bounding box
+        table_prim = None
+        for prim in stage.Traverse():
+            prim_name = prim.GetName().lower()
+            prim_path = str(prim.GetPath())
+            if ('table' in prim_name or 'Group_table' in prim_name) and '/task_0/' in prim_path:
+                table_prim = prim
+                break
+
+        if table_prim is None:
+            return None
+
+        try:
+            bbox_cache = UsdGeom.BBoxCache(0.0, [UsdGeom.Tokens.default_])
+            bbox = bbox_cache.ComputeWorldBound(table_prim)
+            rng = bbox.ComputeAlignedRange()
+            min_pt = rng.GetMin()
+            max_pt = rng.GetMax()
+
+            # Table boundaries
+            table_min_x, table_min_y = float(min_pt[0]), float(min_pt[1])
+            table_max_x, table_max_y = float(max_pt[0]), float(max_pt[1])
+
+            # Distance from object to each table edge
+            dist_to_edges = [
+                abs(obj_x - table_min_x),  # left edge
+                abs(obj_x - table_max_x),  # right edge
+                abs(obj_y - table_min_y),  # front edge
+                abs(obj_y - table_max_y),  # back edge
+            ]
+
+            # Margin = distance to nearest edge
+            margin_m = min(dist_to_edges)
+            return margin_m * 100.0  # m -> cm
+
+        except Exception:
+            return None
+
+    def _compute_sensor_fields_from_seg(self, episode_dir, raw_gt: dict) -> dict:
+        """S-SENSOR-004/005/006: Compute instance_id_map, bbox, visibility from segmentation.
+
+        Reads segmentation data from LMDB (encoded as PNG bytes) and computes:
+        - instance_id_map_gt: list of unique instance IDs per frame
+        - object_bbox_gt: bounding box of all objects per frame
+        - visibility_ratio_gt: non-background pixel ratio per frame
+        """
+        import cv2
+        import numpy as np
+
+        result = {}
+
+        lmdb_path = os.path.join(episode_dir, "lmdb")
+        if not os.path.isdir(lmdb_path):
+            print(f"[safety_risk] sensor: lmdb not found at {lmdb_path}")
+            return result
+
+        import lmdb
+        env = lmdb.open(lmdb_path, readonly=True, lock=False)
+
+        # Find seg key prefix
+        seg_prefix = None
+        with env.begin() as txn:
+            cursor = txn.cursor()
+            for key, _ in cursor:
+                k = key.decode("utf-8") if isinstance(key, bytes) else key
+                if "seg" in k.lower() and "/" in k:
+                    seg_prefix = k.split("/")[0]
+                    break
+
+        if seg_prefix is None:
+            print(f"[safety_risk] sensor: no seg keys found in LMDB")
+            env.close()
+            return result
+
+        print(f"[safety_risk] sensor: found seg prefix '{seg_prefix}'")
+
+        # Read all seg frames from LMDB
+        instance_ids = []
+        bboxes = []
+        vis_ratios = []
+
+        with env.begin() as txn:
+            frame_idx = 0
+            while True:
+                key = f"{seg_prefix}/{str(frame_idx).zfill(4)}"
+                raw = txn.get(key.encode("utf-8"))
+                if raw is None:
+                    break
+
+                try:
+                    # LMDB stores pickled numpy arrays (encoded PNG bytes)
+                    data = pickle.loads(raw) if isinstance(raw, bytes) else raw
+                    if isinstance(data, np.ndarray):
+                        seg_img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
+                    elif isinstance(data, (bytes, memoryview)):
+                        seg_img = cv2.imdecode(
+                            np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_UNCHANGED
+                        )
+                    else:
+                        seg_img = None
+                except Exception:
+                    seg_img = None
+
+                if seg_img is None or seg_img.size == 0:
+                    instance_ids.append(None)
+                    bboxes.append(None)
+                    vis_ratios.append(None)
+                    frame_idx += 1
+                    continue
+
+                # Unique instance IDs
+                unique_ids = sorted([int(x) for x in np.unique(seg_img)])
+                instance_ids.append(unique_ids)
+
+                # Non-background mask
+                object_mask = (seg_img > 0).astype(np.uint8)
+                coords = np.where(object_mask > 0)
+
+                if len(coords[0]) > 0:
+                    y_min, y_max = int(coords[0].min()), int(coords[0].max())
+                    x_min, x_max = int(coords[1].min()), int(coords[1].max())
+                    bboxes.append([x_min, y_min, x_max, y_max])
+                    total_px = seg_img.shape[0] * seg_img.shape[1]
+                    vis_ratios.append(round(len(coords[0]) / total_px, 4))
+                else:
+                    bboxes.append(None)
+                    vis_ratios.append(0.0)
+
+                frame_idx += 1
+
+        env.close()
+
+        result["instance_id_map_gt"] = instance_ids
+        result["object_bbox_gt"] = bboxes
+        result["visibility_ratio_gt"] = vis_ratios
+
+        return result
+
+    def _apply_semantic_labels(self):
+        """Apply semantic labels to scene objects for segmentation.
+
+        Uses Isaac Sim's add_update_semantics API to label objects so that
+        the camera's semantic segmentation annotator can distinguish them.
+        """
+        try:
+            from omni.isaac.core.utils.semantics import add_update_semantics
+            from omni.isaac.core.utils.prims import get_prim_at_path
+
+            stage = self.world.stage
+            if stage is None:
+                return
+
+            labeled_count = 0
+
+            # Label task objects
+            if hasattr(self.task, 'objects'):
+                for obj_name, obj in self.task.objects.items():
+                    try:
+                        prim_path = getattr(obj, 'prim_path', None) or getattr(obj, 'base_prim_path', None)
+                        if prim_path:
+                            prim = get_prim_at_path(prim_path)
+                            if prim and prim.IsValid():
+                                add_update_semantics(prim, semantic_label=obj_name, type_label="class")
+                                labeled_count += 1
+                    except Exception:
+                        pass
+
+            # Label robot
+            if hasattr(self.task, 'robots'):
+                for robot_name, robot in self.task.robots.items():
+                    try:
+                        prim = get_prim_at_path(robot.prim_path)
+                        if prim and prim.IsValid():
+                            add_update_semantics(prim, semantic_label=robot_name, type_label="class")
+                            labeled_count += 1
+                    except Exception:
+                        pass
+
+            # Label table
+            for prim in stage.Traverse():
+                prim_name = prim.GetName().lower()
+                prim_path = str(prim.GetPath())
+                if '/task_0/' in prim_path and prim_name in ('table', 'floor', 'wall', 'arena'):
+                    try:
+                        add_update_semantics(prim, semantic_label=prim_name, type_label="class")
+                        labeled_count += 1
+                    except Exception:
+                        pass
+
+            print(f"[safety_risk] Applied semantic labels to {labeled_count} prims")
+
+        except Exception as e:
+            print(f"[safety_risk] Warning: semantic label application failed: {e}")
+
+    def _build_report_from_labels(
+        self, episode_id: str, raw_gt: dict, features: dict, labels: dict
+    ) -> dict:
+        """Build safety report from the three JSON layers."""
+        risk = labels.get("risk_labels", {})
+        eval_info = labels.get("evaluation", {})
+        auto = labels.get("auto_labels", {})
+        common = features.get("common", {})
+
+        # Collect all triggered rules from evaluation
+        triggered = eval_info.get("triggered_rules", [])
+        root_cause = risk.get("root_cause_auto", [])
+
+        return {
+            "episode_id": episode_id,
+            "report_version": "2.0",
+            "data_source": {
+                "sim_raw_gt": "sim_raw_gt.json",
+                "sim_features": "sim_features.json",
+                "sim_labels": "sim_labels.json",
+            },
+            "risk_levels": {
+                "HS": risk.get("risk_label_HS_auto", "L0"),
+                "PT": risk.get("risk_label_PT_auto", "L0"),
+                "RS": risk.get("risk_label_RS_auto", "L0"),
+                "IR": risk.get("risk_label_IR_auto", "L0"),
+                "overall": eval_info.get("overall_level", "L0"),
+            },
+            "triggered_rules": triggered,
+            "root_cause": root_cause,
+            "data_quality": common.get("data_quality", "B"),
+            "missing_fields": common.get("missing_fields", []),
+            "summary": {
+                "overall_level": eval_info.get("overall_level", "L0"),
+                "total_rules_triggered": len(triggered),
+                "has_l3_hard_trigger": eval_info.get("overall_level") == "L3",
+                "data_quality": common.get("data_quality", "B"),
+            },
+            # 附加关键标签值
+            "key_labels": {
+                "human_contact_flag_gt": auto.get("human_contact_flag_gt"),
+                "drop_flag_gt": auto.get("drop_flag_gt"),
+                "damage_flag_gt": auto.get("damage_flag_gt"),
+                "robot_env_collision_flag_gt": auto.get("robot_env_collision_flag_gt"),
+                "self_collision_flag_gt": auto.get("self_collision_flag_gt"),
+                "unsafe_instruction_flag_gt": auto.get("unsafe_instruction_flag_gt"),
+            },
+        }
+
+    def plan_with_render(self):
+        end = False
+
+        step_id = 0
+        length = 0
+        episode_success = True
+        should_continue = True
+        max_episode_length = self.task_cfg["data"]["max_episode_length"]
+        episode_stats = {"succeed_times": 0, "current_times": 0}
+
+        # ── PhysX data collector (for Sim_Raw_GT) ──
+        _physx_collector = None
+        if self._safety_eval_enabled:
+            try:
+                from safety_risk.physx_collector import PhysXDataCollector
+                _physx_collector = PhysXDataCollector()
+                # Apply safety_gate config from YAML
+                sg_cfg = self._safety_eval_cfg.get("safety_gate", {})
+                _physx_collector.configure_safety_gate(sg_cfg)
+            except Exception as e:
+                print(f"[safety_risk] Warning: PhysX collector init failed: {e}")
+
+        # ── Apply semantic labels for segmentation ──
+        if self._safety_eval_enabled:
+            self._apply_semantic_labels()
+
+        should_continue = self.plan_first_skill(self.skills, should_continue)
+        _safety_stop_active = False
+
+        # Record obstacle starting position for round-trip movement
+        if self._safety_eval_enabled:
+            self._init_obstacle_origin()
+
+        # Warmup
+        for _ in range(10):
+            obs = self.world.get_observations()
+            # self._init_static_objects(self.task)
+            self.world.step(render=True)
+
+        # while True:
+        #     obs = self.world.get_observations()
+        #     # self._init_static_objects(self.task)
+        #     self.world.step(render=True)
+
+        while not (step_id >= max_episode_length or (not self.skills and not episode_success) or (not should_continue)):
+            obs = self.world.get_observations()
+            action_dict = {}
+
+            # ── Safety gate: suppress actions if stop is active ──
+            if _safety_stop_active:
+                for ctrl in self.controllers.values():
+                    if hasattr(ctrl, 'cmd_plan'):
+                        ctrl.cmd_plan = None
+            record_flag = True
+            if self.skills and should_continue:
+                # Process current skills
+                current_skills = self.skills[0]
+                for robot_name, skill_sequences in current_skills.items():
+                    if skill_sequences and skill_sequences[0]:
+                        action = [
+                            skill[0].controller.forward(skill[0].manip_list[0])
+                            for skill in skill_sequences[0]
+                            if skill[0] and skill[0].is_ready()
+                        ]
+
+                        feasible_labels = [skill[0].is_feasible() for skill in skill_sequences[0] if skill[0]]
+                        record_labels = [skill[0].is_record() for skill in skill_sequences[0] if skill[0]]
+
+                        if False in feasible_labels:
+                            should_continue = False
+                        if False in record_labels:
+                            record_flag = False
+
+                        if action:
+                            action_dict[robot_name] = {
+                                "joint_positions": np.concatenate([a["joint_positions"] for a in action]),
+                                "joint_indices": np.concatenate([a["joint_indices"] for a in action]),
+                                "raw_action": action,
+                            }
+
+                            # Capture planned trajectories from controllers
+                            if _physx_collector is not None:
+                                for skill_seq in skill_sequences[0]:
+                                    if skill_seq and skill_seq[0] and skill_seq[0].controller:
+                                        ctrl = skill_seq[0].controller
+                                        if hasattr(ctrl, 'cmd_plan') and ctrl.cmd_plan is not None:
+                                            lr_name = getattr(ctrl, 'lr_name', robot_name)
+                                            _physx_collector.capture_planned_trajectory(ctrl, arm_name=lr_name)
+
+            elif not self.skills and episode_success:
+                print("Task is successful")
+                end = True
+                for j_idx in range(1, 7):
+                    self.world.step(render=True)
+                    obs = self.world.get_observations()
+                    log_dual_obs(self.logger, obs, action_dict, self.controllers, step_idx=step_id + j_idx)
+                    self._record_rgb_depth(step_id + j_idx)
+                    self.world_recorder.record()
+                length = step_id + 6
+                episode_stats["succeed_times"] += 1
+                should_continue = False
+
+            if record_flag:
+                log_dual_obs(self.logger, obs, action_dict, self.controllers, step_idx=step_id)
+                self._record_rgb_depth(step_id)
+            self.task.apply_action(action_dict)
+            self.world.step(render=True)
+
+            # ── Move hand obstacle toward robot ──
+            self._move_hand_obstacle(step_id)
+
+            # ── Collect PhysX runtime data ──
+            if _physx_collector is not None:
+                try:
+                    _physx_collector.collect_step(self.task, step_id)
+                except Exception:
+                    pass  # Never block the simulation loop
+
+                # ── Safety gate: check proximity and manage stop ──
+                try:
+                    if step_id == 0:
+                        print(f"[safety_gate] calling check_safety_gate at step {step_id}")
+                        print(f"[safety_gate] task.objects keys: {list(self.task.objects.keys()) if hasattr(self.task, 'objects') else 'N/A'}")
+                        print(f"[safety_gate] task.robots keys: {list(self.task.robots.keys()) if hasattr(self.task, 'robots') else 'N/A'}")
+                    _safety_stop_active = _physx_collector.check_safety_gate(
+                        self.task, step_id
+                    )
+                    if _safety_stop_active and step_id > 0:
+                        print(f"[safety_gate] STOP ACTIVE at step {step_id}")
+                except Exception as _sg_err:
+                    print(f"[safety_gate] Error at step {step_id}: {_sg_err}")
+                    import traceback; traceback.print_exc()
+                    _safety_stop_active = False
+
+            step_id += 1
+            if self.skills:
+                episode_success, should_continue = self.update_skill_states(
+                    self.skills, episode_success, should_continue
+                )
+
+        # ── Save PhysX data ──
+        self._physx_collector = _physx_collector
+
+        self.length = length
+        if end:
+            return length
+        else:
+            return 0
+
+    def _dump_task_cfg(self, task_cfg):
+        task_cfg_copy = deepcopy(task_cfg)
+        return pickle.dumps(task_cfg_copy)
+
+    def dump_plan_info(self) -> bytes:
+        logger_ser = self.logger.dump()
+        cfg_ser = self._dump_task_cfg(self.task_cfg)
+        ser = pickle.dumps((cfg_ser, self.world_recorder.dumps(), logger_ser))
+        return ser
+
+    def dedump_plan_info(self, ser_obj: bytes) -> object:
+        res = pickle.loads(ser_obj)
+        return res
+
+    def randomization_from_mem(self, data) -> bool:
+        try:
+            cfg_ser, _, _ = data
+            task_cfg = pickle.loads(cfg_ser)
+            self.task_cfg = task_cfg
+            self.task.cfg = task_cfg
+
+            # Individual Reset
+            self.task.individual_reset_from_mem()
+            self._randomization_layout_mem()
+            return True
+        except Exception as e:
+            raise e
+
+    def recover_seq_from_mem(self, data) -> list:
+        """
+        Recover sequence from memory based on WorldRecorder mode.
+
+        Returns:
+            - step_replay=False: Returns prim_poses list
+            - step_replay=True: Returns placeholder list (replay data is in WorldRecorder)
+        """
+        try:
+            _, wr_ser, logger_ser = data
+            self.logger.dedump(logger_ser)
+
+            if wr_ser:
+                self.world_recorder.loads(wr_ser)
+
+            if self.step_replay:
+                return [None] * self.world_recorder.num_steps
+            else:
+                return self.world_recorder.prim_poses
+
+        except Exception as e:
+            raise e

@@ -1,0 +1,235 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_clean_arena.yaml
+
+    neglect_collision_names: ["table"]
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "genie1"
+        robot_config_file: workflows/simbox/core/configs/robots/genie1.yaml
+        euler: [0.0, 0.0, 90.0]
+        # constrain_grasp_approach: True
+        ignore_substring: ["material", "table"]
+        use_batch: True
+        collision_activation_distance: 0.05
+
+    objects:
+      -
+        name: pick_object_left
+        path: pick_and_place/pre-train-pick/assets/omniobject3d-garlic/google_scan-bottle_0011/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: omniobject3d-garlic
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001] #[1, 1, 1] #
+        apply_randomization: True
+        orientation_mode: "suggested"
+        optimize_2d_layout: True
+      -
+        name: pick_object_right
+        path: pick_and_place/pre-train-pick/assets/omniobject3d-peach/omniobject3d-peach_001/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: "omniobject3d-peach"
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001] #[1, 1, 1] #
+        apply_randomization: True
+        orientation_mode: "suggested"
+        optimize_2d_layout: True
+
+      -
+        name: gso_box
+        path: pick_and_place/g1_pnp_basket/pnp_basket/basket_22/Aligned_obj.usd
+        # basket/basket_01/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: gso
+        category: box
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 90.0]
+        scale: [0.8, 0.25, 0.8]
+        apply_randomization: True
+        optimize_2d_layout: True
+
+    regions:
+      -
+        object: pick_object_left
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.20, -0.20, 0.0],
+            [-0.025, -0.10, 0.0]
+          ]
+          yaw_rotation: [-180.0, 180.0]
+      -
+        object: pick_object_right
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.025, -0.20, 0.0],
+            [0.20, -0.10, 0.0]
+          ]
+          yaw_rotation: [-180.0, 180.0]
+      -
+        object: gso_box
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.02, 0.18, 0.0],
+            [0.02, 0.22, 0.0]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+      -
+        object: ${tasks.0.robots.0.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.025, -0.81, -0.85],
+            [0.025, -0.81, -0.73]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    distractors:
+      path: pick_and_place/pre-train-pick/assets
+      min_num: 3
+      max_num: 7
+      scale: [0.001, 0.001, 0.001]
+      target: table
+      pos_range: [
+        [-0.6, -0.35],
+        [0.6, 0.05]
+      ]
+      min_object_distance: 0.05
+      exclude_keywords: ["shoe", "book", "hair_dryer", "box", "cube", "whistle"]
+
+    cameras:
+      -
+        name: ${tasks.0.robots.0.name}_hand_left
+        translation: [-0.01, -0.07, 0.08]
+        orientation: [0.191, 0.981, 0.003, 0.017]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405_v2.yaml
+
+        parent: "${tasks.0.robots.0.name}/gripper_l_base_link"  # todo
+        apply_randomization: False
+      -
+        name: ${tasks.0.robots.0.name}_hand_right
+        translation: [0.015, 0.094, 0.07]
+        orientation: [0.0, 0.0, 0.974, 0.225]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405_v2.yaml
+        parent: "${tasks.0.robots.0.name}/gripper_r_base_link"
+        apply_randomization: False
+      -
+        name: ${tasks.0.robots.0.name}_head
+        translation: [0.05, -0.05, -0.0]
+        orientation: [0.0, 0.697, 0.0128, -0.717]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "${tasks.0.robots.0.name}/head_link2"
+
+    data:
+      task_dir: "dual_pnp/rl/omniobject3d-garlic"
+      language_instruction: "Pick up the ${tasks.0.objects.0.name} with the right arm and place it in the basket, then pick up the ${tasks.0.objects.1.name} with the left arm and place it in the basket."
+      detailed_language_instruction: "Pick up the ${tasks.0.objects.0.name} with the right robotic arm and place it in the basket, then pick up the ${tasks.0.objects.1.name} with the left robotic arm and place it in the basket."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 1500
+
+    skills:
+      -
+        genie1:
+          -
+            right:
+              -
+                name: pick
+                objects: [pick_object_right]
+                filter_x_dir: ["forward", 45]
+                filter_y_dir: ["downward", 120]
+                filter_z_dir: ["forward", 135, 45]
+                pre_grasp_offset: 0.0
+                gripper_change_steps: 20
+                t_eps: 0.01
+                o_eps: 1
+                process_valid: True
+                lift_th: 0.0
+                post_grasp_offset_min: 0.05
+                post_grasp_offset_max: 0.10
+                test_mode: forward
+              -
+                name: place
+                objects: [pick_object_right, gso_box]
+                position_constraint: object
+                filter_x_dir: ["forward", 70]
+                filter_y_dir: ["downward", 120]
+                filter_z_dir: ["forward", 70]
+                x_ratio_range: [0.3, 0.7]
+                y_ratio_range: [0.3, 0.7]
+                success_mode: xybbox
+                pre_place_z_offset: 0.17
+                place_z_offset: 0.17
+                gripper_change_steps: 20
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+          -
+            left:
+              -
+                name: pick
+                objects: [pick_object_left]
+                filter_x_dir: ["backward", 135]
+                filter_y_dir: ["downward", 120]
+                filter_z_dir: ["forward", 135, 45]
+                pre_grasp_offset: 0.0
+                gripper_change_steps: 20
+                t_eps: 0.01
+                o_eps: 1
+                process_valid: True
+                lift_th: 0.0
+                post_grasp_offset_min: 0.05
+                post_grasp_offset_max: 0.10
+                test_mode: forward
+              -
+                name: place
+                objects: [pick_object_left, gso_box]
+                position_constraint: object
+                filter_x_dir: ["backward", 110]
+                filter_y_dir: ["downward", 120]
+                filter_z_dir: ["forward", 70]
+                x_ratio_range: [0.3, 0.7]
+                y_ratio_range: [0.3, 0.7]
+                success_mode: xybbox
+                pre_place_z_offset: 0.17
+                place_z_offset: 0.17
+                gripper_change_steps: 20
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper

@@ -1,0 +1,286 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+    # art_cat: workflows/simbox/assets/WAIC/task_25/nightstand_bottom
+
+    neglect_collision_names: ["table"]
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "lift2"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        right_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        left_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        right_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        ignore_substring: ["material"]
+
+    objects:
+      -
+        name: drawer
+        target_class: ArticulatedObject
+        dataset: pm
+        joint_position_range: [0.175, 0.175]
+        info_name: "push"
+        euler: [0.0, 0.0, 0.0]
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        path: ""
+        category: ""
+        obj_info_path: ""
+        art_cat:  long_horizon/store_objects_in_the_drawer/nightstand_bottom
+        optimize_2d_layout: False
+        # fix_base: True
+      -
+        name: pick_0
+        path: long_horizon/store_objects_in_the_drawer/pick_objs/omniobject3d-lemon_004/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: False
+        # orientation_mode: keep
+    regions:
+      -
+        object: drawer
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.15, -0.05, 0.0],
+            [0.05, 0.05, 0.0]
+          ]
+          yaw_rotation: [0, 0]
+      -
+        object: pick_0
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.2, -0.25, 0],
+            [0.4, -0.20, 0]
+          ]
+          yaw_rotation: [-30, 30]
+      -
+        object: lift2
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.025, -0.8, -0.7],
+            [0.025, -0.8, -0.7]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: lift2_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fl/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: lift2_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fr/link6"
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: lift2_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "lift2/lift2/lift2/h_link6"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+
+    data:
+      task_dir: "store_objects_in_the_drawer_part0"
+      language_instruction: "Pick all the objects and place them into the drawer, and then close the drawer."
+      detailed_language_instruction: "Pick all the objects and place them into the drawer, and then close the drawer."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 4000
+
+    skills:
+      -
+        lift2:
+          -
+            left:
+              -
+                name: artpreplan
+                # name: close
+                objects: [drawer]
+                # ignore_substring: ["pick_0"]
+                planner_setting:
+                  task_name: CloseBox
+                  category_name: Articulated
+
+                  tool_keypoint_name_list: [tool_head, tool_tail, tool_side]
+                  object_keypoint_name_list: [articulated_object_head, articulated_object_tail]
+                  success_threshold: 0.01
+                  constraint_list:
+                    - keypoint_name: tool_head
+                      target_keypoint_name: link_contact_point
+                      tolerance: 0.000001
+                      type: point2point_constraint
+                      name: fingers_contact_with_link0
+
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_side
+                      target_axis: object_link0_contact_axis
+                      target_axis_frame: object
+                      tolerance: 0.0005
+                      target_inner_product: -1
+                      type: frame_axis_parallel
+                      name: hand_parallel_to_link0_edge
+
+                    - axis_from_keypoint_name: tool_tail
+                      axis_to_keypoint_name: tool_head
+                      target_axis: object_link0_move_axis
+                      target_axis_frame: object
+                      tolerance: 0.3
+                      target_inner_product: 1
+                      type: frame_axis_parallel
+                      name: hand_parallel_to_link0_move_axis
+
+                  contact_pose_index: 2
+                  # pre-actuation pose list.
+                  pre_actuation_motions: [["translate_x", -0.05]] #   ["translate_z", -0.0001] , ["translate_x", -0.01],
+                  # post-actuation pose list
+                  post_actuation_motions: [["translate_x", 0.15],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05]] # ["translate_z", 0.08],
+
+                  # in link8 frame, in degree, in metre
+                  keypose_random_range:
+                    orientation:
+                      x_min: -45
+                      x_max: 45
+                      y_min: -3
+                      y_max: 3
+                      z_min: -5
+                      z_max: 5
+                    position:
+                      x_min: -0.02
+                      x_max: 0.0
+                      y_min: -0.03
+                      y_max: 0.03
+                      z_min: -0.005
+                      z_max: 0.005
+          -
+            right:
+              -
+                name: pick
+                objects: [pick_0]
+                filter_z_dir: ["forward", 90]
+                filter_x_dir: ["downward", 120]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                post_grasp_offset_min: 0.15
+                post_grasp_offset_max: 0.2
+              -
+                name: place
+                place_part_prim_path: "contact_link1"
+                objects: [pick_0, drawer]
+                filter_z_dir: ["forward", 90]
+                filter_x_dir: ["downward", 140]
+                y_ratio_range: [0.3, 0.5]
+                x_ratio_range: [0.6, 0.8]
+                pre_place_z_offset: 0.075
+                place_z_offset: 0.075
+                position_constraint: object
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+          -
+            left:
+              -
+                name: close
+                objects: [drawer]
+                ignore_substring: ["pick_0"]
+                planner_setting:
+                  task_name: CloseBox
+                  category_name: Articulated
+
+                  tool_keypoint_name_list: [tool_head, tool_tail, tool_side]
+                  object_keypoint_name_list: [articulated_object_head, articulated_object_tail]
+                  success_threshold: 0.01
+                  constraint_list:
+                    - keypoint_name: tool_head
+                      target_keypoint_name: link_contact_point
+                      tolerance: 0.000001
+                      type: point2point_constraint
+                      name: fingers_contact_with_link0
+
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_side
+                      target_axis: object_link0_contact_axis
+                      target_axis_frame: object
+                      tolerance: 0.0005
+                      target_inner_product: -1
+                      type: frame_axis_parallel
+                      name: hand_parallel_to_link0_edge
+
+                    - axis_from_keypoint_name: tool_tail
+                      axis_to_keypoint_name: tool_head
+                      target_axis: object_link0_move_axis
+                      target_axis_frame: object
+                      tolerance: 0.3
+                      target_inner_product: 1
+                      type: frame_axis_parallel
+                      name: hand_parallel_to_link0_move_axis
+
+                  contact_pose_index: 2
+                  # pre-actuation pose list.
+                  pre_actuation_motions: [["translate_x", -0.05]] #   ["translate_z", -0.0001] , ["translate_x", -0.01],
+                  # post-actuation pose list
+                  post_actuation_motions: [["translate_x", 0.15],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05],["translate_x", 0.05]] # ["translate_z", 0.08],
+
+                  # in link8 frame, in degree, in metre
+                  keypose_random_range:
+                    orientation:
+                      x_min: -45
+                      x_max: 45
+                      y_min: -3
+                      y_max: 3
+                      z_min: -5
+                      z_max: 5
+                    position:
+                      x_min: -0.02
+                      x_max: 0.0
+                      y_min: -0.03
+                      y_max: 0.03
+                      z_min: -0.005
+                      z_max: 0.005

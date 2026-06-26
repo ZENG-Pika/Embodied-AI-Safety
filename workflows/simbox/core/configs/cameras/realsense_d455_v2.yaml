@@ -1,0 +1,8 @@
+camera_type: "RealSense"
+camera_params: [381.49, 381.16, 318.08, 244.28]
+resolution_width: 640
+resolution_height: 480
+frequency: 30
+pixel_size: 3.0
+f_number: 2.0
+focus_distance: 0.6

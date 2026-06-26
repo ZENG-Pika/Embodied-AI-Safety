@@ -1,0 +1,67 @@
+name: warehouse_conveyor_arena
+fixtures:
+  -
+    name: conveyor
+    path: long_horizon/conveyor/warehouse_conveyor.usdc
+    target_class: ConveyorObject
+    translation: [0, 0, 0.0]
+    quaternion: [1.0, 0.0, 0.0, 0.0]
+    scale: [1, 1, 1]
+    linear_velocity: [-0.05, 0, 0.0]
+    linear_track_list: ["track_01", "track_03"]
+    angular_velocity: [0.0, 0.0, -10]
+    angular_track_list: ["track_02", "track_04"]
+  -
+    name: floor
+    target_class: PlaneObject
+    size: [50.0, 50.0]
+    translation: [0, 0, 0]
+    texture:
+      texture_lib: "floor_textures"
+      apply_randomization: True
+      texture_id: 1
+      texture_scale: [1.0, 1.0]
+  -
+    name: background0
+    target_class: PlaneObject
+    size: [3.0, 10.0]
+    translation: [-5, 0, 1]
+    euler: [0.0, 90.0, 0.0]
+    texture:
+      texture_lib: "background_textures"
+      apply_randomization: True
+      texture_id: 1
+      texture_scale: [1.0, 1.0]
+  -
+    name: background1
+    target_class: PlaneObject
+    size: [3.0, 10.0]
+    translation: [5, 0, 1]
+    euler: [0.0, 90.0, 0.0]
+    texture:
+      texture_lib: "background_textures"
+      apply_randomization: True
+      texture_id: 1
+      texture_scale: [1.0, 1.0]
+  -
+    name: background2
+    target_class: PlaneObject
+    size: [10.0, 3.0]
+    translation: [0, -5, 1]
+    euler: [90.0, 0.0, 0.0]
+    texture:
+      texture_lib: "background_textures"
+      apply_randomization: True
+      texture_id: 1
+      texture_scale: [1.0, 1.0]
+  -
+    name: background3
+    target_class: PlaneObject
+    size: [10.0, 3.0]
+    translation: [0, 3, 1]
+    euler: [90.0, 0.0, 0.0]
+    texture:
+      texture_lib: "background_textures"
+      apply_randomization: True
+      texture_id: 1
+      texture_scale: [1.0, 1.0]

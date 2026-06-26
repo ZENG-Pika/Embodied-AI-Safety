@@ -1,0 +1,240 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_clean_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [5000, 5500]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "lift2"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+        # left_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        # right_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        # left_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        # right_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        constrain_grasp_approach: True
+
+    objects:
+      -
+        name: watering_can
+        path: basic/pour/watering_can/watering_can_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: watering_can
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 180.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: False
+
+      -
+        name: plant
+        path: basic/pour/plant/plant_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: plant
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 180.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: False
+
+    regions:
+      -
+        object: watering_can
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.30, 0.02, 0.0],
+            [-0.22, 0.10, 0.0]
+          ]
+          yaw_rotation: [0, 0]
+
+      -
+        object: plant
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.15, -0.03, 0.0],
+            [0.23, 0.05, 0.0]
+          ]
+          yaw_rotation: [-15, 15]
+
+      -
+        object: lift2
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.64, -0.6],
+            [0.0, -0.64, -0.6]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    fluid:
+      container_name: watering_can
+      color: [1, 1, 1]
+      emissiveColor: [0.0, 0.0, 0.0]
+      opacity: 0.05
+      particleContactOffset: 0.003 # 0.005
+      numParticlesX: 6 # 4
+      numParticlesY: 6 # 4
+      numParticlesZ: 200 # 400
+      max_velocity: 0.8
+      mass: 0.0000001
+
+    cameras:
+      -
+        name: lift2_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fl/link6"
+      -
+        name: lift2_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fr/link6"
+      -
+        name: lift2_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "lift2/lift2/lift2/h_link6"
+
+    data:
+      task_dir: "watering_plants"
+      language_instruction: "Use the watering can to water the flower."
+      detailed_language_instruction: "Grasp and lift the watering can with the lift2's left arm, then move it above the flower. Tilt the watering can steadily until water begins to flow out and moisten the soil around the flower. Maintain the watering process until the soil is adequately hydrated. Return the watering can to an upright position and place it back to its original location."
+      collect_info: "left"
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 1200
+
+    skills:
+      -
+        lift2:
+            ########################### pick ###########################
+          -
+            left:
+              -
+                name: manualpick
+                objects: [watering_can]
+                filter_z_dir: ["upward", 90] #60
+                filter_x_dir: ["forward", 60] #60
+                pre_grasp_offset: 0.0
+                pre_grasp_offset_manual: [-0.1, 0.0, 0.0]
+                post_grasp_offset_min: 0.0
+                post_grasp_offset_max: 0.0 # 0.008
+                test_mode: ik
+                update_pose_cost_metric_none: True
+                grasp_scale: 1
+              -
+                name: move
+                objects: [watering_can, watering_can]
+                success_threshold: 5e-3
+                delta_trans: [[0.0, 0, 0.32]]
+                ignore_substring: ["watering_can", "visual", "plant"]
+                hold_vec_weight: [0,0,0,0,0,0]
+              -
+                name: approach__rotate
+                objects: [watering_can, plant]
+                success_threshold: 5e-3
+                ignore_substring: ["watering_can", "visual", "plant"]
+                hold_vec_weight: [0,0,0,0,0,0]
+                rotate:
+                  type: random
+                  objects: [watering_can, plant]
+                  rotate_obj_euler: [
+                    [0, 0, 180],
+                    [0, 0, 180]
+                  ] # desired orientation of obj_1
+                  success_threshold: 0.05
+                obj_yaw_offset: 180 # adjust yaw of obj_1 so that its x-axis aligns with obj_2
+                distance: 0.2 # distance of obj_1 relative to obj_2 (along negative x-axis of obj_1)
+              -
+                name: rotate__obj
+                objects: [watering_can]
+                first_motion: move
+                move_offset: [0, 0.1, -0.1]
+                rotate_obj_euler_delta: [
+                  [0, -65, 0], # -20
+                  [0, -65, 0]
+                ] # XYZ
+                trans_offset:
+                  [0., -0.00, 0.08]
+                success_threshold_move: 5e-3
+                success_threshold_rotate: 0.16
+                ignore_substring: ["watering_can", "visual","plant"]
+              -
+                name: wait
+                objects: [watering_can]
+                wait_steps: 80
+                success_threshold: 5e-3
+                ignore_substring: ["watering_can", "visual","plant"]
+    # ##################### move back ###########################
+              -
+                name: rotate__obj
+                objects: [watering_can]
+                first_motion: rotate
+                rotate_only: True
+                rotate_offset: [0, 0.1, -0.15]
+                rotate_obj_euler_delta: [
+                  [0, 65, 0], # -20
+                  [0, 65, 0]
+                ] # XYZ
+                success_threshold_move: 5e-3
+                success_threshold_rotate: 0.15
+                ignore_substring: ["watering_can", "visual","plant"]
+              -
+                name: wait
+                objects: [watering_can]
+                wait_steps: 20
+                success_threshold: 5e-3
+                ignore_substring: ["watering_can", "visual","plant"]
+              -
+                name: joint__ctrl
+                objects: [watering_can]
+                gripper_state: -1.0 # Close the gripper
+                num_steps: 200
+                ctrl_list: [
+                  [0, 24.4, abs],
+                  [1, 166, abs],
+                  [2, 95, abs],
+                  [3, 34, abs],
+                  [4, 31, abs],
+                  [5, 23, abs],
+                ]
+                success_threshold_js: 5e-3
+              -
+                name: pour__water__succ
+                gripper_state: -1.0 # Close the gripper
+                container_name: plant
+                particle_num_th_min: 150
+                particle_num_th_max: 4000
+                container_radius: 0.04
+                container_up: [
+                  ['plant', 'z', 0.98],
+                  ['watering_can', 'z', 0.95]
+                ]

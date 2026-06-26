@@ -1,0 +1,13 @@
+{
+    "DIR": "/home/shixu/dev_shixu/DataEngine/workflows/simbox/tools/art/close_v/7265/usd",
+    "USD_NAME": "microwave_0.usd",
+    "INSTANCE_NAME": "microwave7265",
+    "link0_initial_prim_path": "/root/group_18",
+    "base_initial_prim_path": "/root/group_0",
+    "revolute_joint_initial_prim_path": "/root/group_18/RevoluteJoint",
+    "joint_index": 0,
+    "LINK0_ROT_AXIS": "y",
+    "BASE_FRONT_AXIS": "z",
+    "LINK0_CONTACT_AXIS": "-y",
+    "SCALED_VOLUME": 0.02
+}

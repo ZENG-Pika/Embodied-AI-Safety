@@ -1,0 +1,296 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    neglect_collision_names: ["shelf"]
+
+    robots:
+      -
+        name: "lift2"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+        # left_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        # right_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        # left_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        # right_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        # constrain_grasp_approach: True
+        ignore_substring: ["material", "table", "shelf", "plate"]
+
+    objects:
+      -
+        name: beef
+        path: long_horizon/stack_a_beef_sandwich/beef/beef_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: shelf
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [-90.0, 90.0, 180.0]  # stable init pose
+        scale: [1.0, 1.0, 1.0]
+        apply_randomization: False
+      -
+        name: bread_0
+        path: long_horizon/stack_a_beef_sandwich/bread/bread_1/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: shelf
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]  # stable init pose
+        scale: [1.0, 1.0, 1.0]
+        apply_randomization: False
+      -
+        name: bread_1
+        path: long_horizon/stack_a_beef_sandwich/bread/bread_1/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: shelf
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]  # stable init pose
+        scale: [1.0, 1.0, 1.0]
+        apply_randomization: False
+      -
+        name: beef_shelf
+        path: long_horizon/stack_a_beef_sandwich/beef_shelf/shelf_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: shelf
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 90.0]  # stable init pose
+        scale: [1.0, 1.0, 1.0]
+        apply_randomization: False
+      -
+        name: bread_shelf
+        path: long_horizon/stack_a_beef_sandwich/bread_shelf/shelf_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: shelf
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [1.6, 1.05, 1.05]
+        apply_randomization: False
+      -
+        name: plate
+        path: long_horizon/stack_a_beef_sandwich/plate/plate_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: shelf
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [1.0, 1.0, 1.0]
+        apply_randomization: False
+
+    regions:
+      -
+        object: beef_shelf
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.35, -0.25, 0.0],
+            [-0.25, -0.1, 0.0]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: bread_shelf
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.25, -0.20, 0.0],
+            [0.35, -0.07, 0.0]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: plate
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.05, -0.25, 0.0],
+            [0.05, -0.15, 0.0]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: ${tasks.0.robots.0.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.025, -0.75, -0.69],
+            [0.025, -0.75, -0.69]
+          ]
+          yaw_rotation: [-0.0, 0.0]
+      -
+        object: beef
+        target: beef_shelf
+        random_type: A_in_B_region_sampler
+        random_config:
+          x_bias: 0.01
+      -
+        object: bread_1
+        target: bread_shelf
+        random_type: A_in_B_region_sampler
+        random_config:
+          x_bias: -0.043
+      -
+        object: bread_0
+        target: bread_shelf
+        random_type: A_in_B_region_sampler
+        random_config:
+          x_bias: 0.06
+
+    cameras:
+      -
+        name: lift2_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fl/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: lift2_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fr/link6"
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: lift2_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "lift2/lift2/lift2/h_link6"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+
+    data:
+      task_dir: "stack_a_beef_sandwich"
+      language_instruction: "Make a beef sandwich."
+      detailed_language_instruction: "Pick the right bread slice with the right arm and place it on the plate. Then pick the beef with the left arm and place it on top of the bread slice. Finally, pick the left bread slice with the right arm and place it on top of the beef to complete the sandwich."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 4000
+
+    skills:
+      -
+        lift2:
+          -
+            right:
+              -
+                name: pick
+                objects: [bread_0]
+                filter_z_dir: ["forward", 60]
+                filter_x_dir: ["downward", 150]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                ignore_substring: ["bread_shelf", "bread_1"]
+                post_grasp_offset_min: 0.15
+                post_grasp_offset_max: 0.20
+              -
+                name: place
+                objects: [bread_0, plate]
+                place_direction: vertical
+                filter_z_dir: ["forward", 10]
+                filter_y_dir: ["upward", 60, 30]
+                filter_x_dir: ["downward", 120, 150]
+                position_constraint: object
+                x_ratio_range: [0.45, 0.5]
+                y_ratio_range: [0.5, 0.5]
+                pre_place_z_offset: 0.125
+                place_z_offset: 0.075
+                post_place_vector: [-0.05, 0.0, 0.0]
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+          -
+            left:
+              -
+                name: pick
+                objects: [beef]
+                filter_z_dir: ["forward", 60]
+                filter_x_dir: ["downward", 150]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                ignore_substring: ["beef_shelf"]
+                post_grasp_offset_min: 0.15
+                post_grasp_offset_max: 0.20
+              -
+                name: place
+                objects: [beef, bread_0]
+                place_direction: vertical
+                filter_z_dir: ["forward", 10]
+                filter_y_dir: ["downward", 120, 150]
+                filter_x_dir: ["downward", 120, 150]
+                position_constraint: object
+                x_ratio_range: [0.45, 0.5]
+                y_ratio_range: [0.5, 0.5]
+                pre_place_z_offset: 0.125
+                place_z_offset: 0.075
+                post_place_vector: [-0.05, 0.0, 0.0]
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+          -
+            right:
+              -
+                name: pick
+                objects: [bread_1]
+                filter_z_dir: ["forward", 60]
+                filter_x_dir: ["downward", 150]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                ignore_substring: ["bread_shelf"]
+                post_grasp_offset_min: 0.15
+                post_grasp_offset_max: 0.20
+              -
+                name: place
+                objects: [bread_1, beef]
+                place_direction: vertical
+                filter_z_dir: ["forward", 10]
+                filter_y_dir: ["upward", 60, 30]
+                filter_x_dir: ["downward", 120, 150]
+                position_constraint: object
+                x_ratio_range: [0.5, 0.5]
+                y_ratio_range: [0.5, 0.5]
+                pre_place_z_offset: 0.125
+                place_z_offset: 0.075
+                post_place_vector: [-0.05, 0.0, 0.0]
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper

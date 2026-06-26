@@ -1,0 +1,280 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/mid_table_arena.yaml
+
+    neglect_collision_names: ["table"]
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "split_aloha"
+        robot_config_file: workflows/simbox/core/configs/robots/split_aloha.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        right_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        left_joint_home_std: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        right_joint_home_std: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        ignore_substring: ["material", "table", "gso_box"]
+
+    objects:
+      -
+        name: pick_object_left
+        path: long_horizon/sort_the_rubbish/non_recyclable_garbage/obj_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: True
+        orientation_mode: random
+        optimize_2d_layout: True
+      -
+        name: pick_object_left2
+        path: long_horizon/sort_the_rubbish/non_recyclable_garbage/obj_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: True
+        orientation_mode: random
+        optimize_2d_layout: True
+      -
+        name: pick_object_right
+        path: long_horizon/sort_the_rubbish/recyclable_garbage/bottle_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: True
+        orientation_mode: random
+        optimize_2d_layout: True
+      -
+        name: gso_box_left
+        path: long_horizon/sort_the_rubbish/garbage_can/nonrecyclable_can/Aligned_obj.usd
+        target_class: GeometryObject
+        dataset: gso
+        category: box
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]
+        scale: [1.0, 1.0, 1.0]
+        apply_randomization: False
+
+      -
+        name: gso_box_right
+        path: long_horizon/sort_the_rubbish/garbage_can/recyclable_can/Aligned_obj.usd
+        target_class: GeometryObject
+        dataset: gso
+        category: box
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]
+        scale: [1.0, 1.0, 1.0]
+        apply_randomization: False
+
+    regions:
+      -
+        object: pick_object_left
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.3, -0.20, 0.0],
+            [-0.025, 0.10, 0.0]
+          ]
+          yaw_rotation: [-45.0, 15.0]
+      -
+        object: pick_object_left2
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.3, -0.20, 0.0],
+            [-0.025, 0.10, 0.0]
+          ]
+          yaw_rotation: [-45.0, 15.0]
+      -
+        object: pick_object_right
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.025, -0.20, 0.0],
+            [0.3, 0.10, 0.0]
+          ]
+          yaw_rotation: [-15.0, 45.0]
+      -
+        object: gso_box_left
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.6, 0.0, -0.75],
+            [-0.6, 0.0, -0.75]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: gso_box_right
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.6, 0.0, -0.75],
+            [0.6, 0.0, -0.75]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: split_aloha
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.86, -0.775],
+            [0.0, -0.86, -0.725]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: split_aloha_hand_left
+        translation: [0.0, 0.08, 0.05]
+        orientation: [0.0, 0.0, 0.965, 0.259]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_hand_right
+        translation: [0.0, 0.08, 0.04]
+        orientation: [0.0, 0.0, 0.972, 0.233]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_head
+        translation: [0.0, -0.00818, 0.1]
+        orientation: [0.658, 0.259, -0.282, -0.648]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link"  # todo: robot base frame
+
+    data:
+      task_dir: "sort_the_rubbish_part2"
+      language_instruction: "Sort the garbage on the desktop into recyclable and non-recyclable"
+      detailed_language_instruction: "Pick the bottles and place them into the recyclable trashbin with right arm, and pick the other garbage and place it into the non-recyclable trashbin with left arm."
+      collect_info: ""
+      version: "v2.0, head camerea 1280x720, wrist 640x480"
+      update: True
+      max_episode_length: 4000
+
+    skills:
+      -
+        split_aloha:
+          -
+            right:
+              -
+                name: pick
+                objects: [pick_object_right]
+                filter_y_dir: ["forward", 60]
+                filter_z_dir: ["downward", 150]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                t_eps: 0.025
+                o_eps: 1
+                process_valid: True
+                lift_th: 0.02
+                post_grasp_offset_min: 0.10
+                post_grasp_offset_max: 0.15
+              -
+                name: place
+                objects: [pick_object_right, gso_box_right]
+                place_direction: vertical
+                filter_y_dir: ["forward", 30]
+                filter_z_dir: ["downward", 150]
+                x_ratio_range: [0.3, 0.4]
+                y_ratio_range: [0.3, 0.4]
+                pre_place_z_offset: 0.3
+                place_z_offset: 0.3
+                success_mode: height
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+          -
+            left:
+              -
+                name: pick
+                objects: [pick_object_left]
+                filter_y_dir: ["forward", 60]
+                filter_z_dir: ["downward", 150]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                t_eps: 0.025
+                o_eps: 1
+                process_valid: True
+                lift_th: 0.02
+                post_grasp_offset_min: 0.10
+                post_grasp_offset_max: 0.15
+              -
+                name: place
+                objects: [pick_object_left, gso_box_left]
+                place_direction: vertical
+                filter_y_dir: ["forward", 30]
+                filter_z_dir: ["downward", 150]
+                x_ratio_range: [0.6, 0.7]
+                y_ratio_range: [0.3, 0.4]
+                pre_place_z_offset: 0.3
+                place_z_offset: 0.3
+                success_mode: height
+              -
+                name: pick
+                objects: [pick_object_left2]
+                filter_y_dir: ["forward", 60]
+                filter_z_dir: ["downward", 150]
+                pre_grasp_offset: 0.10
+                gripper_change_steps: 10
+                t_eps: 0.025
+                o_eps: 1
+                process_valid: True
+                lift_th: 0.02
+                post_grasp_offset_min: 0.10
+                post_grasp_offset_max: 0.15
+              -
+                name: place
+                objects: [pick_object_left2, gso_box_left]
+                place_direction: vertical
+                filter_y_dir: ["forward", 30]
+                filter_z_dir: ["downward", 150]
+                x_ratio_range: [0.6, 0.7]
+                y_ratio_range: [0.3, 0.4]
+                pre_place_z_offset: 0.3
+                place_z_offset: 0.3
+                success_mode: height
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper

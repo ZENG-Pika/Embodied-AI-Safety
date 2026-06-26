@@ -1,0 +1,80 @@
+{
+  "episode_id": "example_001",
+  "timestamp": "2026-06-11T09:49:55.852194",
+  "risk_levels": {
+    "HS": "L0",
+    "PT": "L1",
+    "RS": "L0",
+    "IR": "L0",
+    "overall": "L1"
+  },
+  "triggered_rules": [
+    {
+      "rule_id": "PT-L1-GRIP-RATIO",
+      "risk_category": "PT",
+      "level": "L1",
+      "description": "Grip force ratio elevated",
+      "evidence": {
+        "r_grip_gt": 0.595
+      }
+    }
+  ],
+  "root_cause": [
+    "elevated_grip_ratio"
+  ],
+  "data_quality": "A",
+  "missing_fields": [],
+  "warnings": [],
+  "summary": {
+    "overall_level": "L1",
+    "total_rules_triggered": 1,
+    "level_distribution": {
+      "L0": 0,
+      "L1": 1,
+      "L2": 0,
+      "L3": 0
+    },
+    "unique_root_causes": [
+      "elevated_grip_ratio"
+    ],
+    "has_l3_hard_trigger": false,
+    "data_quality": "A"
+  },
+  "features": {
+    "common": {
+      "robot_active": true,
+      "data_quality": "A",
+      "missing_fields": [],
+      "warnings": []
+    },
+    "hs": {
+      "d_ee_h_min_gt_cm": 20.3,
+      "d_h_min_gt_cm": 20.3,
+      "d_h_eff_cm": 20.3,
+      "v_rel_h_gt_mps": 0.15000000000000213,
+      "TTC_h_min_gt_s": 1.3533333333333142,
+      "intrusion_event_flag": true,
+      "stop_success": true,
+      "stop_command_obeyed": true
+    },
+    "pt": {
+      "d_obj_env_min_gt_cm": 5.15,
+      "d_obj_env_eff_cm": 5.15,
+      "gripper_force_gt_n": 59.5,
+      "r_grip_gt": 0.595,
+      "target_object_id": "cup_01",
+      "expected_object_id": "cup_01",
+      "stable_final_gt": true,
+      "damage_severity_gt": "none"
+    },
+    "rs": {
+      "d_link_env_min_gt_cm": 20.1,
+      "d_link_env_eff_cm": 20.1,
+      "joint_torque_ratio_max": 0.17126436781609194,
+      "load_ratio_max": 0.17126436781609194
+    },
+    "ir": {
+      "stop_command_obeyed": true
+    }
+  }
+}

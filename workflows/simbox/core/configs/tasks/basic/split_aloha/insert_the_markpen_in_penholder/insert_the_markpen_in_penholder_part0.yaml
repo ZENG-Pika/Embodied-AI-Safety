@@ -1,0 +1,159 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+    # arena_file: workflows/simbox/core/configs/arenas/scene_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    neglect_collision_names: ["table"]
+
+    robots:
+      -
+        name: "split_aloha"
+        robot_config_file: workflows/simbox/core/configs/robots/split_aloha.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        right_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        left_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        right_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        ignore_substring: ["material", "Plane", "table", "conveyor", "scene", "oo3d_object2"]
+
+    objects:
+      -
+        name: oo3d_object1
+        path: basic/insert_the_markpen_in_penholder/pen/pen0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: gift
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0, 0.0, 0.0]
+        scale: [1, 1, 1]
+      -
+        name: oo3d_object2
+        path: basic/insert_the_markpen_in_penholder/container/container1/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: gift
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90, 0.0, 0.0]
+        scale: [0.12, 0.12, 0.12]
+
+    regions:
+    # Order is important!
+      -
+        object: ${tasks.0.robots.0.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.86, -0.905],
+            [0.0, -0.86, -0.905]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: oo3d_object1
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.28, -0.25, 0.0],
+            [-0.2, -0.15, 0.0]
+          ]
+          yaw_rotation: [-20, 20]
+      -
+        object: oo3d_object2
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.25, 0.0],
+            [0.1, -0.15, 0.0]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: ${tasks.0.robots.0.name}_hand_left
+        translation: [0.0, 0.08, 0.05]
+        orientation: [0.0, 0.0, 0.965, 0.259]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+        parent: "${tasks.0.robots.0.name}/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: ${tasks.0.robots.0.name}_hand_right
+        translation: [0.0, 0.08, 0.04]
+        orientation: [0.0, 0.0, 0.972, 0.233]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "${tasks.0.robots.0.name}/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: ${tasks.0.robots.0.name}_head
+        translation: [0.0, -0.00818, 0.1]
+        orientation: [0.658, 0.259, -0.282, -0.648]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "${tasks.0.robots.0.name}/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+
+    data:
+      task_dir: "insert_the_markpen_in_penholder_part0"
+      language_instruction: "Place markpen into the container with left arm."
+      detailed_language_instruction: "Place markpen into the container with the left robotic arm."
+      collect_info: ""
+      version: "v2.0, head camerea 1280x720, wrist 640x480"
+      update: True
+      max_episode_length: 1300
+
+    skills:
+      -
+        split_aloha:
+          -
+            left:
+            -
+              name: pick
+              objects: [oo3d_object1]
+              pre_grasp_offset: 0.05
+              filter_z_dir: ["downward", 160]
+              filter_y_dir: ["forward", 60]
+              pre_grasp_hold_vec_weight: [1,1,1,0,0,0]
+            -
+              name: place
+              objects: [oo3d_object1, oo3d_object2]
+              place_direction: vertical
+              filter_y_dir: ["upward", 40]
+              align_pick_obj_axis: [0, 1, 0]
+              align_place_obj_axis: [0, 1, 0]
+              align_obj_tol: 5 # degree
+              pre_place_z_offset: 0.2
+              place_z_offset: 0.1
+              position_constraint: object
+              x_ratio_range: [0.5,0.5]
+              y_ratio_range: [0.5,0.5]
+              post_place_hold_vec_weight: [0,0,0,1,1,0]
+              success_th: 0.15
+              success_mode: flower

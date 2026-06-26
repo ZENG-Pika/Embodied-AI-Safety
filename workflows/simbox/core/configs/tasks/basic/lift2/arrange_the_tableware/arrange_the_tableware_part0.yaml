@@ -1,0 +1,290 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+    # arena_file: workflows/simbox/core/configs/arenas/scene_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    neglect_collision_names: ["tray"]
+
+    robots:
+      -
+        name: "lift2"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        right_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        left_joint_home_std: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        right_joint_home_std: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        ignore_substring: ["material", "table", "tray"]
+    objects:
+      -
+        name: plate
+        path: basic/arrange_the_tableware/plate/plate_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]
+        # translation: [0.0, -0.25, 0.76]
+        # euler: [90.0, 0.0, 0.0]
+        scale: [1.0, 1.0, 1.0]
+      -
+        name: plate_shelf
+        path: basic/arrange_the_tableware/plate_shelf/shelf_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, -0.0, 0.0]
+        euler: [90.0, 0.0, 90.0]
+        scale: [1.0, 1.0, 1.0]
+      -
+        name: tray_0
+        path: basic/arrange_the_tableware/tray/tray_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]
+        scale: [1.6, 1.0, 1.3]
+        filter_collision: True
+      -
+        name: tray_1
+        path: basic/arrange_the_tableware/tray/tray_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]
+        scale: [1.6, 1.0, 1.3]
+        filter_collision: True
+      -
+        name: fork
+        path: basic/arrange_the_tableware/fork/fork_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, -90.0, 0.0]
+        scale: [1.0, 1.0, 1.0]
+      -
+        name: spoon
+        path: basic/arrange_the_tableware/spoon/spoon_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, -90.0, 0.0]
+        scale: [1.0, 1.0, 1.0]
+
+    regions:
+      -
+        object: ${tasks.0.robots.0.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.025, -0.75, -0.67],
+            [0.025, -0.75, -0.67]
+          ]
+          yaw_rotation: [-0.0, 0.0]
+      -
+        object: tray_1
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.35, -0.25, 0.005],
+            [0.40, -0.15, 0.005]
+          ]
+          yaw_rotation: [0, 0]
+      -
+        object: tray_0
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.40, -0.25, 0.005],
+            [-0.35, -0.15, 0.005]
+          ]
+          yaw_rotation: [0, 0]
+
+      -
+        object: plate_shelf
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.05, -0.05, 0.005],
+            [0.05, 0.05, 0.005]
+          ]
+          yaw_rotation: [0, 0]
+      -
+        object: fork
+        target: tray_0
+        random_type: A_in_B_region_sampler
+        random_config:
+          x_bias: 0.0
+      -
+        object: spoon
+        target: tray_1
+        random_type: A_in_B_region_sampler
+        random_config:
+          x_bias: 0.0
+      -
+        object: plate
+        target: plate_shelf
+        random_type: A_in_B_region_sampler
+        random_config:
+          z_bias: -0.04
+
+    cameras:
+      -
+        name: ${tasks.0.robots.0.name}_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "${tasks.0.robots.0.name}/lift2/lift2/fl/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: ${tasks.0.robots.0.name}_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "${tasks.0.robots.0.name}/lift2/lift2/fr/link6"
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: ${tasks.0.robots.0.name}_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "${tasks.0.robots.0.name}/lift2/lift2/h_link6"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+
+
+    data:
+      task_dir: "arrange_the_tableware_part0"
+      language_instruction: "Setup the table."
+      detailed_language_instruction: "Pick up the plate from the shelf with right arm, then pick up the spoon from the tray with right arm and pick up the fork from the tray with left arm meanwhile, finally place the spoon on the right side of the plate and the fork on the left side of the plate."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 1300
+
+    skills:
+      -
+        lift2:
+          -
+            right:
+              -
+                name: pick
+                objects: [plate]
+                filter_z_dir: ["forward", 80]
+                filter_x_dir: ["downward", 130]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                ignore_substring: ["plate_shelf"]
+                post_grasp_offset_min: 0.075
+                post_grasp_offset_max: 0.125
+              -
+                name: place
+                objects: [plate, table]
+                place_direction: vertical
+                filter_z_dir: ["forward", 10]
+                filter_y_dir: ["upward", 60, 30]
+                filter_x_dir: ["downward", 120, 150]
+                position_constraint: object
+                x_ratio_range: [0.5, 0.5]
+                y_ratio_range: [0.12, 0.20]
+                pre_place_z_offset: 0.15
+                place_z_offset: 0.1
+                post_place_vector: [-0.05, 0.0, 0.0]
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+          -
+            left:
+              -
+                name: pick
+                objects: [fork]
+                filter_z_dir: ["forward", 80]
+                filter_x_dir: ["downward", 130]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                # ignore_substring: ["tray_0"]
+                post_grasp_offset_min: 0.125
+                post_grasp_offset_max: 0.175
+              -
+                name: place
+                objects: [fork, plate]
+                place_direction: vertical
+                filter_z_dir: ["forward", 20]
+                filter_x_dir: ["downward", 150]
+                x_ratio_range: [-0.25, -0.15]
+                y_ratio_range: [0.30, 0.70]
+                pre_place_z_offset: 0.175
+                place_z_offset: 0.125
+                success_mode: left
+                threshold: 0.01
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+            right:
+              -
+                name: pick
+                objects: [spoon]
+                filter_z_dir: ["forward", 80]
+                filter_x_dir: ["downward", 130]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                # ignore_substring: ["tray_1"]
+                post_grasp_offset_min: 0.125
+                post_grasp_offset_max: 0.175
+              -
+                name: place
+                objects: [spoon, plate]
+                place_direction: vertical
+                filter_z_dir: ["forward", 20]
+                filter_x_dir: ["downward", 150]
+                x_ratio_range: [1.15, 1.25]
+                y_ratio_range: [0.30, 0.70]
+                pre_place_z_offset: 0.175
+                place_z_offset: 0.125
+                success_mode: right
+                threshold: 0.01
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper

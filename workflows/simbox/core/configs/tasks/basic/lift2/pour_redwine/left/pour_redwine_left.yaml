@@ -1,0 +1,265 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_clean_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [5000, 5500]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "lift2"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+        # left_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        # right_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        # left_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        # right_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        constrain_grasp_approach: True
+
+    objects:
+      -
+        name: decanter
+        path: basic/pour/decanter/decanter_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: decanter
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [0.01, 0.01, 0.01]
+        apply_randomization: False
+
+      -
+        name: redwine_glass
+        path: basic/pour/redwine_glass/redwine_glass_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: redwine_glass
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [0.01, 0.01, 0.01]
+        apply_randomization: False
+
+    regions:
+      -
+        object: decanter
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.30, -0.08, 0.0],
+            [-0.22, 0.00, 0.0]
+          ]
+          yaw_rotation: [0, 0]
+
+      -
+        object: redwine_glass
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.05, -0.05, 0.0],
+            [0.13, 0.03, 0.0]
+          ]
+          yaw_rotation: [0, 0]
+
+      -
+        object: lift2
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.64, -0.75],
+            [0.0, -0.64, -0.75]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    fluid:
+      container_name: decanter
+      color: [0.55, 0.05, 0.15]
+      emissiveColor: [0.03, 0.0, 0.0]
+      opacity: 0.9
+      particleContactOffset: 0.005 # 0.005
+      numParticlesX: 4 # 4
+      numParticlesY: 4 # 4
+      numParticlesZ: 400 # 400
+      max_velocity: 1
+
+    cameras:
+      -
+        name: lift2_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fl/link6"
+        # apply_randomization: True
+        # max_translation_noise: 0.02
+        # max_orientation_noise: 2.5
+      -
+        name: lift2_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fr/link6"
+        # apply_randomization: True
+        # max_translation_noise: 0.03
+        # max_orientation_noise: 5.0
+      -
+        name: lift2_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "lift2/lift2/lift2/h_link6"
+        # apply_randomization: True
+        # max_translation_noise: 0.06
+        # max_orientation_noise: 10.0
+
+
+    data:
+      task_dir: "pour_redwine"
+      language_instruction: "Pour the red wine from the decanter into the glass"
+      detailed_language_instruction: "Grasp and lift the decanter with the left lift2 arm, and move it above the glass. Tilt the decanter slowly with the left lift2 arm until red wine begins to flow into the glass. Maintain the tilt until the desired amount of red wine is transferred. Return the decanter to an upright position and place it back on the table."
+      collect_info: "left"
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 1200
+
+    skills:
+      -
+        lift2:
+            ########################### pick ###########################
+          -
+            left:
+              -
+                name: joint__ctrl
+                objects: [decanter]
+                gripper_state: 1.0 # Open the gripper
+                num_steps: 60
+                ctrl_list: [
+                  [0, -3.7, abs],
+                  [1, 83.1, abs],
+                  [2, 1.5, abs],
+                  [3, 69.4, abs],
+                  [4, -2.5, abs],
+                  [5, 0, abs],
+                ]
+                success_threshold_js: 5e-3
+              -
+                name: manualpick
+                objects: [decanter]
+                filter_z_dir: ["upward", 60] #60
+                filter_x_dir: ["forward", 30] #60
+                pre_grasp_offset: 0.0
+                post_grasp_offset_min: 0.0
+                post_grasp_offset_max: 0.0 # 0.008
+                test_mode: ik
+                update_pose_cost_metric_none: True
+                grasp_scale: 0.01
+                adjust_ori: ['z', 'z', 'max'] # pose_axis, base_axis, flag
+                adjust_rotate_axis: 'x'
+                adjust_angle_list_cfg: [-30,30,21]
+                manual_adjust_ori: [['y', -15]]
+              -
+                name: move
+                objects: [decanter, decanter]
+                success_threshold: 5e-3
+                delta_trans: [[0.0, 0, 0.13]]
+                ignore_substring: ["decanter", "visual", "redwine_glass"]
+                hold_vec_weight: [0,0,1,1,0,0]
+              -
+                name: joint__ctrl
+                objects: [decanter]
+                gripper_state: -1.0 # Close the gripper
+                num_steps: 30
+                ctrl_list: [
+                  [0, -12, delta],
+                ]
+                success_threshold_js: 5e-3
+              -
+                name: approach__rotate
+                objects: [decanter, redwine_glass]
+                success_threshold: 5e-3
+                ignore_substring: ["decanter", "visual", "redwine_glass"]
+                hold_vec_weight: [0,0,0,0,0,0]
+                rotate:
+                  type: random
+                  objects: [decanter, redwine_glass]
+                  rotate_obj_euler: [
+                    [0, 0, -20],
+                    [0, 0, -20],
+                  ] # desired orientation of obj_1
+                  success_threshold: 0.05
+                obj_yaw_offset: 0 # adjust yaw of obj_1 so that its x-axis aligns with obj_2
+                distance: 0.16 # distance of obj_1 relative to obj_2 (along negative x-axis of obj_1)
+
+              -
+                name: rotate__obj
+                objects: [decanter]
+                rotate_obj_euler_delta: [
+                  [0, 115, 0], # -20
+                  [0, 115, 0]
+                ] # XYZ
+                trans_offset:
+                  [0, 0, 0.065]
+                success_threshold_move: 5e-3
+                success_threshold_rotate: 0.15
+                ignore_substring: ["decanter", "visual","redwine_glass"]
+              -
+                name: wait
+                objects: [decanter]
+                wait_steps: 15
+                success_threshold: 5e-3
+                ignore_substring: ["decanter", "visual","redwine_glass"]
+    # ##################### move back ###########################
+              -
+                name: rotate__obj
+                objects: [decanter]
+                rotate_obj_euler_delta: [
+                  [0, -115, 0], # -20
+                  [0, -115, 0]
+                ] # XYZ
+                success_threshold_move: 5e-3
+                success_threshold_rotate: 0.15
+                ignore_substring: ["decanter", "visual","redwine_glass"]
+              -
+                name: joint__ctrl
+                objects: [decanter]
+                gripper_state: -1.0 # Close the gripper
+                num_steps: 80
+                ctrl_list: [
+                  [0, -1.92, abs],
+                  [1, 127, abs],
+                  [2, 59.9, abs],
+                  [3, 55.6, abs],
+                  [4, -9.8, abs],
+                  [5, -0.8, abs],
+                ]
+                success_threshold_js: 5e-3
+              -
+                name: pour__water__succ
+                gripper_state: -1.0 # Close the gripper
+                container_name: redwine_glass
+                particle_num_th_min: 150
+                particle_num_th_max: 4000
+                container_radius: 0.025
+                container_up: [
+                  ['redwine_glass', 'z', 0.9],
+                  ['decanter', 'z', 0.9]
+                ]

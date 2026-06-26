@@ -1,0 +1,22 @@
+name: scene_arena
+involved_scenes: dining_room_scene_info
+update_freq: 5000
+fixtures:
+  # 001
+  -
+    name: table
+    path: home_scenes/tables/dinning_room/model_8617414f380062817ad173f2ad2abc28_0.usd
+    target_class: GeometryObject
+    translation: [0, 0, 0]
+    scale: [0.01, 0.01, 0.01]
+    euler: [0.0, 0.0, 0.0]
+    apply_randomization: True
+  -
+    name: scene
+    path: home_scenes/rooms/dinning_room/MVUHLWYKTKJ5EAABAAAAAAY8_usd_dinning_room_0.usd
+    target_class: GeometryObject
+    scale: [0.01, 0.01, 0.01]
+    translation: [2.449, 1.016, -0.455]
+    euler: [0.0, 0.0, 0.0]
+    apply_randomization: True
+  

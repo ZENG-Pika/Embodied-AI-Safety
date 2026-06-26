@@ -1,0 +1,229 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/clean_dark_arena.yaml
+
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [5000, 5500]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "split_aloha"
+        robot_config_file: workflows/simbox/core/configs/robots/split_aloha.yaml
+        euler: [0.0, 0.0, 90.0]
+        # left_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        # right_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        # left_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        # right_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        ignore_substring: ["material", "table", "wuzi"]
+
+    objects:
+      -
+        name: brown_cleaning_cloth
+        path: long_horizon/clean_the_dirt/cloth/obj_1/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: cleaning_cloth
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.8, 0.8, 0.8]
+        apply_randomization: False
+      -
+        name: wuzi_0
+        path: long_horizon/clean_the_dirt/dirt/wuzi_006/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: dirt
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: suggested
+        texture:
+          texture_lib: "long_horizon/clean_the_dirt/color/image0"
+          apply_randomization: True
+          texture_id: 3
+          texture_scale: [0.001, 0.001]
+      -
+        name: wuzi_2
+        path: long_horizon/clean_the_dirt/dirt/wuzi_008/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: dirt
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: suggested
+        texture:
+          texture_lib: "long_horizon/clean_the_dirt/color/image2"
+          apply_randomization: True
+          texture_id: 4
+          texture_scale: [0.001, 0.001]
+      -
+        name: wuzi_1
+        path: long_horizon/clean_the_dirt/dirt/wuzi_007/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: dirt
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: suggested
+        texture:
+          texture_lib: "long_horizon/clean_the_dirt/color/image1"
+          apply_randomization: True
+          texture_id: 5
+          texture_scale: [0.001, 0.001]
+
+    regions:
+      -
+        object: wuzi_0
+        target: table
+        random_type: A_on_B_region_sampler
+        visible: False
+        random_config:
+          pos_range: [
+            [0.2, -0.38, 0.0],
+            [0.35, -0.1, 0.0]
+          ]
+          yaw_rotation: [-15.0, 45.0]
+      -
+        object: wuzi_1
+        target: table
+        random_type: A_on_B_region_sampler
+        visible: False
+        random_config:
+          pos_range: [
+            [0.30, -0.2, 0.0],
+            [0.45, -0.0, 0.0]
+          ]
+          yaw_rotation: [-15.0, 45.0]
+      -
+        object: wuzi_2
+        target: table
+        random_type: A_on_B_region_sampler
+        visible: True
+        random_config:
+          pos_range: [
+            [0.00, -0.2, 0.0],
+            [0.25, -0.0, 0.0]
+          ]
+          yaw_rotation: [-15.0, 45.0]
+
+      -
+        object: brown_cleaning_cloth
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.025, -0.20, 0.0],
+            [0.3, 0.05, 0.0]
+          ]
+          yaw_rotation: [-15.0, 15.0]
+      -
+        object: split_aloha
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.83, -0.865],
+            [0.0, -0.83, -0.765]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: split_aloha_hand_left
+        translation: [0.0, 0.08, 0.05]
+        orientation: [0.0, 0.0, 0.965, 0.259]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_hand_right
+        translation: [0.0, 0.08, 0.04]
+        orientation: [0.0, 0.0, 0.972, 0.233]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_head
+        translation: [0.0, -0.00818, 0.1]
+        orientation: [0.658, 0.259, -0.282, -0.648]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link"  # todo: robot base frame
+        apply_randomization: False
+    data:
+      task_dir: "clean_the_dirt_with_browncloth_darktable_part1"
+      language_instruction: "Use the brown cleaning cloth to clean the dirt with right ${tasks.0.robots.0.name} arm."
+      detailed_language_instruction: "Grasp and lift the brown cleaning cloth with the right ${tasks.0.robots.0.name} arm, and move it to the dirt. Clean the dirt with the ${tasks.0.objects.0.name} by moving it left and right over the dirt."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 2000
+
+    skills:
+      -
+        split_aloha:
+          -
+            right:
+              -
+                name: pick
+                objects: [brown_cleaning_cloth]
+                filter_y_dir: ["forward", 30]
+                filter_z_dir: ["downward", 150]
+                pre_grasp_offset: 0.0
+                post_grasp_offset_min: 0.008
+                post_grasp_offset_max: 0.008
+                grasp_scale: 0.8
+              -
+                name: move
+                objects: [brown_cleaning_cloth, wuzi_2]
+                success_threshold: 0.05
+                invisible_object: [wuzi_2]
+                hold_vec_weight: [1,1,1,0,0,1]
+                delta_trans: [[0.0, -0.06, 0.0], [0.0, 0.06, 0.0], [0.0, -0.06, 0.0], [0.0, 0.06, 0.0], [0.0, 0.0, 0.0]]
+              -
+                name: move
+                objects: [brown_cleaning_cloth, wuzi_1]
+                success_threshold: 0.05
+                invisible_object: [wuzi_1]
+                hold_vec_weight: [1,1,1,0,0,1]
+                delta_trans: [[0.0, -0.06, 0.0], [0.0, 0.06, 0.0], [0.0, -0.06, 0.0], [0.0, 0.06, 0.0], [0.0, 0.0, 0.0]]
+              -
+                name: move
+                objects: [brown_cleaning_cloth, wuzi_0]
+                success_threshold: 0.05
+                invisible_object: [wuzi_0]
+                hold_vec_weight: [1,1,1,0,0,1]
+                delta_trans: [[0.0, -0.06, 0.0], [0.0, 0.06, 0.0], [0.0, -0.06, 0.0], [0.0, 0.06, 0.0], [0.0, 0.0, 0.0]]
+              -
+                name: gripper__action
+                gripper_state: 1 # Open
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper

@@ -1,0 +1,221 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_clean_arena.yaml
+
+    neglect_collision_names: ["table"]
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [2000, 5000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "split_aloha"
+        robot_config_file: workflows/simbox/core/configs/robots/split_aloha.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        right_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        left_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        right_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+
+
+    objects:
+      -
+        name: place_object
+        path: "pick_and_place/pre-train-place/assets/upper/basket/omniobject3d-picnic_basket_003/Aligned_obj.usd"
+        target_class: RigidObject
+        dataset: oo3d
+        category: "basket"
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: suggested
+        scale_mode: suggested
+      -
+        name: pick_object
+        path: "pick_and_place/pre-train-pick/assets/omniobject3d-banana/omniobject3d-banana_016/Aligned_obj.usd"
+        target_class: RigidObject
+        dataset: oo3d
+        category: "omniobject3d-banana"
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: keep
+        randomization_scope: ["omniobject3d-bamboo_shoots", "omniobject3d-banana","omniobject3d-bottle",
+            "omniobject3d-carrot", "omniobject3d-chili",
+            "omniobject3d-corn", "omniobject3d-cucumber",
+            "omniobject3d-pen", "omniobject3d-shampoo", "omniobject3d-scissor",
+            "omniobject3d-sweet_potato", "omniobject3d-tooth_brush", "omniobject3d-tooth_paste",
+            "phocal-bottle","phocal-spoon"]
+
+    regions:
+      -
+        object: ${tasks.0.robots.0.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.86, -0.74],
+            [0.0, -0.86, -0.74]
+          ]
+          yaw_rotation: [-0.0, 0.0]
+      -
+        object: place_object
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.1, -0.2, 0],
+            [0.5, 0.2, 0]
+          ]
+          yaw_rotation: [-0.0, 0.0]
+      -
+        object: pick_object
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.5, -0.2, 0.0],
+            [-0.1, 0.2, 0.0]
+          ]
+          # yaw_rotation: [-60.0, 60.0]
+          yaw_rotation: [-0.0, 0.0]
+
+    # distractors:
+    #   path: pick_and_place/pre-train-pick/assets
+    #   min_num: 5
+    #   max_num: 10
+    #   scale: [0.001, 0.001, 0.001]
+    #   target: table
+    #   pos_range: [
+    #     [-0.7, -0.35],
+    #     [0.2, 0.35]
+    #   ]
+
+    cameras:
+      -
+        name: split_aloha_hand_left
+        translation: [0.0, 0.08, 0.05]
+        orientation: [0.0, 0.0, 0.965, 0.259]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: split_aloha_hand_right
+        translation: [0.0, 0.08, 0.04]
+        orientation: [0.0, 0.0, 0.972, 0.233]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: split_aloha_head
+        translation: [0.0, -0.00818, 0.1]
+        orientation: [0.658, 0.259, -0.282, -0.648]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+
+    data:
+      task_dir: "handover"
+      language_instruction: "Pick up the ${tasks.0.objects.1.name} with left arm, handover to the right arm and then place it in the ${tasks.0.objects.0.name} with right arm."
+      detailed_language_instruction: "Grasp and lift the ${tasks.0.objects.1.name}, handover to the right arm and then place it in the ${tasks.0.objects.0.name} with right arm."
+      collect_info: "lr/upper/basket"
+      version: "v2.0, head camerea 1280x720, wrist 640x480"
+      update: True
+      max_episode_length: 2000
+
+    skills:
+      -
+        split_aloha:
+          -
+            left:
+              -
+                name: pick
+                objects: [pick_object]
+                filter_y_dir: ["forward", 90]
+                filter_z_dir: ["downward", 160]
+                t_eps: 0.01
+                o_eps: 1
+                close_wait_steps: 10
+                post_grasp_offset_min: 0.1
+                post_grasp_offset_max: 0.1
+                constraints: ["y",0.2, 0.3]
+              -
+                name: goto__pose
+                position_constraint: object
+                objects: [pick_object]
+                gripper_state: -1 # Close
+                position: [0.3, -0.25, 0.1]
+                align_obj_axis: [0, 1, 0]
+                align_ref_axis: [0, 0, 1]
+                align_obj_tol: 30
+                filter_x_dir: ["forward", 70]
+                max_noise_m: 0.05
+                max_noise_deg: 5
+                interp_nums: 1
+          -
+            right:
+              -
+                name: pick
+                objects: [pick_object]
+                filter_y_dir: ["upward", 40]
+                filter_x_dir: ["backward", 110]
+                pre_grasp_offset: 0.1
+                close_wait_steps: 10
+                t_eps: 0.01
+                o_eps: 1
+                post_grasp_offset_min: 0.0
+                post_grasp_offset_max: 0.0
+                constraints: ["y",0.65, 0.9]
+          -
+            right:
+              -
+                name: gripper__action
+                gripper_state: -1 # Close
+            left:
+              -
+                name: gripper__action
+                gripper_state: 1 # Open
+                post_action: True
+                post_action_offset: 0.1
+              -
+                name: heuristic__skill
+                mode: rel_ee
+                value: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.1], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+                gripper_state: 1 # Open
+          -
+            right:
+              -
+                name: place
+                objects: [pick_object, place_object]
+                filter_y_dir: ["forward", 90]
+                filter_z_dir: ["downward", 140]
+                pre_place_z_offset: 0.1
+                position_constraint: object
+                success_mode: xybbox

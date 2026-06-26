@@ -1,0 +1,912 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/conveyor_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [2500, 5000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "lift2"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+        # use_batch: True
+
+    neglect_collision_names: ["shelf", "bowl", "plate"]
+
+    objects:
+      ### priority food
+      -
+        name: bread_0
+        path: long_horizon/conveyor_food/bread/bread_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: bread_shelf_0
+        path: long_horizon/conveyor_food/bread_shelf/shelf_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.2, 0.125, 0.2]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: cheese_0
+        path: long_horizon/conveyor_food/cheese/cheese_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [10.0, 0.0, 90.0]  # stable init pose
+        scale: [0.8, 1, 0.8]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: cheese_plate_0
+        path: long_horizon/conveyor_food/cheese_plate/plate_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.175, 0.25, 0.175]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      ### distractor food
+      -
+        name: bread_1
+        path: long_horizon/conveyor_food/bread/bread_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: bread_shelf_1
+        path: long_horizon/conveyor_food/bread_shelf/shelf_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.2, 0.125, 0.2]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: cheese_1
+        path: long_horizon/conveyor_food/cheese/cheese_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [10.0, 0.0, 90.0]  # stable init pose
+        scale: [0.8, 1, 0.8]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: cheese_plate_1
+        path: long_horizon/conveyor_food/cheese_plate/plate_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.175, 0.25, 0.175]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: bread_2
+        path: long_horizon/conveyor_food/bread/bread_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: bread_shelf_2
+        path: long_horizon/conveyor_food/bread_shelf/shelf_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.2, 0.125, 0.2]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: lettuce_2
+        path: long_horizon/conveyor_food/lettuce/lettuce_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, -90.0]  # stable init pose
+        scale: [1, 1.2, 1]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: lettuce_bowl_2
+        path: long_horizon/conveyor_food/lettuce_bowl/bowl_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.15, 0.15, 0.15]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: beef_0
+        path: long_horizon/conveyor_food/beef/beef_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [-90.0, 90.0, 180.0]  # stable init pose
+        scale: [1, 1.3, 1]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: beef_shelf_0
+        path: long_horizon/conveyor_food/beef_shelf/shelf_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.2, 0.17, 0.17]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: beef_1
+        path: long_horizon/conveyor_food/beef/beef_1/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [-90.0, 90.0, 180.0]  # stable init pose
+        scale: [1, 1.3, 1]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: beef_shelf_1
+        path: long_horizon/conveyor_food/beef_shelf/shelf_1/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.2, 0.17, 0.17]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: beef_2
+        path: long_horizon/conveyor_food/beef/beef_2/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [-90.0, 90.0, 180.0]  # stable init pose
+        scale: [1, 1.3, 1]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: beef_shelf_2
+        path: long_horizon/conveyor_food/beef_shelf/shelf_2/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.2, 0.17, 0.17]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: beef_3
+        path: long_horizon/conveyor_food/beef/beef_2/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [-90.0, 90.0, 180.0]  # stable init pose
+        scale: [1, 1.3, 1]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: beef_shelf_3
+        path: long_horizon/conveyor_food/beef_shelf/shelf_2/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.2, 0.17, 0.17]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: distractor_0
+        path: long_horizon/conveyor_food/distractor/fruits/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.8, 0.8, 0.8]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: plate_0
+        path: long_horizon/conveyor_food/plate/plate_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.15, 0.15, 0.15]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: distractor_1
+        path: long_horizon/conveyor_food/distractor/fruits/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.8, 0.8, 0.8]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: plate_1
+        path: long_horizon/conveyor_food/plate/plate_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.15, 0.15, 0.15]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: distractor_2
+        path: long_horizon/conveyor_food/distractor/fruits/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.8, 0.8, 0.8]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: plate_2
+        path: long_horizon/conveyor_food/plate/plate_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.15, 0.15, 0.15]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: distractor_3
+        path: long_horizon/conveyor_food/distractor/fruits/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.8, 0.8, 0.8]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: plate_3
+        path: long_horizon/conveyor_food/plate/plate_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.15, 0.15, 0.15]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: distractor_4
+        path: long_horizon/conveyor_bg_obj/orange/omniobject3d-orange_001/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: plate_4
+        path: long_horizon/conveyor_food/plate/plate_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.15, 0.15, 0.15]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: distractor_5
+        path: long_horizon/conveyor_bg_obj/pear/omniobject3d-pear_007/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: plate_5
+        path: long_horizon/conveyor_food/plate/plate_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.15, 0.15, 0.15]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: distractor_6
+        path: long_horizon/conveyor_bg_obj/orange/omniobject3d-orange_001/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: plate_6
+        path: long_horizon/conveyor_food/plate/plate_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.15, 0.15, 0.15]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: distractor_7
+        path: long_horizon/conveyor_bg_obj/orange/omniobject3d-orange_001/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: plate_7
+        path: long_horizon/conveyor_food/plate/plate_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]  # stable init pose
+        scale: [0.15, 0.15, 0.15]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+
+    regions:
+      #### container first, object second
+      ### priority food
+      ## left hand first, right hand second
+      -
+        object: bread_shelf_0
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: [0, 2, 4]  # randomly choose among these indices in random_region_list
+      -
+        object: bread_0
+        target: conveyor
+        container: bread_shelf_0
+        z_init: 0.06
+      -
+        object: cheese_plate_0
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: [1, 3, 5]  # randomly choose among these indices in random_region_list
+      -
+        object: cheese_0
+        target: conveyor
+        container: cheese_plate_0
+        z_init: 0.06
+      ### distractor food
+      -
+        object: bread_shelf_1
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: [-1, -2, -3, -4, -5, -6, -7, -8, -9]  # randomly choose among these indices in random_region_list
+      -
+        object: bread_1
+        target: conveyor
+        container: bread_shelf_1
+        z_init: 0.06
+      -
+        object: cheese_plate_1
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: [-1, -2, -3, -4, -5, -6, -7, -8]  # randomly choose among these indices in random_region_list
+      -
+        object: cheese_1
+        target: conveyor
+        container: cheese_plate_1
+        z_init: 0.06
+      -
+        object: bread_shelf_2
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: [-1, -2, -3, -4, -5, -6, -7]  # randomly choose among these indices in random_region_list
+      -
+        object: bread_2
+        target: conveyor
+        container: bread_shelf_2
+        z_init: 0.06
+      -
+        object: lettuce_bowl_2
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: [-1, -2, -3, -4, -5, -6]  # randomly choose among these indices in random_region_list
+      -
+        object: lettuce_2
+        target: conveyor
+        container: lettuce_bowl_2
+        z_init: 0.06
+      -
+        object: beef_shelf_0
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: [0, 1, 2, 3, 4, 5]
+      -
+        object: beef_0
+        target: conveyor
+        container: beef_shelf_0
+        z_init: 0.06
+      -
+        object: beef_shelf_1
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: [0, 1, 2, 3, 4, 5]
+      -
+        object: beef_1
+        target: conveyor
+        container: beef_shelf_1
+        z_init: 0.06
+      -
+        object: beef_shelf_2
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: False
+      -
+        object: beef_2
+        target: conveyor
+        container: beef_shelf_2
+        z_init: 0.06
+      -
+        object: beef_shelf_3
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: False
+      -
+        object: beef_3
+        target: conveyor
+        container: beef_shelf_3
+        z_init: 0.06
+      -
+        object: plate_0
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: [0, 1, 2, 3, 4, 5]
+      -
+        object: distractor_0
+        target: conveyor
+        container: plate_0
+        z_init: 0.05
+      -
+        object: plate_1
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: [0, 1, 2, 3, 4, 5]
+      -
+        object: distractor_1
+        target: conveyor
+        container: plate_1
+        z_init: 0.05
+      -
+        object: plate_2
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: False
+      -
+        object: distractor_2
+        target: conveyor
+        container: plate_2
+        z_init: 0.05
+      -
+        object: plate_3
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: False
+      -
+        object: distractor_3
+        target: conveyor
+        container: plate_3
+        z_init: 0.05
+      -
+        object: plate_4
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: False
+      -
+        object: distractor_4
+        target: conveyor
+        container: plate_4
+        z_init: 0.05
+      -
+        object: plate_5
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: False
+      -
+        object: distractor_5
+        target: conveyor
+        container: plate_5
+        z_init: 0.05
+      -
+        object: plate_6
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: False
+      -
+        object: distractor_6
+        target: conveyor
+        container: plate_6
+        z_init: 0.05
+      -
+        object: plate_7
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: False
+      -
+        object: distractor_7
+        target: conveyor
+        container: plate_7
+        z_init: 0.05
+      ### robot
+      -
+        object: lift2
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.5, -0.82, -0.78],
+            [0.5, -0.82, -0.78]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    random_region_list:
+      # This side
+      -
+        random_config:
+          pos_range: [
+            [-1.5, -0.15, 0.0],
+            [-1.4, -0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [-1.2, -0.15, 0.0],
+            [-1.1, -0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [-0.9, -0.15, 0.0],
+            [-0.8, -0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [-0.6, -0.15, 0.0],
+            [-0.5, -0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [-0.3, -0.15, 0.0],
+            [-0.2, -0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [0.0, -0.15, 0.0],
+            [0.1, -0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [0.3, -0.15, 0.0],
+            [0.4, -0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [0.6, -0.15, 0.0],
+            [0.7, -0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [0.9, -0.15, 0.0],
+            [1.0, -0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [1.2, -0.15, 0.0],
+            [1.3, -0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      # Other side
+      -
+        random_config:
+          pos_range: [
+            [-1.5, 0.15, 0.0],
+            [-1.4, 0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [-1.2, 0.15, 0.0],
+            [-1.1, 0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [-0.9, 0.15, 0.0],
+            [-0.8, 0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [-0.6, 0.15, 0.0],
+            [-0.5, 0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [-0.3, 0.15, 0.0],
+            [-0.2, 0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [0.0, 0.15, 0.0],
+            [0.1, 0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [0.3, 0.15, 0.0],
+            [0.4, 0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [0.6, 0.15, 0.0],
+            [0.7, 0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [0.9, 0.15, 0.0],
+            [1.0, 0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+      -
+        random_config:
+          pos_range: [
+            [1.2, 0.15, 0.0],
+            [1.3, 0.25, 0.0]
+          ]
+          yaw_rotation: [-5.0, 5.0]
+
+    cameras:
+      -
+        name: lift2_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fl/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: lift2_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fr/link6"
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: lift2_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "lift2/lift2/lift2/h_link6"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+
+
+    data:
+      task_dir: "ham_sandwich_lift2"
+      language_instruction: "Pick up the bread with left arm, pick up the cheese with right arm"
+      detailed_language_instruction: "Grasp and lift the bread with the left robotic arm, grasp and lift the cheese with the left robotic arm"
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 3000
+
+    skills:
+      -
+        lift2:
+          - # skill_sequences[0]
+            left:
+              - # skill[0]
+                name: dynamicpick
+                objects: [bread_0]
+                filter_z_dir: ["forward", 90]
+                filter_x_dir: ["downward", 150]
+                pick_range: [0.12, 0.2]
+                time_bias: 1.5
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: -1.0 # Close gripper
+            right:
+              - # skill[0]
+                name: dynamicpick
+                objects: [cheese_0]
+                filter_z_dir: ["forward", 90]
+                filter_x_dir: ["downward", 150]
+                pick_range: [-0.15, -0.05]
+                time_bias: 1
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: -1.0 # Close gripper

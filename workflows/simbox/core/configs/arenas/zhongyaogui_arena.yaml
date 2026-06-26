@@ -1,0 +1,21 @@
+name: zhongyaogui_arena
+fixtures:
+  -
+    name: table
+    path: table0/instance.usd
+    target_class: GeometryObject
+    translation: [0.0, 0.0, 0.375]
+    scale: [0.000525, 0.001053, 0.001056]
+  -
+    name: floor
+    target_class: PlaneObject
+    size: [5.0, 5.0]
+    translation: [0, 0, 0]
+  -
+    name: zhongyaogui
+    path: zhongyaogui/zhongyaogui.usd
+    target_class: GeometryObject
+    prim_path_child: chinese_herb_cabinet
+    translation: [-0.4, 1.0, 0.0]
+    euler: [0.0, 0.0, 0.0]
+    scale: [1.0, 1.0, 1.0]

@@ -1,0 +1,30 @@
+{
+    "object_keypoints": {
+        "articulated_object_head": [
+            -0.12221331991320702,
+            0.004074180066694674,
+            0.7207572775929765
+        ],
+        "articulated_object_tail": [
+            -0.573521257950959,
+            -0.0016857095412369238,
+            0.49682923043048766
+        ]
+    },
+    "object_scale": [
+        0.2302160991881601,
+        0.2302160991881601,
+        0.2302160991881601,
+        1.0
+    ],
+    "object_name": "microwave7265",
+    "object_usd": "YOUT_PATH_TO_USD/instance.usd",
+    "object_link0_rot_axis": "y",
+    "object_link0_contact_axis": "-y",
+    "object_base_front_axis": "z",
+    "joint_index": 0,
+    "object_prim_path": "/microwave7265",
+    "object_link_path": "/microwave7265/instance/group_18",
+    "object_base_path": "/microwave7265/instance/group_0",
+    "object_revolute_joint_path": "/microwave7265/instance/group_18/RevoluteJoint"
+}

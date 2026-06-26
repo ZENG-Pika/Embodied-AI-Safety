@@ -1,0 +1,239 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+    # arena_file: workflows/simbox/core/configs/arenas/scene_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "split_aloha"
+        robot_config_file: workflows/simbox/core/configs/robots/split_aloha.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        right_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        # left_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        # right_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        # constrain_grasp_approach: True
+        ignore_substring: ["material"]
+
+    objects:
+      -
+        name: microwave
+        target_class: ArticulatedObject
+        dataset: oo3d
+        joint_position_range: [0.2, 0.2]
+        info_name: "open_v_handle"
+        euler: [0.0, 0.0, 0.0]
+        scale: [0.007926725892163465,
+                0.007926725892163465,
+                0.007926725892163465,]
+        path: ""
+        category: ""
+        obj_info_path: ""
+        art_cat: art/open_the_microwave_from_scratch/microwave
+
+    regions:
+      -
+        object: microwave
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.10, 0.15, 0.05],
+            [0.05, 0.25, 0.05]
+          ]
+          yaw_rotation: [-30, 30]
+      -
+        object: split_aloha
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.86, -0.765],
+            [0.0, -0.86, -0.765]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: split_aloha_hand_left
+        translation: [0.0, 0.08, 0.05]
+        orientation: [0.0, 0.0, 0.965, 0.259]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_hand_right
+        translation: [0.0, 0.08, 0.04]
+        orientation: [0.0, 0.0, 0.972, 0.233]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_head
+        translation: [0.0, -0.00818, 0.1]
+        orientation: [0.658, 0.259, -0.282, -0.648]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link"  # todo: robot base frame
+
+    data:
+      task_dir: "open_the_microwave_from_scratch"
+      language_instruction: "Open the microwave."
+      detailed_language_instruction: "Open the microwave."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480"
+      update: True
+      max_episode_length: 4000
+
+    skills:
+      -
+        split_aloha:
+          -
+            right:
+              -
+                name: open
+                objects: [microwave]
+                collision_valid: False
+                planner_setting:
+                  task_name: OpenBox
+                  category_name: Articulated
+                  update_art_joint: True
+
+                  tool_keypoint_name_list: [tool_head, tool_tail, tool_side]
+                  object_keypoint_name_list: [articulated_object_head, articulated_object_tail]
+                  success_threshold: 0.2
+                  success_mode: "abs"
+                  constraint_list:
+                    - keypoint_name: tool_head
+                      target_keypoint_name: articulated_object_head
+                      tolerance: 0.000001
+                      type: point2point_constraint
+                      name: fingers_contact_with_link0
+
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_side
+                      target_axis_from_keypoint_name: articulated_object_head
+                      target_axis_to_keypoint_name: articulated_object_tail
+                      target_axis_frame: object
+                      tolerance: 0.0005
+                      target_inner_product: -1
+                      type: frame_axis_parallel
+                      name: hand_parallel_to_axis_computed_by_keypoints
+
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_tail
+                      cross_target_axis1_from_keypoint_name: articulated_object_head
+                      cross_target_axis1_to_keypoint_name: articulated_object_tail
+                      target_axis: link0_contact_axis
+                      tolerance: 0.5
+                      target_inner_product: 0.7
+                      type: frame_axis_parallel
+                      name: fingers_orthogonal_to_link0
+
+                  contact_pose_index: 2
+                  pre_actuation_motions: [["translate_z", -0.07]]
+                  post_actuation_motions: [["rotate", -0.15], ["rotate", -0.15], ["rotate", -0.15], ["rotate", -0.15], ["rotate", -0.1], ["rotate", -0.1]]
+                  keypose_random_range:
+                    orientation:
+                      x_min: 0.0
+                      x_max: 0.0
+                      y_min: 0.0
+                      y_max: 0.0
+                      z_min: 0.0
+                      z_max: 0.0
+                    position:
+                      x_min: 0.0
+                      x_max: 0.0
+                      y_min: 0.0
+                      y_max: 0.0
+                      z_min: 0.0
+                      z_max: 0.0
+              -
+                name: gripper__action
+                gripper_state: 1 # Open
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+
+              -
+                name: open
+                objects: [microwave]
+                obj_info_path: art/open_the_microwave_from_scratch/microwave/microwave_0013/Kps/open_v_inner/info.json
+                collision_valid: False
+                planner_setting:
+                  task_name: OpenBox
+                  category_name: Articulated
+                  success_mode: "abs"
+
+                  tool_keypoint_name_list: [tool_head, tool_tail, tool_side]
+                  object_keypoint_name_list: [articulated_object_head, articulated_object_tail]
+                  success_threshold: 0.3
+                  constraint_list:
+                    - keypoint_name: tool_head
+                      target_keypoint_name: articulated_object_head
+                      tolerance: 0.000001
+                      type: point2point_constraint
+                      name: fingers_contact_with_link0
+
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_side
+                      cross_target_axis1_from_keypoint_name: articulated_object_head
+                      cross_target_axis1_to_keypoint_name: articulated_object_tail
+                      tolerance: 0.0005
+                      target_inner_product: -0.7
+                      type: frame_axis_parallel  # enforce parallelism via cross product constraint
+                      name: hand_parallel_to_link0_edge_door
+
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_tail
+                      target_axis: link0_contact_axis
+                      tolerance: 0.0005
+                      target_inner_product: -0.7
+                      type: frame_axis_parallel
+                      name: hand_parallel_to_link0_edge
+
+                  contact_pose_index: 2
+                  pre_actuation_motions: [["rotate", 0.15]] #[["translate_y", 0.05]]
+                  post_actuation_motions: [["rotate", -0.15], ["rotate", -0.15], ["rotate", -0.1], ["rotate", -0.1], ["rotate", -0.05], ["rotate", -0.05], ["rotate", -0.05], ["rotate", -0.05], ["rotate", -0.05]]
+                  keypose_random_range:
+                    orientation:
+                      x_min: 0.0
+                      x_max: 0.0
+                      y_min: 0.0
+                      y_max: 0.0
+                      z_min: 0.0
+                      z_max: 0.0
+                    position:
+                      x_min: 0.0
+                      x_max: 0.03
+                      y_min: 0.0
+                      y_max: 0.0
+                      z_min: 0.0
+                      z_max: 0.03
+              -
+                name: gripper__action
+                gripper_state: 1 # Open
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper

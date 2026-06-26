@@ -1,0 +1,161 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+    # arena_file: workflows/simbox/core/configs/arenas/scene_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    neglect_collision_names: ["table"]
+
+    robots:
+      -
+        name: "lift2"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        right_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        left_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        right_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        ignore_substring: ["material", "Plane", "table", "conveyor", "scene", "oo3d_object2"]
+
+    objects:
+      -
+        name: oo3d_object1
+        path: basic/insert_the_flower_in_vase/flower1/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: gift
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0, 0.0, 0.0]  # stable init pose
+        scale: [0.35, 0.35, 0.35]
+      -
+        name: oo3d_object2
+        path: basic/insert_the_flower_in_vase/vase/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: gift
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90, 0.0, 0.0]  # stable init pose
+        scale: [0.25, 0.25, 0.25]
+
+    regions:
+    # Order is important!
+      -
+        object: ${tasks.0.robots.0.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.86, -0.725],
+            [0.0, -0.86, -0.725]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: oo3d_object1
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.35, -0.35, 0.0],
+            [-0.20, -0.15, 0.0]
+          ]
+          yaw_rotation: [-20, 20]
+      -
+        object: oo3d_object2
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.00, -0.35, 0.0],
+            [0.15, -0.15, 0.0]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: ${tasks.0.robots.0.name}_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "${tasks.0.robots.0.name}/lift2/lift2/fl/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: ${tasks.0.robots.0.name}_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "${tasks.0.robots.0.name}/lift2/lift2/fr/link6"
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: ${tasks.0.robots.0.name}_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "${tasks.0.robots.0.name}/lift2/lift2/h_link6"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+
+    data:
+      task_dir: "insert_the_flower_in_vase_part0"
+      language_instruction: "Place flower into the vase with left arm."
+      detailed_language_instruction: "Place flower into the vase with left robotic arm."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 1000
+
+    skills:
+      -
+        lift2:
+          -
+            left:
+            -
+              name: pick
+              objects: [oo3d_object1]
+              grasp_scale: 0.35
+              pre_grasp_offset: 0.15
+              filter_z_dir: ["forward", 30]
+              filter_x_dir: ["downward", 150]
+              pre_grasp_hold_vec_weight: [1,1,1,0,0,0]
+              post_grasp_offset_min: 0.15
+              post_grasp_offset_max: 0.15
+            -
+              name: place
+              objects: [oo3d_object1, oo3d_object2]
+              place_direction: vertical
+              filter_z_dir: ["upward", 30]
+              # filter_z_dir: ["forward", 90]
+              align_pick_obj_axis: [0, 1, 0]
+              align_place_obj_axis: [0, 1, 0]
+              align_obj_tol: 3 # degree
+              pre_place_z_offset: 0.25
+              place_z_offset: 0.14
+              position_constraint: object
+              x_ratio_range: [0.5,0.5]
+              y_ratio_range: [0.5,0.5]
+              success_th: 0.15
+              success_mode: flower

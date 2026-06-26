@@ -1,0 +1,292 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+
+    neglect_collision_names: ["table"]
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "frankarobotiq"
+        robot_config_file: workflows/simbox/core/configs/robots/franka_robotiq85.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home_std: [0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025]
+        ignore_substring: ["material", "table"]
+
+    objects:
+      -
+        name: trashcan
+        target_class: ArticulatedObject
+        dataset: pm
+        info_name: "close_h"
+        euler: [0.0, 0.0, 0.0]
+        scale: [0.001, 0.001, 0.001]
+        joint_position_range: [1.3, 1.4]
+        apply_randomization: True
+        path: ""
+        category: ""
+        obj_info_path: ""
+        art_cat: "long_horizon/put_the_trashcan_in_trashcan/trashcan"
+        # optimize_2d_layout: True
+      -
+        name: trash_0
+        path: long_horizon/put_the_trashcan_in_trashcan/trash/obj_1/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [1.0, 1.0, 1.0]
+        apply_randomization: True
+        orientation_mode: "random"
+        # optimize_2d_layout: True
+
+    regions:
+      -
+        object: trash_0
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.20, 0],
+            [0.35, 0.15, 0]
+          ]
+          yaw_rotation: [0, 0]
+      -
+        object: trashcan
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.15, -0.20, 0],
+            [0.0, 0.15, 0]
+          ]
+          yaw_rotation: [0, 0]
+      -
+        object: frankarobotiq
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.025, -0.50, -0.1],
+            [0.025, -0.50, 0.1]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: frankarobotiq_hand
+        translation: [0.0325, 0.053, 0.053] # [0.085, 0.0, -0.02]
+        orientation: [0.0, 0.0, 1.0, 0.0] # [0.153, 0.690, 0.690, 0.153]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d435i.yaml
+        parent: "frankarobotiq/arm/panda_link7/camera_mount/camera"
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: frankarobotiq_head
+        translation: [1.07725, -0.47928, 1.36907]
+        orientation: [0.71828, 0.41542, 0.35074, 0.43414]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d435i.yaml
+        parent: ""  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.06
+        max_orientation_noise: 7.0
+
+    data:
+      task_dir: "put_the_trashcan_in_trashcan_part0"
+      language_instruction: "Pick all the rubbish and put them into the trashcan, and finally close the trashcan"
+      detailed_language_instruction: "Pick all the rubbish and put them into the trashcan, and finally close the trashcan"
+      collect_info: ""
+      version: "v4.0, head camerea 640x480, wrist 640x480, droid embodiment"
+      update: True
+      max_episode_length: 4000
+
+    skills:
+      -
+        frankarobotiq:
+          -
+            left:
+              -
+                name: artpreplan
+                objects: [trashcan]
+                collision_valid: False
+                # debug start: KPAMPlanner
+                planner_setting:
+                  task_name: CloseBox
+                  category_name: Articulated
+
+                  tool_keypoint_name_list: [tool_head, tool_tail, tool_side]
+                  object_keypoint_name_list: [articulated_object_head, articulated_object_tail]
+                  success_threshold: 0.08
+                  constraint_list:
+                    # ensure the gripper to be in contact with the box lid with whole fingers
+                    - keypoint_name: tool_head
+                      target_keypoint_name: articulated_object_head
+                      tolerance: 0.001 # 0.000001
+                      type: point2point_constraint
+                      name: fingers_contact_with_link0
+
+                    # ensure surface of the gripper to be parallel to the box lid
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_side
+                      target_axis: link0_contact_axis
+                      target_axis_frame: object
+                      tolerance: 0.05
+                      target_inner_product: -1
+                      type: frame_axis_parallel
+                      name: hand_parallel_to_link0_edge
+
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_tail
+                      cross_target_axis1_from_keypoint_name: articulated_object_head
+                      cross_target_axis1_to_keypoint_name: articulated_object_tail
+                      target_axis: link0_contact_axis
+                      target_axis_frame: object # cross_target_axis2_frame
+                      tolerance: 0.05 # 0.05
+                      target_inner_product: 1.0
+                      type: frame_axis_parallel # enforce parallelism via cross product constraint
+                      name: fingers_orthogonal_to_link0
+
+                  contact_pose_index: 2
+                  # pre-actuation pose list.
+                  pre_actuation_motions: [["translate_z", -0.045]] # 0.03   ["translate_z", -0.0001] , ["translate_x", -0.01],
+                  # post-actuation pose list
+                  post_actuation_motions: [
+                      ["rotate", 0.5],
+                      ["rotate", 0.3],
+                      ["rotate", 0.2],
+                      ["rotate", 0.1],
+                      ["rotate", 0.1],
+                      ["rotate", 0.1],
+                      ["rotate", 0.1],
+                    ] # ["translate_z", 0.08],
+
+                  keypose_random_range:
+                    orientation:  # rotation around each axis (degrees)
+                      x_min: -5
+                      x_max: 5
+                      y_min: 0
+                      y_max: 5
+                      z_min: -45
+                      z_max: 45
+                    position:
+                      x_min: -0.02
+                      x_max: 0.02
+                      y_min: -0.02
+                      y_max: 0.02
+                      z_min: -0.03
+                      z_max: 0
+              -
+                name: pick
+                objects: [trash_0]
+                filter_x_dir: ["forward", 90]
+                filter_z_dir: ["downward", 140]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                t_eps: 0.01
+                o_eps: 1
+                process_valid: True
+                lift_th: 0.2
+                post_grasp_offset_min: 0.20
+                post_grasp_offset_max: 0.30
+                test_mode: ik
+              -
+                name: place
+                objects: [trash_0, trashcan]
+                filter_x_dir: ["forward", 90]
+                filter_z_dir: ["downward", 110]
+                pre_place_z_offset: 0.1
+                place_z_offset: 0.1
+                position_constraint: object
+                t_eps: 0.01
+                o_eps: 1
+                success_mode: xybbox
+              -
+                name: close
+                objects: [trashcan]
+                collision_valid: False
+                # debug start: KPAMPlanner
+                planner_setting:
+                  task_name: CloseBox
+                  category_name: Articulated
+
+                  tool_keypoint_name_list: [tool_head, tool_tail, tool_side]
+                  object_keypoint_name_list: [articulated_object_head, articulated_object_tail]
+                  success_threshold: 0.08
+                  constraint_list:
+                    # ensure the gripper to be in contact with the box lid with whole fingers
+                    - keypoint_name: tool_head
+                      target_keypoint_name: articulated_object_head
+                      tolerance: 0.001 # 0.000001
+                      type: point2point_constraint
+                      name: fingers_contact_with_link0
+
+                    # ensure surface of the gripper to be parallel to the box lid
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_side
+                      target_axis: link0_contact_axis
+                      target_axis_frame: object
+                      tolerance: 0.05
+                      target_inner_product: -1
+                      type: frame_axis_parallel
+                      name: hand_parallel_to_link0_edge
+
+                    - axis_from_keypoint_name: tool_head
+                      axis_to_keypoint_name: tool_tail
+                      cross_target_axis1_from_keypoint_name: articulated_object_head
+                      cross_target_axis1_to_keypoint_name: articulated_object_tail
+                      target_axis: link0_contact_axis
+                      target_axis_frame: object # cross_target_axis2_frame
+                      tolerance: 0.05 # 0.05
+                      target_inner_product: 1.0
+                      type: frame_axis_parallel # enforce parallelism via cross product constraint
+                      name: fingers_orthogonal_to_link0
+
+                  contact_pose_index: 2
+                  # pre-actuation pose list.
+                  pre_actuation_motions: [["translate_z", -0.045]] # 0.03   ["translate_z", -0.0001] , ["translate_x", -0.01],
+                  # post-actuation pose list
+                  post_actuation_motions: [
+                      ["rotate", 0.5],
+                      ["rotate", 0.3],
+                      ["rotate", 0.2],
+                      ["rotate", 0.1],
+                      ["rotate", 0.1],
+                      ["rotate", 0.1],
+                      ["rotate", 0.1],
+                    ] # ["translate_z", 0.08],
+
+                  keypose_random_range:
+                    orientation:  # rotation around each axis (degrees)
+                      x_min: -5
+                      x_max: 5
+                      y_min: 0
+                      y_max: 5
+                      z_min: -45
+                      z_max: 45
+                    position:
+                      x_min: -0.02
+                      x_max: 0.02
+                      y_min: -0.02
+                      y_max: 0.02
+                      z_min: -0.03
+                      z_max: 0

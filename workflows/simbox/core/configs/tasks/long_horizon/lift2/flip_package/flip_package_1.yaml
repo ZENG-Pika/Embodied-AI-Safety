@@ -1,0 +1,243 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/warehouse_conveyor_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [1500, 4000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "lift2"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+
+    neglect_collision_names: ["conveyor"]
+
+    objects:
+      ### priority
+      -
+        name: package_0
+        path: long_horizon/flip_package/package/package_1/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [-90.0, 0.0, 0.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: False
+        orientation_mode: keep
+        gap: False
+      ### distractor
+      -
+        name: package_1
+        path: long_horizon/flip_package/package/package_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [-90.0, 0.0, 0.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: package_2
+        path: long_horizon/flip_package/package/package_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [-90.0, 0.0, 0.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+      -
+        name: package_3
+        path: long_horizon/flip_package/package/package_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [-90.0, 0.0, 0.0]  # stable init pose
+        scale: [1, 1, 1]
+        apply_randomization: True
+        orientation_mode: keep
+        gap: False
+
+    regions:
+      ### priority
+      -
+        object: package_0
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: [0]
+        sub_tgt_prim: "/World"
+      ### distractor
+      -
+        object: package_1
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: False
+        sub_tgt_prim: "/World"
+      -
+        object: package_2
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: False
+        sub_tgt_prim: "/World"
+      -
+        object: package_3
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        priority: False
+        sub_tgt_prim: "/World"
+
+      ### robot
+      -
+        object: lift2
+        target: conveyor
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -1.35, -0.8],
+            [0.0, -1.35, -0.8]
+          ]
+          yaw_rotation: [0.0, 0.0]
+        sub_tgt_prim: "/World"
+
+    random_region_list:
+      # This side
+      -
+        random_config:
+          pos_range: [
+            [0.5, -0.85, 0.05],
+            [0.7, -0.65, 0.05]
+          ]
+          yaw_rotation: [-45.0, 45.0]
+      # The other side
+      -
+        random_config:
+          pos_range: [
+            [-1.6, 0.65, 0.05],
+            [-1.4, 0.85, 0.05]
+          ]
+          yaw_rotation: [-45.0, 45.0]
+      -
+        random_config:
+          pos_range: [
+            [-0.5, 0.65, 0.05],
+            [-0.3, 0.85, 0.05]
+          ]
+          yaw_rotation: [-45.0, 45.0]
+      -
+        random_config:
+          pos_range: [
+            [0.5, 0.65, 0.05],
+            [0.7, 0.85, 0.05]
+          ]
+          yaw_rotation: [-45.0, 45.0]
+
+    cameras:
+      -
+        name: lift2_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fl/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: lift2_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fr/link6"
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: lift2_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "lift2/lift2/lift2/h_link6"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+
+
+    data:
+      task_dir: "flip_package_1"
+      language_instruction: "Flip the package with right arm, pick up the package with left arm"
+      detailed_language_instruction: "Grasp and flip the package with the right robotic arm, grasp and lift the package with the left robotic arm"
+      collect_info: "20260112"
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 3000
+
+    skills:
+      -
+        lift2: # robot_name
+          - # skill_sequences[0]
+            right:
+              - # skill[0]
+                name: dynamicpick
+                objects: [package_0]
+                filter_z_dir: ["forward", 45]
+                filter_y_dir: ["upward", 90]
+                tcp_offset: 0.1
+                pre_grasp_offset: 0.17
+                pivot_angle_z: [5, 15]  # how many degrees the gripper should rotate clockwise around z-axis during pick (judged looking along +z)
+                pos_adjust_z: [0.02, 0.03]  # how much to move up in height after rotation
+                pick_range: [-0.35, -0.3]
+                pick_bias: 0.1
+                post_grasp_offset_min: 0.25
+                post_grasp_offset_max: 0.27
+              -
+                name: flip
+                objects: [package_0]
+                ee_axis: [1, 0, -0.2]
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+          - # skill_sequences[1]
+            left:
+              -
+                name: dynamicpick
+                objects: [package_0]
+                filter_z_dir: ["forward", 45]
+                filter_y_dir: ["downward", 150]
+                tcp_offset: 0.12
+                pre_grasp_offset: 0.1
+                pivot_angle_z: [-15, -5]  # how many degrees the gripper should rotate clockwise around z-axis during pick (judged looking along +z)
+                pos_adjust_z: [0.02, 0.04]  # how much to move up in height after rotation
+                pick_range: [0.3, 0.35]
+                pick_bias: 0.05
+                post_grasp_offset_min: 0.1
+                post_grasp_offset_max: 0.1
+              -
+                name: scan
+                objects: [package_0]

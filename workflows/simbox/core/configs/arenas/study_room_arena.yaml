@@ -1,0 +1,22 @@
+name: scene_arena
+involved_scenes: study_room_scene_info
+update_freq: 5000
+fixtures:
+  # 001
+  -
+    name: table
+    path: home_scenes/tables/study_room/model_d3745f1d28f11c7019c1b6b92a7a5b92_0.usd
+    target_class: GeometryObject
+    translation: [0, 0, 0.31]
+    scale: [0.01, 0.01, 0.01]
+    euler: [0.0, 0.0, 0.0]
+    apply_randomization: True
+  -
+    name: scene
+    path: home_scenes/rooms/study_room/MV7J6NIKTKJZ2AABAAAAADI8_usd_study_room_0.usd
+    target_class: GeometryObject
+    scale: [0.01, 0.01, 0.01]
+    translation:  [0.37, -8.66, 0.0]
+    euler: [0.0, 0.0, 0.0]
+    apply_randomization: True
+  

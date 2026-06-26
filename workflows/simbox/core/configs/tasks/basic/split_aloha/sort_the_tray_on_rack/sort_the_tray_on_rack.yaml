@@ -1,0 +1,200 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+    # arena_file: workflows/simbox/core/configs/arenas/scene_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    neglect_collision_names: ["table"]
+
+    robots:
+      -
+        name: "split_aloha"
+        robot_config_file: workflows/simbox/core/configs/robots/split_aloha.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        right_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        left_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        right_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+
+    objects:
+      -
+        name: arcode_plate_blue
+        path: basic/sort_the_tray_on_rack/plate/plate_blue/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]
+        scale: [1.0, 1.0, 1.0]
+      -
+        name: arcode_plate_shelf
+        path: basic/sort_the_tray_on_rack/plate_shelf/shelf_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]
+        scale: [1.0, 1.0, 1.0]
+
+    regions:
+    # Order is important!
+      -
+        object: ${tasks.0.robots.0.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.86, -0.765],
+            [0.0, -0.86, -0.765]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: arcode_plate_blue
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.125, -0.20, 0.005],
+            [0.25, -0.10, 0.005]
+          ]
+          yaw_rotation: [0, 0]
+      -
+        object: arcode_plate_shelf
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.25, -0.20, 0.005],
+            [-0.15, -0.10, 0.005]
+          ]
+          yaw_rotation: [0, 0]
+
+    cameras:
+      -
+        name: split_aloha_hand_left
+        translation: [0.0, 0.08, 0.05]
+        orientation: [0.0, 0.0, 0.965, 0.259]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: split_aloha_hand_right
+        translation: [0.0, 0.08, 0.04]
+        orientation: [0.0, 0.0, 0.972, 0.233]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: split_aloha_head
+        translation: [0.0, -0.00818, 0.1]
+        orientation: [0.658, 0.259, -0.282, -0.648]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+
+    data:
+      task_dir: "sort_the_tray_on_rack"
+      language_instruction: "Pick the plate, make the handover and place it on the water cooling holder."
+      detailed_language_instruction: "Pick the plate with the right arm, make the handover to the left arm, and then place it on the water cooling holder."
+      collect_info: ""
+      version: "v2.0, head camerea 1280x720, wrist 640x480"
+      update: True
+      max_episode_length: 1300
+
+    skills:
+      -
+        split_aloha:
+          -
+            right:
+              -
+                name: pick
+                objects: [arcode_plate_blue]
+                filter_x_dir: ["upward", 90, 45]
+                filter_y_dir: ["forward", 40]
+                filter_z_dir: ["downward", 110, 140]          # pre_grasp_offset: 0.05
+                t_eps: 0.01
+                o_eps: 1
+                gripper_change_steps: 10
+                post_grasp_offset_min: 0.1
+                post_grasp_offset_max: 0.1
+                direction_to_obj: right
+              -
+                name: goto__pose
+                frame: robot
+                gripper_state: -1 # Close
+                position: [0.3, 0.13, 0.15]
+                quaternion: [-0.15, -0.37, -0.84, -0.36]
+                interp_nums: 1
+                max_noise_m: 0
+                max_noise_deg: 0
+          -
+            left:
+              -
+                name: pick
+                objects: [arcode_plate_blue]
+                filter_y_dir: ["upward", 40]
+                filter_z_dir: ["forward", 90, 45]
+                gripper_change_steps: 10
+                t_eps: 0.01
+                o_eps: 1
+                post_grasp_offset_min: 0.0
+                post_grasp_offset_max: 0.0
+                direction_to_obj: left
+          -
+            left:
+              -
+                name: gripper__action
+                gripper_state: -1 # Close
+            right:
+              -
+                name: gripper__action
+                gripper_state: 1 # Open
+          -
+            right:
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+          -
+            left:
+              -
+                name: place
+                place_direction: vertical
+                objects: [arcode_plate_blue, arcode_plate_shelf]
+                filter_y_dir: ["upward", 60, 0]
+                filter_z_dir: ["forward", 90, 30]
+                position_constraint: object
+                x_ratio_range: [0.5, 0.5]
+                y_ratio_range: [0.8, 0.8]
+                align_pick_obj_axis: [0, 1, 0]
+                align_place_obj_axis: [0, 0, 1]
+                align_obj_tol: 10
+                pre_place_z_offset: 0.15
+                place_z_offset: 0.01

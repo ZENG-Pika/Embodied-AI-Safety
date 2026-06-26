@@ -1,0 +1,72 @@
+name: sweep_arena
+fixtures:
+  -
+    name: table
+    path: table0/instance.usd
+    target_class: GeometryObject
+    translation: [0.0, 0.0, 0.375]
+    # euler: [0.0, 0.0, 0.0]
+    # quaternion: [1.0, 0.0, 0.0, 0.0]
+    scale: [0.0005, 0.001053, 0.001056]
+    # scale: [0.001, 0.001053, 0.001056]
+    texture:
+      texture_lib: "table_textures"
+      apply_randomization: True
+      texture_id: 0
+      texture_scale: [0.001, 0.001]
+  -
+    name: floor
+    target_class: PlaneObject
+    size: [5.0, 5.0]
+    translation: [0, 0, 0]
+    texture:
+      texture_lib: "floor_textures"
+      apply_randomization: True
+      texture_id: 1
+      texture_scale: [1.0, 1.0]
+  -
+    name: background0
+    target_class: PlaneObject
+    size: [3.0, 5.0]
+    translation: [-2, 0, 1]
+    euler: [0.0, 90.0, 0.0]
+    texture:
+      texture_lib: "background_textures"
+      apply_randomization: True
+      texture_id: 1
+      texture_scale: [1.0, 1.0]
+  -
+    name: background1
+    target_class: PlaneObject
+    size: [3.0, 5.0]
+    translation: [2, 0, 1]
+    euler: [0.0, 90.0, 0.0]
+    texture:
+      texture_lib: "background_textures"
+      apply_randomization: True
+      texture_id: 1
+      texture_scale: [1.0, 1.0]
+  -
+    name: background2
+    target_class: PlaneObject
+    size: [5.0, 3.0]
+    translation: [0, -2, 1]
+    euler: [90.0, 0.0, 0.0]
+    texture:
+      texture_lib: "background_textures"
+      apply_randomization: True
+      texture_id: 1
+      texture_scale: [1.0, 1.0]
+  -
+    name: background3
+    target_class: PlaneObject
+    size: [5.0, 3.0]
+    translation: [0, 2, 1]
+    euler: [90.0, 0.0, 0.0]
+    texture:
+      texture_lib: "background_textures"
+      apply_randomization: True
+      texture_id: 1
+      texture_scale: [1.0, 1.0]
+
+# affordance region should be defined here

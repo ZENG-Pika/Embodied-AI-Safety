@@ -1,0 +1,132 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+    # arena_file: workflows/simbox/core/configs/arenas/scene_arena.yaml
+
+    neglect_collision_names: ["table"]
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "franka"
+        robot_config_file: workflows/simbox/core/configs/robots/fr3.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.0, -0.143, 0.0, -2.435, 0.0,  2.235, 0.789]
+        left_joint_home_std: [0.0157, 0.0263, 0.0209, 0.0247, 0.0187, 0.0243, 0.0281]
+        # constrain_grasp_approach: True
+
+    objects:
+      -
+        name: pick_object_left
+        path: pick_and_place/pre-train-pick/assets/omniobject3d-battery/omniobject3d-battery_001/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: "omniobject3d-battery"
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: "suggested"
+
+    regions:
+      -
+        object: pick_object_left
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.3, -0.15, 0.0],
+            [0.3, 0.15, 0.0]
+          ]
+          yaw_rotation: [-180.0, 180.0]
+      -
+        object: ${tasks.0.robots.0.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.495, 0.0],
+            [0.0, -0.445, 0.05]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    distractors:
+      path: pick_and_place/pre-train-pick/assets
+      min_num: 5
+      max_num: 10
+      scale: [0.001, 0.001, 0.001]
+      target: table
+      pos_range: [
+        [-0.6, -0.35],
+        [0.60, 0.35]
+      ]
+      min_object_distance: 0.03
+      exclude_keywords: ["shoe", "book", "hair_dryer", "box", "cube", "whistle", "discarded", "ball"]
+
+
+    cameras:
+      -
+        name: ${tasks.0.robots.0.name}_hand
+        translation: [0.085, 0.0, -0.02]
+        orientation: [0.153, 0.690, 0.690, 0.153]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d435i.yaml
+        parent: "${tasks.0.robots.0.name}/fr3/panda_hand"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: ${tasks.0.robots.0.name}_head
+        translation: [0.0, 0.65, 1.24]
+        orientation: [0.000, 0.000, -0.466, -0.885]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: ""  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.06
+        max_orientation_noise: 10.0
+
+    data:
+      task_dir: "single_pick/omniobject3d-battery"
+      language_instruction: "Pick up the ${tasks.0.objects.0.name}."
+      detailed_language_instruction: "Pick up the ${tasks.0.objects.0.name} and lift."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 500
+
+    skills:
+      -
+        franka:
+          -
+            left:
+              -
+                name: pick
+                objects: [pick_object_left]
+                filter_x_dir: ["forward", 90]
+                filter_z_dir: ["downward", 140]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                t_eps: 0.01
+                o_eps: 1
+                process_valid: True
+                lift_th: 0.02
+                post_grasp_offset_min: 0.05
+                post_grasp_offset_max: 0.20
+                test_mode: ik

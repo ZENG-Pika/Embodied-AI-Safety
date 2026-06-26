@@ -1,0 +1,257 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_clean_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [5000, 5500]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "lift2"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+        # left_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        # right_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        # left_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        # right_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        constrain_grasp_approach: True
+
+    objects:
+      -
+        name: liquors
+        path: basic/pour/wuliangye/wuliangye_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: liquors
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, -90.0]  # stable init pose
+        scale: [0.01, 0.01, 0.01]
+        apply_randomization: False
+
+      -
+        name: liquors_glass
+        path: basic/pour/liquors_glass/liquors_glass_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: liquors_glass
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [0.7, 0.7, 0.7]
+        apply_randomization: False
+
+    regions:
+      -
+        object: liquors
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.22, -0.08, 0.0],
+            [0.30, 0.00, 0.0]
+          ]
+          yaw_rotation: [0, 0]
+
+      -
+        object: liquors_glass
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.13, -0.05, 0.0],
+            [-0.05, 0.03, 0.0]
+          ]
+          yaw_rotation: [0, 0]
+
+      -
+        object: lift2
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.64, -0.75],
+            [0.0, -0.64, -0.75]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    fluid:
+      container_name: liquors
+      color: [1, 1, 1]
+      emissiveColor: [0.0, 0.0, 0.0]
+      opacity: 0.05
+      particleContactOffset: 0.003 # 0.005
+      numParticlesX: 12 # 12
+      numParticlesY: 12 # 12
+      numParticlesZ: 25 # 25
+      center_z: True
+      spacing_scale: 1
+      # z_offset: 0.01
+      max_velocity: 0.8
+
+    cameras:
+      -
+        name: lift2_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fl/link6"
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: lift2_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fr/link6"
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: lift2_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "lift2/lift2/lift2/h_link6"
+        apply_randomization: True
+        max_translation_noise: 0.06
+        max_orientation_noise: 10.0
+
+
+    data:
+      task_dir: "pour_Baijiu"
+      language_instruction: "Pour the liquors from the bottle into the glass."
+      detailed_language_instruction: "Grasp and lift the bottle with the right lift2 arm, and move it above the glass. Tilt the bottle slowly with the right lift2 arm until liquors begins to flow into the glass. Maintain the tilt until the desired amount of liquors is transferred. Return the bottle to an upright position and place it back on the table."
+      collect_info: "right"
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 1200
+
+    skills:
+      -
+        lift2:
+          -
+            right:
+              -
+                name: manualpick
+                objects: [liquors]
+                filter_z_dir: ["upward", 60] #60
+                filter_x_dir: ["forward", 30] #60
+                pre_grasp_offset: 0.0
+                post_grasp_offset_min: 0.0
+                post_grasp_offset_max: 0.0 # 0.008
+                test_mode: ik
+                update_pose_cost_metric_none: True
+                grasp_scale: 0.01
+                adjust_ori: ['z', 'z', 'max'] # pose_axis, base_axis, flag
+                adjust_rotate_axis: 'x'
+                adjust_angle_list_cfg: [-30,30,21]
+                manual_adjust_ori: [
+                  ['y', -15],
+                  ['z', -15],
+                ]
+                adjust_trans_offset: [0., 0.03, 0.10]
+              -
+                name: move
+                objects: [liquors, liquors]
+                success_threshold: 5e-3
+                delta_trans: [[0.0, 0.0, 0.13]]
+                ignore_substring: ["liquors", "visual", "liquors_glass"]
+              -
+                name: joint__ctrl
+                objects: [liquors]
+                gripper_state: -1.0 # Close the gripper
+                num_steps: 30
+                ctrl_list: [
+                  [0, 12, delta],
+                ]
+                success_threshold_js: 5e-3
+              -
+                name: approach__rotate
+                objects: [liquors, liquors_glass]
+                success_threshold: 5e-3
+                ignore_substring: ["liquors", "visual", "liquors_glass"]
+                hold_vec_weight: [0,0,0,0,0,0]
+                rotate:
+                  type: random
+                  objects: [liquors, liquors_glass]
+                  rotate_obj_euler: [
+                    [0, 0, -60],
+                    [0, 0, -90],
+                  ] # desired orientation of obj_1
+                  success_threshold: 0.05
+                obj_yaw_offset: -90 # adjust yaw of obj_1 so that its x-axis aligns with obj_2
+                distance: 0.16 # distance of obj_1 relative to obj_2 (along negative x-axis of obj_1)
+              -
+                name: rotate__obj
+                objects: [liquors]
+                rotate_obj_euler_delta: [
+                  [120, 0, 0], # -20
+                  [120, 0, 0]
+                ] # XYZ
+                obj_axis_offset: [
+                  ["z", 0.04],
+                  ]
+                success_threshold_move: 5e-3
+                success_threshold_rotate: 0.16
+                ignore_substring: ["liquors", "visual","liquors_glass"]
+              -
+                name: wait
+                objects: [liquors]
+                wait_steps: 10
+                success_threshold: 5e-3
+                ignore_substring: ["liquors", "visual","liquors_glass"]
+
+# ##################### move back ###########################
+              -
+                name: rotate__obj
+                objects: [liquors]
+                rotate_obj_euler_delta: [
+                  [-120, 0, 0], # -20
+                  [-120, 0, 0]
+                ] # XYZ
+                success_threshold_move: 5e-3
+                success_threshold_rotate: 0.15
+                ignore_substring: ["liquors", "visual","liquors_glass"]
+              -
+                name: joint__ctrl
+                objects: [liquors]
+                gripper_state: -1.0 # Close the gripper
+                num_steps: 80
+                ctrl_list: [
+                  [0, 1.83, abs],
+                  [1, 124, abs],
+                  [2, 64.8, abs],
+                  [3, 48.4, abs],
+                  [4, -5.8, abs],
+                  [5, 1.1, abs],
+                ]
+                success_threshold_js: 5e-3
+              -
+                name: pour__water__succ
+                gripper_state: -1.0 # Cpen the gripper
+                container_name: liquors_glass
+                particle_num_th_min: 150
+                particle_num_th_max: 4000
+                container_radius: 0.02
+                container_up: [
+                  ['liquors_glass', 'z', 0.98],
+                  ['liquors', 'z', 0.98]
+                ]

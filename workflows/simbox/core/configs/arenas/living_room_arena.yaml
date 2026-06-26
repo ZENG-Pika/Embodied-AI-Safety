@@ -1,0 +1,22 @@
+name: scene_arena
+involved_scenes: living_room_scene_info
+update_freq: 5000
+fixtures:
+  # 001
+  -
+    name: table
+    path: home_scenes/tables/living_room/model_fd09d648b984fab892c78c317bf0934c_0.usd
+    target_class: GeometryObject
+    translation: [0, 0, 0.22]
+    scale: [0.01, 0.01, 0.01]
+    euler: [0.0, 0.0, 0.0]
+    apply_randomization: True
+  -
+    name: scene
+    path: home_scenes/rooms/living_room/MV7J6NIKTKJZ2AABAAAAADA8_usd_living_room_0.usd
+    target_class: GeometryObject
+    scale: [0.01, 0.01, 0.01]
+    translation: [2.79, -7.34, 0.0]
+    euler: [0.0, 0.0, 0.0]
+    apply_randomization: True
+  

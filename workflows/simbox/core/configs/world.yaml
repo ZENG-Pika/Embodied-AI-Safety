@@ -1,0 +1,4 @@
+world:
+  physics_dt: 1/30
+  rendering_dt: 1/30
+  stage_units_in_meters: 1.0

@@ -1,0 +1,1037 @@
+101
+-
+  name: table
+  path: home_scenes/tables/living_room/model_fd09d648b984fab892c78c317bf0934c_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.22]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MV7J6NIKTKJZ2AABAAAAADA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.79, -7.34, 0]
+  euler: [0.0, 0.0, 90.0]
+102
+-
+  name: table
+  path: home_scenes/tables/living_room/model_3612fb3964fa918641e31ce5e26985c9_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.235]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MV7J6NIKTKJZ2AABAAAAADI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [4.03, 8.64, 0]
+  euler: [0.0, 0.0, -90.0]
+103
+-
+  name: table
+  path: home_scenes/tables/living_room/model_fd09d648b984fab892c78c317bf0934c_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.22]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MV7J6NIKTKJZ2AABAAAAADQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-1.27, 0.74, 0]
+  euler: [0.0, 0.0, -90.0]
+104
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MV7J6NIKTKJZ2AABAAAAADY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-14.62, 1.54, 0]
+  euler: [0.0, 0.0, 180.0]
+105
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MV7J6NIKTKJZ2AABAAAAAEA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.61, -2.17, 0]
+  euler: [0.0, 0.0, -90.0]
+106
+-
+  name: table
+  path: home_scenes/tables/living_room/model_fd09d648b984fab892c78c317bf0934c_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.22]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MV7J6NIKTKJZ2AABAAAAAEI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-3.16, -3.28, 0]
+  euler: [0.0, 0.0, 90.0]
+107
+-
+  name: table
+  path: home_scenes/tables/living_room/model_3612fb3964fa918641e31ce5e26985c9_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.235]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAAAA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.06, 3.87, 0]
+  euler: [0.0, 0.0, -90.0]
+108
+-
+  name: table
+  path: home_scenes/tables/living_room/model_fd09d648b984fab892c78c317bf0934c_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.22]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAAAI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.76, 2.73, 0]
+  euler: [0.0, 0.0, 90.0]
+109
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAAAQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.13, -0.99, 0]
+  euler: [0.0, 0.0, -90.0]
+110
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAAAY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [3.7, -2.79, 0]
+  euler: [0.0, 0.0, 0.0]
+111
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAABA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.62, 1.77, 0]
+  euler: [0.0, 0.0, -90.0]
+112
+-
+  name: table
+  path: home_scenes/tables/living_room/model_72a690750d31ca4e10c651243ddc9022_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.174]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAABI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [3.88, 3.49, 0]
+  euler: [0.0, 0.0, 90.0]
+113
+-
+  name: table
+  path: home_scenes/tables/living_room/model_72a690750d31ca4e10c651243ddc9022_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.174]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAABQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.7, 0.4, 0]
+  euler: [0.0, 0.0, 90.0]
+114
+-
+  name: table
+  path: home_scenes/tables/living_room/model_638809136a3aed4ed81d9d8a63967d30_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.135]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAABY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.91, 2.21, 0]
+  euler: [0.0, 0.0, 90.0]
+115
+-
+  name: table
+  path: home_scenes/tables/living_room/model_638809136a3aed4ed81d9d8a63967d30_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.135]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAACA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [3.72, 0.39, 0]
+  euler: [0.0, 0.0, -90.0]
+116
+-
+  name: table
+  path: home_scenes/tables/living_room/model_fd09d648b984fab892c78c317bf0934c_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.22]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAACI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-1.44, -2.04, 0]
+  euler: [0.0, 0.0, 90.0]
+117
+-
+  name: table
+  path: home_scenes/tables/living_room/model_63d4f9d82222f3503b61fb50df2941a6_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.154]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAACQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.81, -0.9, 0]
+  euler: [0.0, 0.0, -90.0]
+118
+-
+  name: table
+  path: home_scenes/tables/living_room/model_350758cf2c427364e1d8210d3691b962_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.274]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAACY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-1.61, -2.33, 0]
+  euler: [0.0, 0.0, 90.0]
+119
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAADA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-4.19, 1.38, 0]
+  euler: [0.0, 0.0, 0.0]
+120
+-
+  name: table
+  path: home_scenes/tables/living_room/model_fd09d648b984fab892c78c317bf0934c_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.22]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAADI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-0.3, -3.51, 0]
+  euler: [0.0, 0.0, 90.0]
+121
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAADQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [3.93, 1.2, 0]
+  euler: [0.0, 0.0, -90.0]
+122
+-
+  name: table
+  path: home_scenes/tables/living_room/model_a85b5da55ef38046c5db2e63096775d4_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.22]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAADY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.28, 0.18, 0]
+  euler: [0.0, 0.0, 0.0]
+123
+-
+  name: table
+  path: home_scenes/tables/living_room/model_a85b5da55ef38046c5db2e63096775d4_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.22]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAAEA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.23, -0.07, 0]
+  euler: [0.0, 0.0, -90.0]
+124
+-
+  name: table
+  path: home_scenes/tables/living_room/model_8761e593be7cb84b59bcf30ddb6e0746_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.193]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUCSQAKTKJ5EAABAAAAAEI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-3.83, 2.14, 0]
+  euler: [0.0, 0.0, -90.0]
+125
+-
+  name: table
+  path: home_scenes/tables/living_room/model_63d4f9d82222f3503b61fb50df2941a6_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.154]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHL5YKTKJ5EAABAAAAAAA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-3.29, -0.2, 0]
+  euler: [0.0, 0.0, 180.0]
+126
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHL5YKTKJ5EAABAAAAAAI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.39, -1.78, 0]
+  euler: [0.0, 0.0, 90.0]
+127
+-
+  name: table
+  path: home_scenes/tables/living_room/model_ca73927300d6ba342beab019ce834d52_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.192]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHL5YKTKJ5EAABAAAAAAQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.67, -2.51, 0]
+  euler: [0.0, 0.0, -90.0]
+128
+-
+  name: table
+  path: home_scenes/tables/living_room/model_180c7981d5db08884896885e1c0061ed_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.15]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAAAA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-4.19, 0.73, 0]
+  euler: [0.0, 0.0, 0.0]
+129
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAAAI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-0.97, 2.19, 0]
+  euler: [0.0, 0.0, 90.0]
+130
+-
+  name: table
+  path: home_scenes/tables/living_room/model_6e92010730df95e5c5185aac1de812f1_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.205]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAAAQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.16, 3.79, 0]
+  euler: [0.0, 0.0, -90.0]
+131
+-
+  name: table
+  path: home_scenes/tables/living_room/model_3c86f4ef04d244c3a2dff3d5f43cbe94_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.131]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAAAY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-4.59, 2.04, 0]
+  euler: [0.0, 0.0, 0.0]
+132
+-
+  name: table
+  path: home_scenes/tables/living_room/model_422ee8bb0ad31afde016a249545c1198_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.233]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAABA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.45, -2.14, 0]
+  euler: [0.0, 0.0, 0.0]
+133
+-
+  name: table
+  path: home_scenes/tables/living_room/model_b895084d1270f4ccedd16799972afd20_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.209]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAABI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.4, 0.79, 0]
+  euler: [0.0, 0.0, -90.0]
+134
+-
+  name: table
+  path: home_scenes/tables/living_room/model_b895084d1270f4ccedd16799972afd20_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.209]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAABQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.9, -2.26, 0]
+  euler: [0.0, 0.0, -90.0]
+135
+-
+  name: table
+  path: home_scenes/tables/living_room/model_422ee8bb0ad31afde016a249545c1198_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.233]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAABY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.56, 2.38, 0]
+  euler: [0.0, 0.0, -90.0]
+136
+-
+  name: table
+  path: home_scenes/tables/living_room/model_422ee8bb0ad31afde016a249545c1198_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.233]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAACA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [0.57, 2.08, 0]
+  euler: [0.0, 0.0, -90.0]
+137
+-
+  name: table
+  path: home_scenes/tables/living_room/model_3f3a5faaf337c972bf09d9368813477c_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.225]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAACI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-3.29, -0.2, 0]
+  euler: [0.0, 0.0, 180.0]
+138
+-
+  name: table
+  path: home_scenes/tables/living_room/model_4e281d4f39ee94a4f42a8f86a5ac45a9_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAACQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-4.53, 2.41, 0]
+  euler: [0.0, 0.0, 90.0]
+139
+-
+  name: table
+  path: home_scenes/tables/living_room/model_fe44f1b2047de3acbbf41351851129f7_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.196]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAACY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.61, 2.04, 0]
+  euler: [0.0, 0.0, 180.0]
+140
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAADA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-4.1, 0.7, 0]
+  euler: [0.0, 0.0, 0.0]
+141
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAADI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-5.59, 0.05, 0]
+  euler: [0.0, 0.0, 0.0]
+142
+-
+  name: table
+  path: home_scenes/tables/living_room/model_fe44f1b2047de3acbbf41351851129f7_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.196]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAADQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-5.23, -0.82, 0]
+  euler: [0.0, 0.0, 0.0]
+143
+-
+  name: table
+  path: home_scenes/tables/living_room/model_fe44f1b2047de3acbbf41351851129f7_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.196]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAADY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.31, 4.58, 0]
+  euler: [0.0, 0.0, 0.0]
+144
+-
+  name: table
+  path: home_scenes/tables/living_room/model_146fcbde59c1c91d16d9ab68c13229fa_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.157]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAAEA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-7.07, -1.44, 0]
+  euler: [0.0, 0.0, 180.0]
+145
+-
+  name: table
+  path: home_scenes/tables/living_room/model_146fcbde59c1c91d16d9ab68c13229fa_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.157]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MVUHLWYKTKJ5EAABAAAAAEI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.48, -0.98, 0]
+  euler: [0.0, 0.0, 0.0]
+146
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAAAA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-8.9, 4.92, 0]
+  euler: [0.0, 0.0, 90.0]
+147
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAAAI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.13, -0.31, 0]
+  euler: [0.0, 0.0, 90.0]
+148
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAAAQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.66, -1.12, 0]
+  euler: [0.0, 0.0, -90.0]
+149
+-
+  name: table
+  path: home_scenes/tables/living_room/model_27e97d78b9839f8df162c6da8155bc10_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.23]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAAAY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.41, 1.38, 0]
+  euler: [0.0, 0.0, -90.0]
+150
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAABA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [4.01, 0.33, 0]
+  euler: [0.0, 0.0, -90.0]
+151
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAABI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2, -0.85, 0]
+  euler: [0.0, 0.0, -90.0]
+152
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAABQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-1.99, -1.84, 0]
+  euler: [0.0, 0.0, -90.0]
+153
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAABY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.64, -3.27, 0]
+  euler: [0.0, 0.0, -90.0]
+154
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAACA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.21, 3.26, 0]
+  euler: [0.0, 0.0, -90.0]
+155
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAADA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-1.93, 0.75, 0]
+  euler: [0.0, 0.0, 90.0]
+156
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAADI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.53, -0.67, 0]
+  euler: [0.0, 0.0, -90.0]
+157
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAADQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.76, 3.93, 0]
+  euler: [0.0, 0.0, 0.0]
+158
+-
+  name: table
+  path: home_scenes/tables/living_room/model_146fcbde59c1c91d16d9ab68c13229fa_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.157]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAADY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.95, -5.38, 0]
+  euler: [0.0, 0.0, -90.0]
+159
+-
+  name: table
+  path: home_scenes/tables/living_room/model_146fcbde59c1c91d16d9ab68c13229fa_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.157]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAAEA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.35, -0.61, 0]
+  euler: [0.0, 0.0, 0.0]
+160
+-
+  name: table
+  path: home_scenes/tables/living_room/model_180c7981d5db08884896885e1c0061ed_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.15]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWAX5JYKTKJZ2AABAAAAAEI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.51, -2.88, 0]
+  euler: [0.0, 0.0, -90.0]
+161
+-
+  name: table
+  path: home_scenes/tables/living_room/model_180c7981d5db08884896885e1c0061ed_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.15]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWBGLKQKTKJZ2AABAAAAAAA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [4.24, 0.74, 0]
+  euler: [0.0, 0.0, -90.0]
+162
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWBGLKQKTKJZ2AABAAAAAAI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-2.47, 0.42, 0]
+  euler: [0.0, 0.0, 0.0]
+163
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWBGLKQKTKJZ2AABAAAAAAQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [1.69, -4.03, 0]
+  euler: [0.0, 0.0, 90.0]
+164
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWBGLKQKTKJZ2AABAAAAAAY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-1.45, 4.13, 0]
+  euler: [0.0, 0.0, 0.0]
+165
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWBGLKQKTKJZ2AABAAAAABA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-4.25, 0.28, 0]
+  euler: [0.0, 0.0, 0.0]
+166
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWBGLKQKTKJZ2AABAAAAABI8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [0.98, -1.08, 0]
+  euler: [0.0, 0.0, 0.0]
+167
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWBGLKQKTKJZ2AABAAAAABQ8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [2.62, 0.5, 0]
+  euler: [0.0, 0.0, 180.0]
+168
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWBGLKQKTKJZ2AABAAAAABY8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [-1.39, -0.43, 0]
+  euler: [0.0, 0.0, 0.0]
+169
+-
+  name: table
+  path: home_scenes/tables/living_room/model_9938e4a048e8362cb22105425b506d4a_0.usd
+  target_class: GeometryObject
+  translation: [0, 0, 0.188]
+  scale: [0.01, 0.01, 0.01]
+  euler: [0.0, 0.0, 0.0]
+-
+  name: scene
+  path: home_scenes/rooms/living_room/MWBGLKQKTKJZ2AABAAAAACA8_usd_living_room_0.usd
+  target_class: GeometryObject
+  scale: [0.01, 0.01, 0.01]
+  translation: [5.25, -1.13, 0]
+  euler: [0.0, 0.0, -90.0]
+
+################################### living_room  ####################################

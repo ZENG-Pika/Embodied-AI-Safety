@@ -1,0 +1,301 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/collaborate_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "split_aloha"
+        robot_config_file: workflows/simbox/core/configs/robots/split_aloha.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        right_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        left_gripper_home: [0.0]
+        right_gripper_home: [0.0]
+        ignore_substring: ["material", "table", "plate", "beef", "lettuce", "bread"]
+      -
+        name: "lift2"
+        euler: [0.0, 0.0, 270.0]
+        left_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        right_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        left_gripper_home: [0.0]
+        right_gripper_home: [0.0]
+        ignore_substring: ["material", "table", "plate", "beef", "lettuce", "bread"]
+
+    objects:
+      -
+        name: arcode_plate
+        path: long_horizon/collaborate_assemble_a_sandwich/plate/plate_0/Aligned_obj.usd
+        target_class: GeometryObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 0.0]
+        scale: [1.2, 1.2, 1.2]
+        apply_randomization: True
+      -
+        name: arcode_bottom_bread
+        path: long_horizon/collaborate_assemble_a_sandwich/bottom_bread/bread_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]
+        scale: [1.0, 1.0, 1.0]
+        init_translation: [-0.034, -0.05, 0.0]
+        init_orientation: [0.707, 0.0, 0.0, 0.707]
+        init_parent: ${tasks.0.robots.1.name}/lift2/lift2/fl/link7
+        apply_randomization: True
+      -
+        name: arcode_top_bread
+        path: long_horizon/collaborate_assemble_a_sandwich/top_bread/bread_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]
+        scale: [1.0, 1.0, 1.0]
+        init_translation: [-0.0, 0.01, 0.0]
+        init_orientation: [0.707, 0.0, 0.0, 0.707]
+        init_parent: "${tasks.0.robots.0.name}/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link8"
+        apply_randomization: True
+      -
+        name: arcode_lettuce
+        path: long_horizon/collaborate_assemble_a_sandwich/lettuce/lettuce_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]
+        scale: [0.8, 0.8, 0.8]
+        init_translation: [-0.044, -0.04, 0.0]
+        init_orientation: [0.707, 0.0, 0.0, 0.707]
+        init_parent: ${tasks.0.robots.1.name}/lift2/lift2/fr/link7
+        apply_randomization: True
+      -
+        name: arcode_beef
+        path: long_horizon/collaborate_assemble_a_sandwich/beef/beef_0/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: arcode
+        category: plate
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 90.0]
+        scale: [1.0, 1.0, 1.0]
+        init_translation: [-0.0, 0.0, 0.0]
+        init_orientation: [0.707, 0.0, 0.0, 0.707]
+        init_parent: "${tasks.0.robots.0.name}/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link8"
+        apply_randomization: True
+
+    regions:
+    # Order is important!
+      -
+        object: ${tasks.0.robots.0.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.84, -0.74],
+            [0.0, -0.84, -0.74]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: ${tasks.0.robots.1.name}
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, 0.65, -0.70],
+            [0.0, 0.75, -0.70]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: arcode_plate
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.04, -0.025, 0.0],
+            [0.04, 0.025, 0.0]
+          ]
+          yaw_rotation: [-30, 30]
+
+    cameras:
+      -
+        name: ${tasks.0.robots.0.name}_hand_left
+        translation: [0.0, 0.08, 0.05]
+        orientation: [0.0, 0.0, 0.965, 0.259]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "${tasks.0.robots.0.name}/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: ${tasks.0.robots.0.name}_hand_right
+        translation: [0.0, 0.08, 0.04]
+        orientation: [0.0, 0.0, 0.972, 0.233]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "${tasks.0.robots.0.name}/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: ${tasks.0.robots.0.name}_head
+        translation: [0.0, -0.00818, 0.1]
+        orientation: [0.658, 0.259, -0.282, -0.648]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "${tasks.0.robots.0.name}/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: ${tasks.0.robots.1.name}_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "${tasks.0.robots.1.name}/lift2/lift2/fl/link6"
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: ${tasks.0.robots.1.name}_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "${tasks.0.robots.1.name}/lift2/lift2/fr/link6"
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: ${tasks.0.robots.1.name}_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "${tasks.0.robots.1.name}/lift2/lift2/h_link6"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+
+    data:
+      task_dir: "collaborate_assemble_a_sandwich_mix"
+      language_instruction: "Hold a piece of steak and bread, then coordinate with the second robot to assemble a beef sandwic.h;Grasp a lettuce leaf and bread, then coordinate with the second robot to assemble a beef sandwich."
+      detailed_language_instruction: "Pick up a steak and a slice of bread, then synchronize with the second robot to construct a beef sandwich.;Grasp lettuce and a slice of bread, then synchronize with the second robot to assemble a beef sandwich."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 4000
+
+    skills:
+      -
+        lift2:
+          -
+            left:
+              -
+                name: place
+                objects: [arcode_bottom_bread, arcode_plate]
+                place_direction: vertical
+                filter_z_dir: ["forward", 10]
+                filter_y_dir: ["downward", 120, 150]
+                filter_x_dir: ["downward", 120, 150]
+                position_constraint: object
+                x_ratio_range: [0.45, 0.5]
+                y_ratio_range: [0.5, 0.5]
+                pre_place_z_offset: 0.125
+                place_z_offset: 0.075
+                post_place_vector: [-0.05, 0.0, 0.0]
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+      -
+        split_aloha:
+          -
+            left:
+              -
+                name: place
+                objects: [arcode_beef, arcode_bottom_bread]
+                place_direction: vertical
+                filter_y_dir: ["forward", 10]
+                filter_x_dir: ["downward", 130, 160]
+                filter_z_dir: ["downward", 110, 140]
+                position_constraint: object
+                x_ratio_range: [0.5, 0.5]
+                y_ratio_range: [0.5, 0.5]
+                pre_place_z_offset: 0.125
+                place_z_offset: 0.075
+                post_place_vector: [0.0, 0.0, -0.05]
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+      -
+        lift2:
+          -
+            right:
+              -
+                name: place
+                objects: [arcode_lettuce, arcode_beef]
+                place_direction: vertical
+                filter_z_dir: ["forward", 10]
+                filter_y_dir: ["upward", 60, 30]
+                filter_x_dir: ["downward", 120, 150]
+                position_constraint: object
+                x_ratio_range: [0.5, 0.5]
+                y_ratio_range: [0.5, 0.5]
+                pre_place_z_offset: 0.125
+                place_z_offset: 0.075
+                post_place_vector: [-0.05, 0.0, 0.0]
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+      -
+        split_aloha:
+          -
+            right:
+              -
+                name: place
+                objects: [arcode_top_bread, arcode_lettuce]
+                place_direction: vertical
+                filter_y_dir: ["forward", 10]
+                filter_x_dir: ["upward", 60, 30]
+                filter_z_dir: ["downward", 120, 150]
+                position_constraint: object
+                x_ratio_range: [0.5, 0.5]
+                y_ratio_range: [0.5, 0.5]
+                pre_place_z_offset: 0.125
+                place_z_offset: 0.075
+                post_place_vector: [0.0, 0.0, -0.05]
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper

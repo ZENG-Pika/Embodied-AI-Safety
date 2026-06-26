@@ -1,0 +1,102 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    # arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+    arena_file: workflows/simbox/core/configs/arenas/pick_clean_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [5000, 5500]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "franka"
+        robot_config_file: workflows/simbox/core/configs/robots/fr3.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.0, -0.143, 0.0, -2.435, 0.0,  2.235, 0.789]
+        left_joint_home_std: [0.0157, 0.0263, 0.0209, 0.0247, 0.0187, 0.0243, 0.0281]
+        constrain_grasp_approach: True
+
+    objects:
+      []
+
+    regions:
+      -
+        object: franka
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.495, 0.0],
+            [0.0, -0.445, 0.05]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: franka_hand
+        translation: [0.085, 0.0, -0.02]
+        orientation: [0.153, 0.690, 0.690, 0.153]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d435i.yaml
+        parent: "franka/fr3/panda_hand"
+        apply_randomization: True
+        max_translation_noise: 0.03
+        max_orientation_noise: 5.0
+      -
+        name: franka_head
+        translation: [0.0, 0.65, 1.24]
+        orientation: [0.000, 0.000, -0.466, -0.885]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: ""  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.06
+        max_orientation_noise: 10.0
+
+    data:
+      task_dir: "track_the_targets"
+      language_instruction: "Use the grippers to track the targets over the table."
+      detailed_language_instruction: "Move the franka arm to track the target over the table. Keep tracking until the target disappears."
+      collect_info: ""
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 1200
+
+    skills:
+      -
+        franka:
+          -
+            left:
+              -
+                name: track
+                target: target_left
+                ignore_substring: ["visual"]
+                T_tcp_2_ee:
+                  [
+                    [1, 0, 0, 0],
+                    [0, 1, 0, 0],
+                    [0, 0, 1, 0.1],
+                    [0, 0, 0, 1],
+                  ]
+                # Frame orientation is aligned with base; origin is at table center; waypoints control gripper flange pose
+                way_points_num: 3
+                way_points_trans:
+                  # min: [-0.312, -0.106, 0.174]
+                  # max: [-0.042, 0.526, 0.594]
+                  min: [-0.202, -0.376, 0.134]
+                  max: [ 0.302, 0.376, 0.264]
+                way_points_ori:
+                  [0., 1., 0., 0.]
+                max_noise_deg: 180

@@ -1,0 +1,138 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [5000, 5500]
+      rotation_range: [0, 180]
+
+    robots:
+      -
+        name: "lift2"
+        robot_config_file: workflows/simbox/core/configs/robots/lift2.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        right_joint_home: [-0.00059017,  0.00374724,  0.00516233,  0.00025332, -0.00105036, -0.00132419]
+        left_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        right_joint_home_std: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        constrain_grasp_approach: True
+
+    objects:
+      []
+
+    regions:
+      -
+        object: lift2 #lift2
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            # [0.0, -0.82, -0.78],
+            # [0.0, -0.76, -0.73]
+            [0.0, -0.64, -0.75],
+            [0.0, -0.64, -0.75]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: lift2_hand_left
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fl/link6"  # todo
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: lift2_hand_right
+        translation: [0.07, 0.01, 0.08]
+        orientation: [0.62, 0.33, -0.33, -0.62]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d405.yaml
+        parent: "lift2/lift2/lift2/fr/link6"
+        apply_randomization: True
+        max_translation_noise: 0.02
+        max_orientation_noise: 2.5
+      -
+        name: lift2_head
+        translation: [0.1, 0.02, 0.03]
+        orientation: [0.6602, 0.2534, -0.2534, -0.6602]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "lift2/lift2/lift2/h_link6"  # todo: robot base frame
+        apply_randomization: True
+        max_translation_noise: 0.06
+        max_orientation_noise: 10.0
+
+
+    data:
+      task_dir: "track_the_targets"
+      language_instruction: "Use the grippers to track the targets over the table."
+      detailed_language_instruction: "Move the left lift2 arm to track the target on the left part. Move the right lift2 arm to track the target on the right part. Keep tracking until the targets disappear."
+      collect_info: "20260112"
+      version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
+      update: True
+      max_episode_length: 1300
+
+    skills:
+      -
+        lift2:
+          -
+            left:
+              -
+                name: track
+                target: target_left
+                ignore_substring: ["visual"]
+                T_tcp_2_ee:
+                  [
+                    [1, 0, 0, 0.1],
+                    [0, 1, 0, 0],
+                    [0, 0, 1, 0],
+                    [0, 0, 0, 1],
+                  ]
+                # Frame orientation is aligned with base; origin is at table center; waypoints control gripper flange pose
+                way_points_num: 3
+                way_points_trans:
+                  # min: [-0.312, -0.106, 0.174]
+                  # max: [-0.042, 0.526, 0.594]
+                  min: [-0.202, 0.026, 0.134]
+                  max: [ 0.102, 0.276, 0.204]
+                way_points_ori:
+                  [0.70710678, 0.,         0.70710678, 0.        ]
+                max_noise_deg: 180
+            right:
+              -
+                name: track
+                target: target_right
+                ignore_substring: ["visual"]
+                T_tcp_2_ee:
+                  [
+                    [1, 0, 0, 0.1],
+                    [0, 1, 0, 0],
+                    [0, 0, 1, 0],
+                    [0, 0, 0, 1],
+                  ]
+                # Frame orientation is aligned with base; origin is at table center; waypoints control gripper flange pose
+                way_points_num: 3
+                way_points_trans:
+                  # min: [-0.312, -0.726, 0.174]
+                  # max: [-0.042, -0.106, 0.594]
+                  min: [-0.202, -0.276, 0.134]
+                  max: [ 0.102, -0.026, 0.204]
+                way_points_ori:
+                  [0.70710678, 0.,         0.70710678, 0.        ]
+                max_noise_deg: 180

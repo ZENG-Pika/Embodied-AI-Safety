@@ -1,0 +1,247 @@
+tasks:
+  -
+    name: banana_base_task  # task name
+    asset_root: workflows/simbox/assets
+    task: BananaBaseTask  # !! where you specify TASK class
+    task_id: 0
+
+    offset: null
+    render: True
+
+
+    # Arena configuration
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: True
+      intensity_range: [4000, 7000]
+      rotation_range: [0, 180]
+
+    neglect_collision_names: ["table"]
+
+    robots:
+      -
+        name: "split_aloha"
+        robot_config_file: workflows/simbox/core/configs/robots/split_aloha.yaml
+        euler: [0.0, 0.0, 90.0]
+        # left_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        # right_joint_home: [0.00484993, 0.34198609, -0.14007858, 0.01680429, 0.14391101, -0.00252178]
+        # left_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        # right_joint_home_std: [0.12513939, 0.24539099, 0.24468172, 0.23398885, 0.2710117, 0.21726329]
+        # constrain_grasp_approach: True
+
+    objects:
+      -
+        name: pick_object_left
+        path: long_horizon/pack_in_objects/pick_obj/omniobject3d-banana_040/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: random
+        optimize_2d_layout: True
+      -
+        name: pick_object_right
+        path: long_horizon/pack_in_objects/pick_obj/omniobject3d-banana_040/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: random
+        optimize_2d_layout: True
+      -
+        name: pick_object_left2
+        path: long_horizon/pack_in_objects/pick_obj/omniobject3d-banana_040/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: bottle
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]  # stable init pose
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: True
+        orientation_mode: random
+        optimize_2d_layout: True
+      -
+        name: gso_box
+        path: long_horizon/pack_in_objects/box/yellow_box/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: gso
+        category: box
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [90.0, 0.0, 90.0]
+        scale: [1.0, 1.0, 1.0]
+        apply_randomization: False
+
+    regions:
+      -
+        object: pick_object_left
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.4, -0.25, 0.0],
+            [-0.2, 0.00, 0.0]
+          ]
+          yaw_rotation: [-45.0, 15.0]
+      -
+        object: pick_object_right
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.2, -0.25, 0.0],
+            [0.4, 0.0, 0.0]
+          ]
+          yaw_rotation: [-15.0, 45.0]
+      -
+        object: pick_object_left2
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.4, -0.25, 0.0],
+            [-0.2, 0.00, 0.0]
+          ]
+          yaw_rotation: [-45.0, 15.0]
+      -
+        object: gso_box
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [-0.025, -0.15, 0.0],
+            [0.025, 0.0, 0.0]
+          ]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: split_aloha
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [
+            [0.0, -0.78, -0.73],
+            [0.0, -0.78, -0.73]
+          ]
+          yaw_rotation: [0.0, 0.0]
+
+    cameras:
+      -
+        name: split_aloha_hand_left
+        translation: [0.0, 0.08, 0.05]
+        orientation: [0.0, 0.0, 0.965, 0.259]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_hand_right
+        translation: [0.0, 0.08, 0.04]
+        orientation: [0.0, 0.0, 0.972, 0.233]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6"  # todo
+        apply_randomization: False
+      -
+        name: split_aloha_head
+        translation: [0.0, -0.00818, 0.1]
+        orientation: [0.658, 0.259, -0.282, -0.648]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: "split_aloha/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link"  # todo: robot base frame
+
+    data:
+      task_dir: "pack_in_objects_part1"
+      language_instruction: "Put all the objects in the box."
+      detailed_language_instruction: "Put all the objects in the box."
+      collect_info: ""
+      version: "v2.0, head camerea 1280x720, wrist 640x480"
+      update: True
+      max_episode_length: 4000
+
+    skills:
+      -
+        split_aloha:
+          -
+            left:
+              -
+                name: pick
+                objects: [pick_object_left]
+                filter_y_dir: ["forward", 60]
+                filter_z_dir: ["downward", 150]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                post_grasp_offset_min: 0.13
+                post_grasp_offset_max: 0.17
+              -
+                name: place
+                objects: [pick_object_left, gso_box]
+                place_direction: vertical
+                filter_y_dir: ["forward", 60]
+                filter_z_dir: ["downward", 150]
+                x_ratio_range: [0.3, 0.7]
+                y_ratio_range: [0.3, 0.7]
+                pre_place_z_offset: 0.13
+                place_z_offset: 0.13
+                success_mode: xybbox
+              -
+                name: pick
+                objects: [pick_object_left2]
+                filter_y_dir: ["forward", 60]
+                filter_z_dir: ["downward", 150]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                post_grasp_offset_min: 0.13
+                post_grasp_offset_max: 0.17
+              -
+                name: place
+                objects: [pick_object_left2, gso_box]
+                place_direction: vertical
+                filter_y_dir: ["forward", 60]
+                filter_z_dir: ["downward", 150]
+                x_ratio_range: [0.3, 0.7]
+                y_ratio_range: [0.3, 0.7]
+                pre_place_z_offset: 0.13
+                place_z_offset: 0.13
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
+          -
+            right:
+              -
+                name: pick
+                objects: [pick_object_right]
+                filter_y_dir: ["forward", 60]
+                filter_z_dir: ["downward", 150]
+                pre_grasp_offset: 0.05
+                gripper_change_steps: 10
+                post_grasp_offset_min: 0.13
+                post_grasp_offset_max: 0.17
+              -
+                name: place
+                objects: [pick_object_right, gso_box]
+                place_direction: vertical
+                filter_y_dir: ["forward", 60]
+                filter_z_dir: ["downward", 150]
+                x_ratio_range: [0.3, 0.7]
+                y_ratio_range: [0.3, 0.7]
+                pre_place_z_offset: 0.13
+                place_z_offset: 0.13
+                success_mode: xybbox
+              -
+                name: heuristic__skill
+                mode: home
+                gripper_state: 1.0 # Open gripper
