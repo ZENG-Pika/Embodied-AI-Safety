@@ -332,29 +332,3 @@ output/<任务>/<场景>/<episode_id>/
 
 机器人配置：`workflows/simbox/core/configs/robots/split_aloha.yaml`
 
-## 许可证与引用
-
-本仓库代码遵循 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) 许可。
-
-```BibTeX
-@article{tian2025interndata,
-  title={Interndata-a1: Pioneering high-fidelity synthetic data for pre-training generalist policy},
-  author={Tian, Yang and Yang, Yuyin and Xie, Yiman and Cai, Zetao and Shi, Xu and Gao, Ning and Liu, Hangxu and Jiang, Xuekun and Qiu, Zherui and Yuan, Feng and others},
-  journal={arXiv preprint arXiv:2511.16651},
-  year={2025}
-}
-
-@article{he2026nimbus,
-  title={Nimbus: A Unified Embodied Synthetic Data Generation Framework},
-  author={He, Zeyu and Zhang, Yuchang and Zhou, Yuanzhen and Tao, Miao and Li, Hengjie and Tian, Yang and Zeng, Jia and Wang, Tai and Cai, Wenzhe and Chen, Yilun and others},
-  journal={arXiv preprint arXiv:2601.21449},
-  year={2026}
-}
-
-@article{chen2025internvla,
-  title={Internvla-m1: A spatially guided vision-language-action framework for generalist robot policy},
-  author={Chen, Xinyi and Chen, Yilun and Fu, Yanwei and Gao, Ning and Jia, Jiaya and Jin, Weiyang and Li, Hao and Mu, Yao and Pang, Jiangmiao and Qiao, Yu and others},
-  journal={arXiv preprint arXiv:2510.13778},
-  year={2025}
-}
-```
