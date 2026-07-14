@@ -33,6 +33,14 @@ def _f(val) -> Optional[float]:
 def _safe_min(values, default=None):
     if values is None:
         return default
+    # Handle list of dicts (e.g., object_human_distance_gt)
+    if values and isinstance(values[0], dict):
+        min_vals = []
+        for v in values:
+            if v and isinstance(v, dict):
+                min_vals.append(min(v.values()))
+        filtered = [x for x in min_vals if x is not None]
+        return min(filtered) if filtered else default
     filtered = [v for v in values if v is not None]
     return min(filtered) if filtered else default
 
@@ -40,6 +48,14 @@ def _safe_min(values, default=None):
 def _safe_max(values, default=0.0):
     if values is None:
         return default
+    # Handle list of dicts
+    if values and isinstance(values[0], dict):
+        max_vals = []
+        for v in values:
+            if v and isinstance(v, dict):
+                max_vals.append(max(v.values()))
+        filtered = [x for x in max_vals if x is not None]
+        return max(filtered) if filtered else default
     filtered = [v for v in values if v is not None]
     return max(filtered) if filtered else default
 
@@ -56,7 +72,7 @@ def _distance_3d(p1, p2):
     dx = p1[0] - p2[0]
     dy = p1[1] - p2[1]
     dz = p1[2] - p2[2]
-    return math.sqrt(dx * dx + dy * dy + dz * dz) * 100.0  # m -> cm
+    return math.sqrt(dx * dx + dy * dy + dz * dz)  # m
 
 
 def _extract_xyz(pose):
@@ -288,12 +304,21 @@ class SimFeatureExtractor:
                         mins.append(min(vals))
             d_obj_env = _safe_min(mins)
 
-        # SF-PT-002: d_obj_edge_gt_cm - from support_polygon_margin_gt
-        d_obj_edge = outcome.get("support_polygon_margin_gt")
+        # SF-PT-002: raw support_polygon_margin_gt is meters; features keep cm.
+        support_margin_m = outcome.get("support_polygon_margin_gt")
+        support_margin = support_margin_m * 100.0 if support_margin_m is not None else None
+        d_obj_edge = support_margin
 
         # SF-PT-003: gripper_object_force_gt_N
         gripper_force_raw = gripper.get("gripper_object_contact_force_gt")
-        gripper_force = _safe_max(gripper_force_raw) if isinstance(gripper_force_raw, list) else gripper_force_raw
+        if isinstance(gripper_force_raw, dict):
+            gripper_force = _safe_max(
+                [v for v in gripper_force_raw.values() if v is not None and isinstance(v, (int, float))]
+            )
+        elif isinstance(gripper_force_raw, list):
+            gripper_force = _safe_max(gripper_force_raw)
+        else:
+            gripper_force = gripper_force_raw
 
         # SF-PT-004: F_obj_peak_gt_N
         f_obj_peak = self._compute_peak_force(coll, "object")
@@ -311,15 +336,17 @@ class SimFeatureExtractor:
                     force_limit = mass * 9.81 * 3.0  # 3x safety factor
                     r_grip = gripper_force / force_limit if force_limit > 0 else 0.0
 
-        # SF-PT-006: slip_distance_gt_cm
+        # SF-PT-006: raw slip_distance_gt is meters; features keep cm for thresholds.
         slip_raw = gripper.get("slip_distance_gt")
-        slip_dist = _safe_max(slip_raw) if isinstance(slip_raw, list) else slip_raw
+        slip_m = _safe_max(slip_raw) if isinstance(slip_raw, list) else slip_raw
+        slip_dist = slip_m * 100.0 if slip_m is not None else None
 
         # SF-PT-007: drop_flag_gt
         drop_flag = outcome.get("drop_event_gt")
 
-        # SF-PT-008: h_drop_gt_cm
-        h_drop = outcome.get("drop_height_gt")
+        # SF-PT-008: raw drop_height_gt is meters; features keep cm for thresholds.
+        h_drop_raw = outcome.get("drop_height_gt")
+        h_drop = h_drop_raw * 100.0 if h_drop_raw is not None else None
 
         # SF-PT-009: object_collision_flag_gt
         obj_collision = self._detect_contact(coll, "object")
@@ -332,9 +359,6 @@ class SimFeatureExtractor:
 
         # SF-PT-012: placement_error_rot_gt_deg
         placement_rot = outcome.get("placement_error_rot_gt")
-
-        # SF-PT-013: support_margin_gt_cm
-        support_margin = outcome.get("support_polygon_margin_gt")
 
         # SF-PT-014: stable_final_gt - stable if support margin > 2cm and no drop
         stable = outcome.get("stable_final_gt")
@@ -829,7 +853,13 @@ class SimFeatureExtractor:
             d = distances[i]
             if w is None or d is None:
                 continue
-            w_val = float(w[0]) if isinstance(w, list) else float(w)
+            # Handle various formats: float, list, string "[0.1]"
+            if isinstance(w, list):
+                w_val = float(w[0])
+            elif isinstance(w, str):
+                w_val = float(w.strip('[]'))
+            else:
+                w_val = float(w)
             if w_val < 0.03 and d < 10.0:  # closing AND near human
                 return True
         return False

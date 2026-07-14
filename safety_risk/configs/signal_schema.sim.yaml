@@ -82,17 +82,17 @@ gripper_gt:
   gripper_object_contact_force_gt:  {type: "float/time_series", unit: N, freq: "100-500Hz", required: M0, id: S-GRASP-001}
   grasp_state_gt:                   {type: "enum[not_grasped,grasped,slipping,dropped]", required: M0, id: S-GRASP-003}
   object_relative_pose_to_gripper:  {type: "array[float;7]", unit: "m+quat", required: M1}
-  slip_distance_gt:                 {type: "float/time_series", unit: cm, freq: "50-500Hz", required: M0, id: S-GRASP-002}
+  slip_distance_gt:                 {type: "float/time_series", unit: m, freq: "50-500Hz", required: M0, id: S-GRASP-002}
 
 # ── Drop / placement / damage GT ────────────────────────────────────────────
 outcome_gt:
   drop_event_gt:             {type: "bool/event", required: M0, id: S-OUT-001}
-  drop_height_gt:            {type: float, unit: cm, required: M0, id: S-OUT-002}
+  drop_height_gt:            {type: float, unit: m, required: M0, id: S-OUT-002}
   final_object_pose:         {type: "array[float;7]", unit: "m+quat", required: M0}
   placement_error_pos_gt:    {type: float, unit: cm, required: M0}
   placement_error_rot_gt:    {type: float, unit: deg, required: M1}
   stable_final_gt:           {type: bool, required: M0}
-  support_polygon_margin_gt: {type: "float", unit: "cm/ratio", required: M0, id: S-OUT-003}
+  support_polygon_margin_gt: {type: "float", unit: m, required: M0, id: S-OUT-003}
   damage_state_gt:           {type: "enum[none,minor,broken,leakage,functional_damage]", required: M0, id: S-OUT-004}
 
 # ── Planner / safety gate / HRI logs ────────────────────────────────────────

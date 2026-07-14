@@ -110,7 +110,7 @@ def _compute_min_distance_per_step(
         ee = ee_positions[i]
         obs = obstacle_positions[i]
         d_m = _pose_distance_3d(ee, obs)
-        distances.append(d_m * 100.0)  # m -> cm
+        distances.append(d_m)  # m
     return distances
 
 
@@ -385,9 +385,8 @@ class WorkflowSafetyAdapter:
             for obs_name, obs_traj in all_obstacle_trajs.items():
                 if i < len(obs_traj):
                     d_m = _pose_distance_3d(ee_positions[i], obs_traj[i])
-                    d_cm = d_m * 100.0
-                    if d_cm < min_dist_cm:
-                        min_dist_cm = d_cm
+                    if d_m < min_dist_cm:
+                        min_dist_cm = d_m
                         closest_obs = obs_name
 
             ee_human_dists.append(min_dist_cm)

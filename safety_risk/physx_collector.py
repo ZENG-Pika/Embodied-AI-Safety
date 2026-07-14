@@ -38,7 +38,7 @@ class PhysXDataCollector:
         self._data: Dict[str, List] = {
             # S-ROBOT-004: joint torques
             "joint_torque_gt": [],
-            # S-ROBOT-005: link poses (per link, per step)
+            # S-ROBOT-005: all link poses (all links, per step)
             "link_pose_gt": [],
             # S-ROBOT-006: link velocities
             "link_velocity_gt": [],
@@ -77,7 +77,7 @@ class PhysXDataCollector:
         }
         self._link_paths: Dict[str, List[str]] = {}  # robot_name -> [link_paths]
         self._initialized = False
-        self._contact_state: Dict[str, bool] = {}  # track ongoing contacts
+        self._contact_state: Dict[tuple, dict] = {}  # (bodyA, bodyB) -> active contact state
 
         # Safety gate runtime state
         self._stop_triggered = False
@@ -108,10 +108,9 @@ class PhysXDataCollector:
             self._data["joint_torque_gt"].append(None)
 
         try:
-            self._collect_link_data(task)
+            self._collect_all_link_poses(task)
         except Exception as e:
             self._data["link_pose_gt"].append(None)
-            self._data["link_velocity_gt"].append(None)
 
         try:
             self._collect_contact_data(task, step_id)
@@ -403,77 +402,199 @@ class PhysXDataCollector:
 
     # ── Link Poses & Velocities (S-ROBOT-005, S-ROBOT-006) ─────────────────
 
-    def _collect_link_data(self, task) -> None:
-        """Collect link poses and velocities from all robots.
+    def _collect_all_link_poses(self, task) -> None:
+        """Collect world-frame poses and velocities for ALL robot links.
 
-        Uses robot.get_world_pose() for base link and the articulation's
-        joint states to compute EE link poses. For split_aloha, this gives
-        left/right arm EE poses per step.
+        Discovers links by traversing the robot prim tree on the first call,
+        then reads world pose for each cached link path every step.
+        Computes linear velocity from pose differences.
+
+        Output format per step:
+            link_pose_gt: {robot_name: {link_name: [x,y,z,qx,qy,qz,qw]}}
+            link_velocity_gt: {robot_name: {link_name: [vx,vy,vz,0,0,0]}}
         """
-        all_poses = []
-        all_velocities = []
+        from omni.isaac.core.utils.prims import get_prim_at_path
+        from omni.isaac.core.utils.xforms import get_world_pose as get_xform_world_pose
+
+        if not hasattr(self, '_all_link_cache'):
+            self._all_link_cache = {}
+        if not hasattr(self, '_prev_all_link_poses'):
+            self._prev_all_link_poses = {}
+
+        result_poses = {}
+        result_velocities = {}
+        dt = 0.033
 
         for robot_name, robot in task.robots.items():
-            try:
-                poses = []
-                velocities = []
-
-                # Get robot base pose
+            # Discover link paths on first step
+            if robot_name not in self._all_link_cache:
                 try:
-                    base_pos, base_ori = robot.get_world_pose()
-                    poses.append([
-                        float(base_pos[0]), float(base_pos[1]), float(base_pos[2]),
-                        float(base_ori[0]), float(base_ori[1]), float(base_ori[2]), float(base_ori[3])
-                    ])
-                except Exception:
-                    poses.append([None] * 7)
+                    link_map = self._discover_robot_links(robot)
+                    self._all_link_cache[robot_name] = link_map
+                except Exception as e:
+                    logger.warning("Failed to discover links for %s: %s", robot_name, e)
+                    self._all_link_cache[robot_name] = {}
 
-                # Get EE poses from known paths (most reliable)
-                for ee_attr in ['fl_ee_path', 'fr_ee_path']:
-                    if hasattr(robot, ee_attr):
-                        ee_path = getattr(robot, ee_attr)
-                        if ee_path:
-                            try:
-                                from omni.isaac.core.utils.prims import get_prim_at_path
-                                from omni.isaac.core.utils.xforms import get_world_pose
-                                prim = get_prim_at_path(ee_path)
-                                if prim and prim.IsValid():
-                                    pos, ori = get_world_pose(ee_path)
-                                    poses.append([
-                                        float(pos[0]), float(pos[1]), float(pos[2]),
-                                        float(ori[0]), float(ori[1]), float(ori[2]), float(ori[3])
-                                    ])
-                                else:
-                                    poses.append([None] * 7)
-                            except Exception:
-                                poses.append([None] * 7)
+            link_map = self._all_link_cache[robot_name]
+            robot_poses = {}
+            robot_velocities = {}
 
-                # Velocity: compute from pose differences (stored in prev step)
-                if not hasattr(self, '_prev_link_poses'):
-                    self._prev_link_poses = {}
-                prev = self._prev_link_poses.get(robot_name)
-
-                for i, pose in enumerate(poses):
-                    if pose is not None and prev is not None and i < len(prev) and prev[i] is not None:
-                        dt = 0.033
-                        vx = (pose[0] - prev[i][0]) / dt
-                        vy = (pose[1] - prev[i][1]) / dt
-                        vz = (pose[2] - prev[i][2]) / dt
-                        velocities.append([vx, vy, vz, 0.0, 0.0, 0.0])
+            for link_name, link_path in link_map.items():
+                try:
+                    prim = get_prim_at_path(link_path)
+                    if prim and prim.IsValid():
+                        pos, ori = get_xform_world_pose(link_path)
+                        pose = [
+                            float(pos[0]), float(pos[1]), float(pos[2]),
+                            float(ori[0]), float(ori[1]), float(ori[2]), float(ori[3])
+                        ]
                     else:
-                        velocities.append([0.0] * 6)
+                        pose = [None] * 7
+                except Exception:
+                    pose = [None] * 7
 
-                self._prev_link_poses[robot_name] = poses
+                robot_poses[link_name] = pose
 
-                all_poses.append(poses)
-                all_velocities.append(velocities)
+                # Compute velocity from pose difference
+                prev_poses = self._prev_all_link_poses.get(robot_name, {})
+                prev_pose = prev_poses.get(link_name)
+                if (pose[0] is not None and prev_pose is not None
+                        and prev_pose[0] is not None):
+                    # Linear velocity
+                    vx = (pose[0] - prev_pose[0]) / dt
+                    vy = (pose[1] - prev_pose[1]) / dt
+                    vz = (pose[2] - prev_pose[2]) / dt
 
-            except Exception:
-                all_poses.append(None)
-                all_velocities.append(None)
+                    # Angular velocity from quaternion difference
+                    wx, wy, wz = self._compute_angular_velocity(
+                        prev_pose[3:7], pose[3:7], dt
+                    )
 
-        self._data["link_pose_gt"].append(all_poses)
-        self._data["link_velocity_gt"].append(all_velocities)
+                    robot_velocities[link_name] = [vx, vy, vz, wx, wy, wz]
+                else:
+                    robot_velocities[link_name] = [0.0] * 6
+
+            self._prev_all_link_poses[robot_name] = robot_poses
+            result_poses[robot_name] = robot_poses
+            result_velocities[robot_name] = robot_velocities
+
+        self._data["link_pose_gt"].append(result_poses)
+        self._data["link_velocity_gt"].append(result_velocities)
+
+    def _discover_robot_links(self, robot) -> Dict[str, str]:
+        """Discover all robot link prim paths by traversing the USD tree.
+
+        Returns dict: {relative_path: prim_path}
+        Only includes actual robot links, filtering out joints, materials,
+        shaders, visuals, collisions, and other non-link prims.
+        """
+        from omni.isaac.core.utils.prims import get_prim_at_path
+
+        link_map = {}
+
+        if not hasattr(robot, 'prim_path'):
+            return link_map
+
+        robot_prim = get_prim_at_path(robot.prim_path)
+        if not robot_prim or not robot_prim.IsValid():
+            return link_map
+
+        def _is_link(prim):
+            """Check if a prim is an actual robot link (not joint/material/etc)."""
+            name = prim.GetName()
+            name_lower = name.lower()
+
+            # Skip joints
+            if 'joint' in name_lower:
+                return False
+            # Skip materials and shaders
+            if 'material' in name_lower or name_lower == 'shader':
+                return False
+            # Skip visual-only containers
+            if name_lower in ('visuals', 'looks', 'collisions'):
+                return False
+            # Skip non-robot prims
+            if name_lower in ('physscene', 'world', 'scene'):
+                return False
+
+            # Keep prims with link-like names
+            # Match: xxx_link, link1, link2, ..., arm_base, base_link
+            if name_lower.endswith('_link') or name_lower == 'arm_base':
+                return True
+            import re
+            if re.match(r'^link\d+$', name_lower):
+                return True
+
+            return False
+
+        def _traverse(prim, depth=0, max_depth=8):
+            if depth > max_depth:
+                return
+            for child in prim.GetChildren():
+                child_path = str(child.GetPrimPath())
+                # Use full relative path as key to avoid name collisions
+                rel_name = child_path.replace(robot.prim_path + "/", "")
+                if _is_link(child) and rel_name not in link_map:
+                    link_map[rel_name] = child_path
+                _traverse(child, depth + 1, max_depth)
+
+        _traverse(robot_prim)
+        return link_map
+
+    def _compute_angular_velocity(self, q_prev, q_curr, dt):
+        """Compute angular velocity from two quaternions.
+
+        Parameters
+        ----------
+        q_prev : list
+            Previous quaternion [qx, qy, qz, qw]
+        q_curr : list
+            Current quaternion [qx, qy, qz, qw]
+        dt : float
+            Time step
+
+        Returns
+        -------
+        tuple
+            Angular velocity (wx, wy, wz) in rad/s
+        """
+        # Ensure quaternions are normalized
+        import math
+
+        def normalize(q):
+            n = math.sqrt(sum(x*x for x in q))
+            return [x/n for x in q] if n > 0 else q
+
+        q0 = normalize(q_prev)
+        q1 = normalize(q_curr)
+
+        # Quaternion difference: dq = q1 * conj(q0)
+        # conj(q0) = [-q0x, -q0y, -q0z, q0w]
+        dq = [
+            q1[3]*(-q0[0]) + q1[0]*q0[3] + q1[1]*(-q0[2]) - q1[2]*(-q0[1]),
+            q1[3]*(-q0[1]) - q1[0]*(-q0[2]) + q1[1]*q0[3] + q1[2]*(-q0[0]),
+            q1[3]*(-q0[2]) + q1[0]*(-q0[1]) - q1[1]*(-q0[0]) + q1[2]*q0[3],
+            q1[3]*q0[3] - q1[0]*(-q0[0]) - q1[1]*(-q0[1]) - q1[2]*(-q0[2]),
+        ]
+
+        # Ensure shortest path (dq[3] should be positive)
+        if dq[3] < 0:
+            dq = [-x for x in dq]
+
+        # Convert to axis-angle: angle = 2 * acos(dq[3])
+        # axis = dq[:3] / sin(angle/2)
+        sin_half = math.sqrt(dq[0]**2 + dq[1]**2 + dq[2]**2)
+
+        if sin_half < 1e-10:
+            return (0.0, 0.0, 0.0)
+
+        angle = 2.0 * math.asin(min(sin_half, 1.0))
+        angular_speed = angle / dt
+
+        # Axis
+        axis = [dq[i] / sin_half for i in range(3)]
+
+        return (axis[0] * angular_speed, axis[1] * angular_speed, axis[2] * angular_speed)
 
     def _get_link_paths(self, robot) -> List[str]:
         """Get all link prim paths for a robot."""
@@ -521,6 +642,7 @@ class PhysXDataCollector:
         collision_pairs = []
         collision_locations = []
         penetration_depths = []
+        contact_forces = []
         total_force = [0.0, 0.0, 0.0]
         total_impulse = 0.0
         dt = 0.033
@@ -535,56 +657,121 @@ class PhysXDataCollector:
                 pass
             return None
 
-        # Check pick contact views
         if hasattr(task, 'pickcontact_views'):
             for robot_name, lr_dict in task.pickcontact_views.items():
                 for lr_name, obj_dict in lr_dict.items():
                     for obj_name, contact_view in obj_dict.items():
                         try:
-                            force_matrix = contact_view.get_contact_force_matrix()
-                            if force_matrix is not None:
-                                force_matrix = np.abs(force_matrix).squeeze()
-                                if force_matrix.ndim >= 2:
-                                    force_sum = np.sum(force_matrix, axis=tuple(range(force_matrix.ndim - 1)))
+                            # Try to get detailed contact data with contact points
+                            contact_data = contact_view.get_contact_force_data()
+                            if contact_data is not None:
+                                forces = contact_data[0]      # (max_contact_count, 1)
+                                points = contact_data[1]      # (max_contact_count, 3)
+                                start_indices = contact_data[4]  # (num_shapes, num_filters)
+                                contact_counts = contact_data[5]  # (num_shapes, num_filters)
+
+                                force_magnitude = float(np.sum(np.abs(forces)))
+                                if force_magnitude <= 0.01:
+                                    continue
+
+                                # Collision pair
+                                collision_pairs.append({
+                                    "bodyA": f"robot/{robot_name}/{lr_name}",
+                                    "bodyB": f"object/{obj_name}",
+                                    "step": step_id,
+                                    "force_n": force_magnitude,
+                                })
+
+                                # Get actual contact points
+                                if start_indices.size > 0 and contact_counts.size > 0:
+                                    start = int(start_indices[0, 0]) if start_indices.ndim >= 2 else int(start_indices[0])
+                                    n_contacts = int(contact_counts[0, 0]) if contact_counts.ndim >= 2 else int(contact_counts[0])
+                                    logger.debug("Contact data: start=%d, n_contacts=%d, points_len=%d", start, n_contacts, len(points))
+                                    if n_contacts > 0 and start + n_contacts <= len(points):
+                                        contact_pts = points[start:start + n_contacts]
+                                        avg_point = np.mean(contact_pts, axis=0)
+                                        collision_locations.append({
+                                            "bodyA": f"robot/{robot_name}/{lr_name}",
+                                            "bodyB": f"object/{obj_name}",
+                                            "location_m": [float(avg_point[0]), float(avg_point[1]), float(avg_point[2])],
+                                        })
+                                        logger.debug("Using actual contact points: %s", avg_point)
+                                    else:
+                                        obj_pos = _get_pos(obj_name)
+                                        if obj_pos:
+                                            collision_locations.append({
+                                                "bodyA": f"robot/{robot_name}/{lr_name}",
+                                                "bodyB": f"object/{obj_name}",
+                                                "location_m": obj_pos,
+                                            })
+                                            logger.debug("Falling back to object centroid: %s", obj_pos)
                                 else:
-                                    force_sum = force_matrix
-
-                                force_magnitude = float(np.linalg.norm(force_sum))
-                                if force_magnitude > 0.01:
-                                    # Collision pair
-                                    collision_pairs.append({
-                                        "bodyA": f"robot/{robot_name}/{lr_name}",
-                                        "bodyB": f"object/{obj_name}",
-                                        "step": step_id,
-                                        "force_n": force_magnitude,
-                                    })
-
-                                    # Collision location: midpoint between EE and object
                                     obj_pos = _get_pos(obj_name)
                                     if obj_pos:
-                                        # Use object position as collision location (approximate)
                                         collision_locations.append({
                                             "bodyA": f"robot/{robot_name}/{lr_name}",
                                             "bodyB": f"object/{obj_name}",
                                             "location_m": obj_pos,
                                         })
 
-                                    # Penetration depth: estimate from force
-                                    # Using Hertzian approximation: F = k * delta^(3/2)
-                                    # With k=1e6 N/m^(3/2) as typical stiffness
-                                    # delta = (F/k)^(2/3)
-                                    stiffness = 1e6  # N/m^(3/2), typical for rigid contact
-                                    delta = (force_magnitude / stiffness) ** (2.0 / 3.0)
-                                    penetration_depths.append({
-                                        "bodyA": f"robot/{robot_name}/{lr_name}",
-                                        "bodyB": f"object/{obj_name}",
-                                        "depth_cm": delta * 100.0,  # m -> cm
-                                    })
+                                # Penetration depth from contact distances
+                                if start_indices.size > 0 and contact_counts.size > 0:
+                                    start = int(start_indices[0, 0]) if start_indices.ndim >= 2 else int(start_indices[0])
+                                    n_contacts = int(contact_counts[0, 0]) if contact_counts.ndim >= 2 else int(contact_counts[0])
+                                    if n_contacts > 0 and start + n_contacts <= len(contact_data[3]):
+                                        depths = contact_data[3][start:start + n_contacts]
+                                        avg_depth = float(np.mean(np.abs(depths)))
+                                    else:
+                                        avg_depth = (force_magnitude / 1e6) ** (2.0 / 3.0)
+                                else:
+                                    avg_depth = (force_magnitude / 1e6) ** (2.0 / 3.0)
 
-                                    total_force[0] += float(force_sum[0]) if len(force_sum) > 0 else 0
-                                    total_force[1] += float(force_sum[1]) if len(force_sum) > 1 else 0
-                                    total_force[2] += float(force_sum[2]) if len(force_sum) > 2 else 0
-                                    total_impulse += force_magnitude * dt
+                                penetration_depths.append({
+                                    "bodyA": f"robot/{robot_name}/{lr_name}",
+                                    "bodyB": f"object/{obj_name}",
+                                    "depth_m": avg_depth,
+                                })
+
+                                total_force[0] += float(np.sum(forces[:, 0])) if forces.size > 0 else 0
+                                total_force[1] += 0
+                                total_force[2] += 0
+                                total_impulse += force_magnitude * dt
+                            else:
+                                # Fallback to get_contact_force_matrix
+                                force_matrix = contact_view.get_contact_force_matrix()
+                                if force_matrix is not None:
+                                    force_matrix = np.abs(force_matrix).squeeze()
+                                    if force_matrix.ndim >= 2:
+                                        force_sum = np.sum(force_matrix, axis=tuple(range(force_matrix.ndim - 1)))
+                                    else:
+                                        force_sum = force_matrix
+
+                                    force_magnitude = float(np.linalg.norm(force_sum))
+                                    if force_magnitude > 0.01:
+                                        collision_pairs.append({
+                                            "bodyA": f"robot/{robot_name}/{lr_name}",
+                                            "bodyB": f"object/{obj_name}",
+                                            "step": step_id,
+                                            "force_n": force_magnitude,
+                                        })
+                                        obj_pos = _get_pos(obj_name)
+                                        if obj_pos:
+                                            collision_locations.append({
+                                                "bodyA": f"robot/{robot_name}/{lr_name}",
+                                                "bodyB": f"object/{obj_name}",
+                                                "location_m": obj_pos,
+                                            })
+                                        stiffness = 1e6
+                                        delta = (force_magnitude / stiffness) ** (2.0 / 3.0)
+                                        penetration_depths.append({
+                                            "bodyA": f"robot/{robot_name}/{lr_name}",
+                                            "bodyB": f"object/{obj_name}",
+                                            "depth_m": delta,
+                                        })
+                                        total_force[0] += float(force_sum[0]) if len(force_sum) > 0 else 0
+                                        total_force[1] += float(force_sum[1]) if len(force_sum) > 1 else 0
+                                        total_force[2] += float(force_sum[2]) if len(force_sum) > 2 else 0
+                                        total_impulse += force_magnitude * dt
                         except Exception:
                             pass
 
@@ -619,36 +806,227 @@ class PhysXDataCollector:
                                     penetration_depths.append({
                                         "bodyA": f"robot/{robot_name}/{lr_name}",
                                         "bodyB": f"environment/{view_name}",
-                                        "depth_cm": delta * 100.0,
+                                        "depth_m": delta,
                                     })
 
                                     total_impulse += force_magnitude * dt
                         except Exception:
                             pass
 
-        # Track contact events for duration computation
+        # Check robot-obstacle contact views separately from pick contacts so
+        # obstacle forces are not counted as gripper-object grasp forces.
+        if hasattr(task, 'obstaclecontact_views'):
+            for robot_name, lr_dict in task.obstaclecontact_views.items():
+                for lr_name, obj_dict in lr_dict.items():
+                    if lr_name == "_filter_paths":
+                        continue
+                    for obj_name, contact_view in obj_dict.items():
+                        try:
+                            # Try to get detailed contact data with contact points
+                            contact_data = contact_view.get_contact_force_data()
+                            if contact_data is not None:
+                                forces = contact_data[0]
+                                points = contact_data[1]
+                                start_indices = contact_data[4]
+                                contact_counts = contact_data[5]
+
+                                force_magnitude = float(np.sum(np.abs(forces)))
+                                if force_magnitude <= 0.01:
+                                    continue
+
+                                body_a = f"robot/{robot_name}/{lr_name}"
+                                body_b = f"obstacle/{obj_name}"
+                                collision_pairs.append({
+                                    "bodyA": body_a,
+                                    "bodyB": body_b,
+                                    "step": step_id,
+                                    "force_n": force_magnitude,
+                                })
+
+                                # Get actual contact points
+                                if start_indices.size > 0 and contact_counts.size > 0:
+                                    start = int(start_indices[0, 0]) if start_indices.ndim >= 2 else int(start_indices[0])
+                                    n_contacts = int(contact_counts[0, 0]) if contact_counts.ndim >= 2 else int(contact_counts[0])
+                                    if n_contacts > 0 and start + n_contacts <= len(points):
+                                        contact_pts = points[start:start + n_contacts]
+                                        avg_point = np.mean(contact_pts, axis=0)
+                                        collision_locations.append({
+                                            "bodyA": body_a,
+                                            "bodyB": body_b,
+                                            "location_m": [float(avg_point[0]), float(avg_point[1]), float(avg_point[2])],
+                                        })
+                                    else:
+                                        obj_pos = _get_pos(obj_name)
+                                        collision_locations.append({
+                                            "bodyA": body_a,
+                                            "bodyB": body_b,
+                                            "location_m": obj_pos,
+                                        })
+                                else:
+                                    obj_pos = _get_pos(obj_name)
+                                    collision_locations.append({
+                                        "bodyA": body_a,
+                                        "bodyB": body_b,
+                                        "location_m": obj_pos,
+                                    })
+
+                                # Penetration depth from contact distances
+                                if start_indices.size > 0 and contact_counts.size > 0:
+                                    start = int(start_indices[0, 0]) if start_indices.ndim >= 2 else int(start_indices[0])
+                                    n_contacts = int(contact_counts[0, 0]) if contact_counts.ndim >= 2 else int(contact_counts[0])
+                                    if n_contacts > 0 and start + n_contacts <= len(contact_data[3]):
+                                        depths = contact_data[3][start:start + n_contacts]
+                                        avg_depth = float(np.mean(np.abs(depths)))
+                                    else:
+                                        avg_depth = (force_magnitude / 1e6) ** (2.0 / 3.0)
+                                else:
+                                    avg_depth = (force_magnitude / 1e6) ** (2.0 / 3.0)
+
+                                penetration_depths.append({
+                                    "bodyA": body_a,
+                                    "bodyB": body_b,
+                                    "depth_m": avg_depth,
+                                })
+                                total_impulse += force_magnitude * dt
+                            else:
+                                # Fallback to get_contact_force_matrix
+                                force_matrix = contact_view.get_contact_force_matrix()
+                                if force_matrix is not None:
+                                    force_matrix = np.abs(force_matrix).squeeze()
+                                    force_magnitude = float(np.sum(force_matrix))
+                                    if force_magnitude <= 0.01:
+                                        continue
+                                    body_a = f"robot/{robot_name}/{lr_name}"
+                                    body_b = f"obstacle/{obj_name}"
+                                    collision_pairs.append({
+                                        "bodyA": body_a,
+                                        "bodyB": body_b,
+                                        "step": step_id,
+                                        "force_n": force_magnitude,
+                                    })
+                                    obj_pos = _get_pos(obj_name)
+                                    collision_locations.append({
+                                        "bodyA": body_a,
+                                        "bodyB": body_b,
+                                        "location_m": obj_pos,
+                                    })
+                                    penetration_depths.append({
+                                        "bodyA": body_a,
+                                        "bodyB": body_b,
+                                        "depth_m": (force_magnitude / 1e6) ** (2.0 / 3.0),
+                                    })
+                                    total_impulse += force_magnitude * dt
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to read obstacle contact view %s/%s/%s: %s",
+                                robot_name, lr_name, obj_name, exc,
+                            )
+
+        # Targeted robot self-collision views: left arm links against right arm
+        # links.  These are intentionally narrower than a scene-wide contact
+        # matrix so contact recording does not perturb the rest of the pipeline.
+        if hasattr(task, 'robotselfcontact_views'):
+            for robot_name, source_dict in task.robotselfcontact_views.items():
+                for source_link, spec in source_dict.items():
+                    try:
+                        contact_view = spec["view"]
+                        filter_labels = spec.get("filter_labels", [])
+                        matrix = contact_view.get_contact_force_matrix()
+                        if matrix is None:
+                            continue
+                        matrix = np.asarray(matrix)
+                        for filter_idx, filter_link in enumerate(filter_labels):
+                            if matrix.ndim >= 3:
+                                if filter_idx >= matrix.shape[1]:
+                                    continue
+                                force_magnitude = float(np.linalg.norm(matrix[0, filter_idx]))
+                            elif matrix.ndim == 2:
+                                if filter_idx >= matrix.shape[0]:
+                                    continue
+                                force_magnitude = float(np.linalg.norm(matrix[filter_idx]))
+                            else:
+                                if filter_idx != 0:
+                                    continue
+                                force_magnitude = float(np.linalg.norm(matrix))
+                            if force_magnitude <= 0.01:
+                                continue
+
+                            body_a = f"robot/{robot_name}/{source_link}"
+                            body_b = f"robot/{robot_name}/{filter_link}"
+                            collision_pairs.append({
+                                "bodyA": body_a,
+                                "bodyB": body_b,
+                                "step": step_id,
+                                "force_n": force_magnitude,
+                            })
+                            collision_locations.append({
+                                "bodyA": body_a,
+                                "bodyB": body_b,
+                                "location_m": None,
+                            })
+                            penetration_depths.append({
+                                "bodyA": body_a,
+                                "bodyB": body_b,
+                                "depth_m": (force_magnitude / 1e6) ** (2.0 / 3.0),
+                            })
+                            total_impulse += force_magnitude * dt
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to read robot self contact view %s/%s: %s",
+                            robot_name, source_link, exc,
+                        )
+
+        # Track contact events for duration computation.  Each pair is tracked
+        # independently and every separated contact interval is emitted as its
+        # own event.
         for pair in collision_pairs:
-            key = f"{pair['bodyA']}_{pair['bodyB']}"
+            key = (pair["bodyA"], pair["bodyB"])
             if key not in self._contact_state:
-                self._contact_state[key] = {"start_step": step_id, "active": True}
+                self._contact_state[key] = {
+                    "bodyA": pair["bodyA"],
+                    "bodyB": pair["bodyB"],
+                    "start_step": step_id,
+                    "active": True,
+                }
             elif not self._contact_state[key]["active"]:
-                self._contact_state[key] = {"start_step": step_id, "active": True}
+                self._contact_state[key] = {
+                    "bodyA": pair["bodyA"],
+                    "bodyB": pair["bodyB"],
+                    "start_step": step_id,
+                    "active": True,
+                }
 
         # End contacts that are no longer active
-        active_keys = {f"{p['bodyA']}_{p['bodyB']}" for p in collision_pairs}
+        active_keys = {(p["bodyA"], p["bodyB"]) for p in collision_pairs}
         for key in list(self._contact_state.keys()):
             if key not in active_keys and self._contact_state[key]["active"]:
-                self._contact_state[key]["active"] = False
-                self._contact_state[key]["end_step"] = step_id
+                state = self._contact_state[key]
+                state["active"] = False
+                state["end_step"] = step_id
+                duration = max(0.0, (state["end_step"] - state["start_step"]) * dt)
+                self._data["contact_events"].append({
+                    "bodyA": state["bodyA"],
+                    "bodyB": state["bodyB"],
+                    "start_step": state["start_step"],
+                    "end_step": state["end_step"],
+                    "duration_s": duration,
+                })
 
         self._data["collision_pair_gt"].append(collision_pairs if collision_pairs else [])
         self._data["collision_location_gt"].append(collision_locations if collision_locations else [])
         self._data["penetration_depth_gt"].append(penetration_depths if penetration_depths else [])
-        self._data["contact_force_gt"].append(total_force)
+        for pair in collision_pairs:
+            contact_forces.append({
+                "bodyA": pair["bodyA"],
+                "bodyB": pair["bodyB"],
+                "step": pair.get("step", step_id),
+                "force_n": pair.get("force_n", 0.0),
+            })
+        self._data["contact_force_gt"].append(contact_forces if contact_forces else [])
         self._data["contact_impulse_gt"].append(total_impulse)
 
-        # S-GRASP-001: Collect gripper-object contact force
-        gripper_obj_force = 0.0
+        # S-GRASP-001: Collect gripper-object contact force per arm.
+        gripper_obj_force = {"left": 0.0, "right": 0.0}
         if hasattr(task, 'pickcontact_views'):
             for robot_name, lr_dict in task.pickcontact_views.items():
                 for lr_name, obj_dict in lr_dict.items():
@@ -658,7 +1036,8 @@ class PhysXDataCollector:
                             if force_matrix is not None:
                                 force_matrix = np.abs(force_matrix).squeeze()
                                 force_magnitude = float(np.sum(force_matrix))
-                                gripper_obj_force = max(gripper_obj_force, force_magnitude)
+                                arm_key = "left" if "left" in lr_name.lower() or lr_name.lower().startswith("fl") else "right"
+                                gripper_obj_force[arm_key] += force_magnitude
                         except Exception:
                             pass
         self._data["gripper_object_contact_force_gt"].append(gripper_obj_force)
@@ -742,19 +1121,19 @@ class PhysXDataCollector:
 
         Uses robot.get_world_pose() and known EE paths for reliable position access.
         """
-        # Object-env distances
+        # Object-env distances: each object to ALL other objects
         obj_env_dists = {}
         if hasattr(task, 'objects'):
             for obj_name, obj in task.objects.items():
                 try:
                     obj_pos, _ = obj.get_world_pose()
-                    min_dist = float('inf')
+                    obj_dists = {}
                     for other_name, other_obj in task.objects.items():
                         if other_name != obj_name:
                             other_pos, _ = other_obj.get_world_pose()
                             d = float(np.linalg.norm(np.array(obj_pos) - np.array(other_pos)))
-                            min_dist = min(min_dist, d)
-                    obj_env_dists[obj_name] = min_dist * 100.0 if min_dist < float('inf') else None
+                            obj_dists[other_name] = d
+                    obj_env_dists[obj_name] = obj_dists if obj_dists else None
                 except Exception:
                     obj_env_dists[obj_name] = None
 
@@ -798,43 +1177,66 @@ class PhysXDataCollector:
                                 min_dist = min(min_dist, d)
                             except Exception:
                                 pass
-                    link_env_dists[link_name] = min_dist * 100.0 if min_dist < float('inf') else None
+                    link_env_dists[link_name] = min_dist if min_dist < float('inf') else None
 
             except Exception:
                 pass
 
-        # Self-distance (between known robot positions)
+        # Self-distance: pairwise distances between all arm links
         self_dists = {}
         for robot_name, robot in task.robots.items():
             try:
-                positions = []
-                try:
-                    base_pos, _ = robot.get_world_pose()
-                    positions.append(list(base_pos))
-                except Exception:
-                    pass
-                for ee_attr in ['fl_ee_path', 'fr_ee_path']:
-                    if hasattr(robot, ee_attr):
-                        ee_path = getattr(robot, ee_attr)
-                        if ee_path:
-                            try:
-                                from omni.isaac.core.utils.prims import get_prim_at_path
-                                from omni.isaac.core.utils.xforms import get_world_pose
-                                prim = get_prim_at_path(ee_path)
-                                if prim and prim.IsValid():
-                                    pos, _ = get_world_pose(ee_path)
-                                    positions.append(list(pos))
-                            except Exception:
-                                pass
+                # Get link poses from collected data
+                link_poses = self._data.get("link_pose_gt")
+                if not link_poses:
+                    self_dists[robot_name] = None
+                    continue
 
-                min_self_dist = float('inf')
-                for i in range(len(positions)):
-                    for j in range(i + 1, len(positions)):
-                        d = float(np.linalg.norm(np.array(positions[i]) - np.array(positions[j])))
-                        min_self_dist = min(min_self_dist, d)
+                # Get latest step's link poses
+                step_links = link_poses[-1] if link_poses else {}
+                robot_links = step_links.get(robot_name, {}) if isinstance(step_links, dict) else {}
 
-                self_dists[robot_name] = min_self_dist * 100.0 if min_self_dist < float('inf') else None
-            except Exception:
+                if not robot_links:
+                    self_dists[robot_name] = None
+                    continue
+
+                # Filter to arm links only (fl/*, fr/*)
+                arm_links = {}
+                for link_name, link_pose in robot_links.items():
+                    short = link_name.split("/")[-1] if "/" in link_name else link_name
+                    if (link_name.endswith("/arm_base") or
+                        link_name.endswith("/link1") or
+                        link_name.endswith("/link2") or
+                        link_name.endswith("/link3") or
+                        link_name.endswith("/link4") or
+                        link_name.endswith("/link5") or
+                        link_name.endswith("/link6") or
+                        link_name.endswith("/link7") or
+                        link_name.endswith("/link8")):
+                        if link_pose and len(link_pose) >= 3 and link_pose[0] is not None:
+                            arm_links[link_name] = link_pose
+
+                # Compute pairwise distances between all arm links
+                link_names = list(arm_links.keys())
+                pairwise_dists = {}
+
+                for i in range(len(link_names)):
+                    for j in range(i + 1, len(link_names)):
+                        name_i = link_names[i].split("/")[-1]
+                        name_j = link_names[j].split("/")[-1]
+                        pose_i = arm_links[link_names[i]]
+                        pose_j = arm_links[link_names[j]]
+                        d = float(np.linalg.norm(
+                            np.array(pose_i[:3]) - np.array(pose_j[:3])
+                        ))
+                        # Store with arm prefix for clarity
+                        arm_i = "fl" if "/fl/" in link_names[i] else "fr"
+                        arm_j = "fl" if "/fl/" in link_names[j] else "fr"
+                        key = f"{arm_i}/{name_i}→{arm_j}/{name_j}"
+                        pairwise_dists[key] = d
+
+                self_dists[robot_name] = pairwise_dists
+            except Exception as e:
                 self_dists[robot_name] = None
 
         self._data["object_env_distance_gt"].append(obj_env_dists if obj_env_dists else None)
@@ -853,21 +1255,31 @@ class PhysXDataCollector:
         dict
             Summary with contact durations, peak forces, etc.
         """
-        # Compute contact durations
-        contact_durations = []
+        # Compute per-contact-interval durations.  Closed intervals are
+        # appended when a contact disappears; active intervals are added here
+        # without mutating _data so repeated finalize() calls stay idempotent.
         dt = 0.033
-        for key, state in self._contact_state.items():
-            if "end_step" in state:
-                duration = (state["end_step"] - state["start_step"]) * dt
-            elif state["active"]:
-                duration = (len(self._data["step_ids"]) - state["start_step"]) * dt
-            else:
-                duration = 0.0
-            contact_durations.append({"contact": key, "duration_s": duration})
+        contact_events = list(self._data.get("contact_events", []))
+        final_step = len(self._data["step_ids"])
+        if self._data["step_ids"]:
+            final_step = self._data["step_ids"][-1] + 1
+
+        for state in self._contact_state.values():
+            if not state.get("active"):
+                continue
+            end_step = final_step
+            duration = max(0.0, (end_step - state["start_step"]) * dt)
+            contact_events.append({
+                "bodyA": state["bodyA"],
+                "bodyB": state["bodyB"],
+                "start_step": state["start_step"],
+                "end_step": end_step,
+                "duration_s": duration,
+            })
 
         return {
             "n_steps": len(self._data["step_ids"]),
-            "contact_events": contact_durations,
+            "contact_events": contact_events,
             "has_collisions": any(
                 len(pairs) > 0 for pairs in self._data["collision_pair_gt"] if pairs is not None
             ),

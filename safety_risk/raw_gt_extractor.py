@@ -80,6 +80,136 @@ def _transform_to_pose(mat) -> Optional[List[float]]:
     return None
 
 
+def _quat_to_rotmat_xyzw(quat: List[float]) -> Optional[List[List[float]]]:
+    """Convert [qx,qy,qz,qw] to a 3x3 rotation matrix.
+
+    Returns a world-from-local rotation matrix if the quaternion describes the
+    local frame in world coordinates, which is the convention used by ee_pose_gt.
+    """
+    if quat is None or len(quat) < 4:
+        return None
+    qx, qy, qz, qw = (float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3]))
+    n = qx * qx + qy * qy + qz * qz + qw * qw
+    if n <= 0.0:
+        return None
+    s = 2.0 / n
+
+    xx = qx * qx * s
+    yy = qy * qy * s
+    zz = qz * qz * s
+    xy = qx * qy * s
+    xz = qx * qz * s
+    yz = qy * qz * s
+    wx = qw * qx * s
+    wy = qw * qy * s
+    wz = qw * qz * s
+
+    return [
+        [1.0 - (yy + zz), xy - wz, xz + wy],
+        [xy + wz, 1.0 - (xx + zz), yz - wx],
+        [xz - wy, yz + wx, 1.0 - (xx + yy)],
+    ]
+
+
+def _world_to_local(rot_world_from_local: List[List[float]], vec_world: List[float]) -> Optional[List[float]]:
+    """Transform a world-space vector into the local frame."""
+    if rot_world_from_local is None or vec_world is None or len(vec_world) < 3:
+        return None
+
+    # local = R^T * world_vec
+    return [
+        rot_world_from_local[0][0] * float(vec_world[0]) + rot_world_from_local[1][0] * float(vec_world[1]) + rot_world_from_local[2][0] * float(vec_world[2]),
+        rot_world_from_local[0][1] * float(vec_world[0]) + rot_world_from_local[1][1] * float(vec_world[1]) + rot_world_from_local[2][1] * float(vec_world[2]),
+        rot_world_from_local[0][2] * float(vec_world[0]) + rot_world_from_local[1][2] * float(vec_world[1]) + rot_world_from_local[2][2] * float(vec_world[2]),
+    ]
+
+
+def _safe_scalar(val) -> Optional[float]:
+    """Convert scalar-like values, including single-item lists/strings, to float."""
+    if val is None:
+        return None
+    if hasattr(val, "tolist"):
+        val = val.tolist()
+    if isinstance(val, (list, tuple)):
+        if not val:
+            return None
+        val = val[0]
+    if isinstance(val, str):
+        text = val.strip()
+        if text.startswith("array(") and "[" in text and "]" in text:
+            text = text[text.find("[") + 1:text.find("]")]
+        elif text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        if "," in text:
+            text = text.split(",", 1)[0]
+        text = text.strip()
+        if not text:
+            return None
+        val = text
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sample_pose_xyzw(poses: List, target_idx: int, target_len: int) -> Optional[List[float]]:
+    """Sample [x,y,z,qx,qy,qz,qw] pose on another timeline."""
+    if not poses or target_idx < 0 or target_len <= 0:
+        return None
+    valid_len = len(poses)
+    if valid_len == 1 or target_len == 1:
+        pose = poses[0]
+        return [float(v) for v in pose[:7]] if pose is not None and len(pose) >= 7 else None
+
+    src_pos = target_idx * (valid_len - 1) / max(target_len - 1, 1)
+    lo = int(math.floor(src_pos))
+    hi = min(lo + 1, valid_len - 1)
+    alpha = src_pos - lo
+    pose_lo = poses[lo]
+    pose_hi = poses[hi]
+    if pose_lo is None or pose_hi is None or len(pose_lo) < 7 or len(pose_hi) < 7:
+        return None
+
+    p0 = [float(v) for v in pose_lo[:7]]
+    p1 = [float(v) for v in pose_hi[:7]]
+    pos = [(1.0 - alpha) * p0[i] + alpha * p1[i] for i in range(3)]
+
+    q0 = p0[3:7]
+    q1 = p1[3:7]
+    dot = sum(q0[i] * q1[i] for i in range(4))
+    if dot < 0.0:
+        q1 = [-v for v in q1]
+    quat = [(1.0 - alpha) * q0[i] + alpha * q1[i] for i in range(4)]
+    q_norm = math.sqrt(sum(v * v for v in quat))
+    if q_norm <= 0.0:
+        return None
+    quat = [v / q_norm for v in quat]
+    return pos + quat
+
+
+def _infer_position_scale_to_m(positions: List, indices: Optional[List[int]] = None) -> float:
+    """Infer whether a position series is stored in cm and return scale to m."""
+    if not positions:
+        return 1.0
+
+    sample_indices = indices if indices else list(range(len(positions)))
+    max_abs = 0.0
+    for i in sample_indices:
+        if i < 0 or i >= len(positions):
+            continue
+        pos = positions[i]
+        if pos is None or len(pos) < 3:
+            continue
+        try:
+            max_abs = max(max_abs, abs(float(pos[0])), abs(float(pos[1])), abs(float(pos[2])))
+        except (TypeError, ValueError):
+            continue
+
+    # Tabletop object coordinates should not exceed several meters. Values above
+    # this are treated as centimeters and converted to meters for raw GT.
+    return 0.01 if max_abs > 5.0 else 1.0
+
+
 class SimRawGTExtractor:
     """Extract complete Sim_Raw_GT from LMDB data."""
 
@@ -591,24 +721,24 @@ class SimRawGTExtractor:
 
         Computes:
         - S-ROBOT-003: joint_acceleration_gt (from joint velocity diff)
-        - S-OUT-001: drop_event_gt (from object z trajectory)
-        - S-OUT-002: drop_height_gt (from object z trajectory)
         - S-GRASP-002: slip_distance_gt (from object-gripper relative pose)
-        - S-GRASP-003: grasp_state_gt (from gripper width + object distance)
+        - S-GRASP-003: grasp_state_gt (from gripper width + relative object motion)
+        - S-OUT-001: drop_event_gt (from grasp_state_gt)
+        - S-OUT-002: drop_height_gt (from dropped interval, unit: m)
         """
         dt = self._dt
 
         # ── S-ROBOT-003: joint_acceleration_gt ──
         self._compute_joint_acceleration(raw_gt, dt)
 
-        # ── S-OUT-001 & S-OUT-002: drop_event_gt, drop_height_gt ──
-        self._compute_drop_detection(raw_gt, dt)
-
         # ── S-GRASP-002: slip_distance_gt ──
         self._compute_slip_distance(raw_gt)
 
         # ── S-GRASP-003: grasp_state_gt ──
         self._compute_grasp_state(raw_gt)
+
+        # ── S-OUT-001 & S-OUT-002: drop_event_gt, drop_height_gt ──
+        self._compute_drop_detection(raw_gt, dt)
 
         # ── S-OUT-004: damage_state_gt ──
         self._compute_damage_state(raw_gt)
@@ -646,50 +776,65 @@ class SimRawGTExtractor:
         robot["joint_acceleration_gt"] = acc
 
     def _compute_drop_detection(self, raw_gt: Dict, dt: float) -> None:
-        """S-OUT-001 & S-OUT-002: Detect drop events from object z trajectory."""
+        """S-OUT-001 & S-OUT-002: Detect drops from grasp_state_gt.
+
+        Raw output units are meters. A drop is reported only when the grasp
+        state machine reaches ``dropped``; normal z motion alone is not enough.
+        """
         outcome = raw_gt.get("outcome_gt", {})
+        gripper = raw_gt.get("gripper_gt", {})
         obj_state = raw_gt.get("object_state", {})
         obj_poses = obj_state.get("object_pose_gt", {})
+        states = gripper.get("grasp_state_gt")
 
         # Find the pick_object trajectory (handles pick_object, pick_object_left, pick_object_right)
         pick_obj = self._find_pick_object(obj_poses)
         trans_list = pick_obj.get("translation_per_step") if pick_obj else None
 
-        if trans_list is None or len(trans_list) < 3:
-            # No drop detected if no trajectory
-            outcome["drop_event_gt"] = outcome.get("drop_event_gt") or False
-            outcome["drop_height_gt"] = outcome.get("drop_height_gt") or None
+        if not states or trans_list is None or len(trans_list) < 2:
+            outcome["drop_event_gt"] = False
+            outcome["drop_height_gt"] = None
             return
 
-        # Extract z coordinates
+        n = min(len(states), len(trans_list))
+        object_scale_to_m = _infer_position_scale_to_m(trans_list)
+
+        # Extract z coordinates in meters.
         z_values = []
-        for t in trans_list:
+        for t in trans_list[:n]:
             if t is not None and len(t) >= 3:
-                z_values.append(float(t[2]))
+                z_values.append(float(t[2]) * object_scale_to_m)
             else:
                 z_values.append(None)
 
-        # Find drop: sudden z decrease > threshold
-        drop_threshold = 0.05  # 5cm sudden drop
-        drop_detected = False
-        drop_height = 0.0
+        dropped_indices = [i for i, state in enumerate(states[:n]) if state == "dropped"]
+        if not dropped_indices:
+            outcome["drop_event_gt"] = False
+            outcome["drop_height_gt"] = None
+            return
 
-        for i in range(1, len(z_values)):
-            if z_values[i] is not None and z_values[i - 1] is not None:
-                dz = z_values[i - 1] - z_values[i]  # positive = falling
-                if dz > drop_threshold:
-                    drop_detected = True
-                    # Find the peak z before drop
-                    z_max = max(z for z in z_values[:i] if z is not None)
-                    z_impact = z_values[i]
-                    drop_height = max(drop_height, (z_max - z_impact) * 100.0)  # m -> cm
+        first_drop_idx = dropped_indices[0]
+        pre_drop_z = [z for z in z_values[:first_drop_idx + 1] if z is not None]
+        dropped_z = [z_values[i] for i in dropped_indices if z_values[i] is not None]
 
-        outcome["drop_event_gt"] = drop_detected
-        if drop_detected:
-            outcome["drop_height_gt"] = drop_height
+        if not pre_drop_z or not dropped_z:
+            outcome["drop_event_gt"] = True
+            outcome["drop_height_gt"] = None
+            return
+
+        z_start = max(pre_drop_z)
+        z_lowest = min(dropped_z)
+        outcome["drop_event_gt"] = True
+        outcome["drop_height_gt"] = max(0.0, z_start - z_lowest)
 
     def _compute_slip_distance(self, raw_gt: Dict) -> None:
-        """S-GRASP-002: Compute slip distance from object-gripper relative pose."""
+        """S-GRASP-002: Compute slip distance in the EE local frame.
+
+        The previous implementation measured the object-EE Euclidean distance in
+        world coordinates. That over-counted EE translation as "slip". Here we
+        transform the object position into the EE frame and measure how much the
+        object moves relative to the gripper itself.
+        """
         gripper = raw_gt.get("gripper_gt", {})
         obj_state = raw_gt.get("object_state", {})
         robot = raw_gt.get("robot_state", {})
@@ -704,54 +849,93 @@ class SimRawGTExtractor:
             gripper["slip_distance_gt"] = None
             return
 
-        # Compute relative distance at each step
-        n = min(len(ee_poses), len(obj_trans))
-        rel_dists = []
-        for i in range(n):
-            ee = ee_poses[i]
-            obj = obj_trans[i]
-            if ee is not None and obj is not None and len(ee) >= 3 and len(obj) >= 3:
-                dx = ee[0] - obj[0]
-                dy = ee[1] - obj[1]
-                dz = ee[2] - obj[2]
-                rel_dists.append(math.sqrt(dx * dx + dy * dy + dz * dz) * 100.0)  # cm
-            else:
-                rel_dists.append(None)
+        # Compute object position in the EE local frame on the object/gripper
+        # timeline. ee_pose_gt can be downsampled compared with object_pose and
+        # gripper_width, so sampling by raw index would miss the grasp window.
+        gripper_widths = gripper.get("gripper_width_left") or gripper.get("gripper_width")
+        if gripper_widths:
+            n = min(len(obj_trans), len(gripper_widths))
+        else:
+            n = len(obj_trans)
 
-        if not rel_dists or all(d is None for d in rel_dists):
+        grasp_indices_for_scale = []
+        if gripper_widths:
+            for i, w in enumerate(gripper_widths[:n]):
+                w_val = _safe_scalar(w)
+                if w_val is not None and w_val < 0.03:
+                    grasp_indices_for_scale.append(i)
+        object_scale_to_m = _infer_position_scale_to_m(obj_trans, grasp_indices_for_scale)
+
+        rel_positions = []
+        for i in range(n):
+            ee = _sample_pose_xyzw(ee_poses, i, n)
+            obj = obj_trans[i]
+            if ee is not None and obj is not None and len(ee) >= 7 and len(obj) >= 3:
+                ee_pos = [float(ee[0]), float(ee[1]), float(ee[2])]
+                ee_quat = [float(ee[3]), float(ee[4]), float(ee[5]), float(ee[6])]
+                rot_world_from_ee = _quat_to_rotmat_xyzw(ee_quat)
+                if rot_world_from_ee is None:
+                    rel_positions.append(None)
+                    continue
+
+                rel_world = [
+                    float(obj[0]) * object_scale_to_m - ee_pos[0],
+                    float(obj[1]) * object_scale_to_m - ee_pos[1],
+                    float(obj[2]) * object_scale_to_m - ee_pos[2],
+                ]
+                rel_local = _world_to_local(rot_world_from_ee, rel_world)
+                rel_positions.append(rel_local)
+            else:
+                rel_positions.append(None)
+
+        if not rel_positions or all(p is None for p in rel_positions):
             gripper["slip_distance_gt"] = None
             return
 
-        # Slip = max variation in relative distance during grasp
-        valid_dists = [d for d in rel_dists if d is not None]
-        if len(valid_dists) < 2:
+        def _max_deviation(points: List[List[float]]) -> float:
+            base = points[0]
+            max_dev = 0.0
+            for p in points[1:]:
+                dx = p[0] - base[0]
+                dy = p[1] - base[1]
+                dz = p[2] - base[2]
+                max_dev = max(max_dev, math.sqrt(dx * dx + dy * dy + dz * dz))
+            return max_dev
+
+        valid_positions = [p for p in rel_positions if p is not None]
+        if len(valid_positions) < 2:
             gripper["slip_distance_gt"] = 0.0
             return
 
         # Find grasp window (when gripper is closed)
-        gripper_widths = gripper.get("gripper_width_left") or gripper.get("gripper_width")
         if gripper_widths:
             # During grasp: gripper width is small
             grasp_indices = []
-            for i, w in enumerate(gripper_widths):
+            for i, w in enumerate(gripper_widths[:n]):
                 if w is not None:
-                    w_val = float(w[0]) if isinstance(w, list) else float(w)
-                    if w_val < 0.03:  # gripper closed threshold
+                    w_val = _safe_scalar(w)
+                    if w_val is not None and w_val < 0.03:  # gripper closed threshold
                         grasp_indices.append(i)
 
             if grasp_indices:
-                grasp_dists = [rel_dists[i] for i in grasp_indices if i < len(rel_dists) and rel_dists[i] is not None]
-                if len(grasp_dists) >= 2:
-                    slip = max(grasp_dists) - min(grasp_dists)
+                grasp_positions = [rel_positions[i] for i in grasp_indices if i < len(rel_positions) and rel_positions[i] is not None]
+                if len(grasp_positions) >= 2:
+                    slip = _max_deviation(grasp_positions)
                     gripper["slip_distance_gt"] = slip
                     return
 
-        # Fallback: max variation across entire trajectory
-        slip = max(valid_dists) - min(valid_dists)
-        gripper["slip_distance_gt"] = slip
+        # No valid closed-gripper window means no grasp, so no grasp slip.
+        # Do not fall back to the full trajectory; that measures approach/transport
+        # motion rather than object slip inside the gripper.
+        gripper["slip_distance_gt"] = 0.0
 
     def _compute_grasp_state(self, raw_gt: Dict) -> None:
-        """S-GRASP-003: Infer grasp state from gripper width and object distance."""
+        """S-GRASP-003: Infer grasp state with a small state machine.
+
+        The state is based on gripper width plus object motion in the EE local
+        frame. This avoids classifying by raw EE-to-object-center distance, which
+        is brittle for large objects and mixed sampling rates.
+        """
         gripper = raw_gt.get("gripper_gt", {})
         obj_state = raw_gt.get("object_state", {})
         robot = raw_gt.get("robot_state", {})
@@ -762,58 +946,136 @@ class SimRawGTExtractor:
         pick_obj = self._find_pick_object(obj_poses)
         obj_trans = pick_obj.get("translation_per_step") if pick_obj else None
 
-        if gripper_widths is None:
+        if gripper_widths is None or ee_poses is None or obj_trans is None:
             gripper["grasp_state_gt"] = None
             return
 
+        close_threshold = 0.03      # m
+        open_threshold = 0.04       # m, hysteresis above close threshold
+        grasp_confirm_frames = 3
+        slip_threshold = 0.03       # m relative motion after grasp is established
+        drop_rel_threshold = 0.10   # m relative motion after grasp
+        drop_z_threshold = 0.05     # m downward object motion after grasp
+
         grasp_states = []
-        n = len(gripper_widths)
+        n = min(len(obj_trans), len(gripper_widths))
+        object_scale_to_m = _infer_position_scale_to_m(obj_trans)
+
+        rel_positions: List[Optional[List[float]]] = []
+        obj_positions_m: List[Optional[List[float]]] = []
+        widths: List[Optional[float]] = []
 
         for i in range(n):
-            # Get gripper width
-            w = gripper_widths[i]
-            if w is None:
+            widths.append(_safe_scalar(gripper_widths[i]))
+            ee = _sample_pose_xyzw(ee_poses, i, n)
+            obj = obj_trans[i]
+            if ee is None or obj is None or len(ee) < 7 or len(obj) < 3:
+                rel_positions.append(None)
+                obj_positions_m.append(None)
+                continue
+
+            obj_m = [
+                float(obj[0]) * object_scale_to_m,
+                float(obj[1]) * object_scale_to_m,
+                float(obj[2]) * object_scale_to_m,
+            ]
+            obj_positions_m.append(obj_m)
+
+            ee_pos = [float(ee[0]), float(ee[1]), float(ee[2])]
+            rot_world_from_ee = _quat_to_rotmat_xyzw([float(ee[3]), float(ee[4]), float(ee[5]), float(ee[6])])
+            if rot_world_from_ee is None:
+                rel_positions.append(None)
+                continue
+
+            rel_world = [obj_m[j] - ee_pos[j] for j in range(3)]
+            rel_positions.append(_world_to_local(rot_world_from_ee, rel_world))
+
+        state = "not_grasped"
+        closed_run = 0
+        grasp_rel_ref = None
+        grasp_obj_z_ref = None
+
+        for i in range(n):
+            w_val = widths[i]
+            rel = rel_positions[i]
+            obj_m = obj_positions_m[i]
+
+            if w_val is None or rel is None or obj_m is None:
                 grasp_states.append(None)
                 continue
-            w_val = float(w[0]) if isinstance(w, list) else float(w)
 
-            # Get distance to object
-            obj_dist = None
-            if ee_poses and obj_trans and i < len(ee_poses) and i < len(obj_trans):
-                ee = ee_poses[i]
-                obj = obj_trans[i]
-                if ee and obj and len(ee) >= 3 and len(obj) >= 3:
-                    dx = ee[0] - obj[0]
-                    dy = ee[1] - obj[1]
-                    dz = ee[2] - obj[2]
-                    obj_dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+            closed = w_val < close_threshold
+            open_gripper = w_val >= open_threshold
 
-            # Determine state
-            if w_val < 0.01:
-                # Gripper fully closed
-                if obj_dist is not None and obj_dist < 0.05:
-                    grasp_states.append("grasped")
+            if not closed:
+                closed_run = 0
+
+            if state == "not_grasped":
+                if closed:
+                    closed_run += 1
+                    if closed_run >= grasp_confirm_frames:
+                        state = "grasped"
+                        ref_idx = max(0, i - grasp_confirm_frames + 1)
+                        grasp_rel_ref = rel_positions[ref_idx] or rel
+                        grasp_obj_z_ref = (obj_positions_m[ref_idx] or obj_m)[2]
                 else:
-                    grasp_states.append("not_grasped")
-            elif w_val < 0.03:
-                # Gripper partially closed - might be grasping
-                if obj_dist is not None and obj_dist < 0.05:
-                    grasp_states.append("grasped")
-                else:
-                    grasp_states.append("slipping")
+                    state = "not_grasped"
+
+            elif state in ("grasped", "slipping"):
+                if grasp_rel_ref is None:
+                    grasp_rel_ref = rel
+                if grasp_obj_z_ref is None:
+                    grasp_obj_z_ref = obj_m[2]
+
+                rel_delta = math.sqrt(
+                    (rel[0] - grasp_rel_ref[0]) ** 2
+                    + (rel[1] - grasp_rel_ref[1]) ** 2
+                    + (rel[2] - grasp_rel_ref[2]) ** 2
+                )
+                z_drop = grasp_obj_z_ref - obj_m[2]
+
+                if open_gripper and z_drop > drop_z_threshold:
+                    state = "dropped"
+                elif closed and (rel_delta > drop_rel_threshold or z_drop > drop_z_threshold):
+                    state = "dropped"
+                elif closed and rel_delta > slip_threshold:
+                    state = "slipping"
+                elif open_gripper:
+                    state = "not_grasped"
+                    grasp_rel_ref = None
+                    grasp_obj_z_ref = None
+
+            elif state == "dropped":
+                if open_gripper:
+                    closed_run = 0
+
+            if state == "grasped":
+                grasp_states.append("grasped")
+            elif state == "slipping":
+                grasp_states.append("slipping")
+            elif state == "dropped":
+                grasp_states.append("dropped")
             else:
-                # Gripper open
                 grasp_states.append("not_grasped")
+
+        if len(gripper_widths) > n:
+            last_state = grasp_states[-1] if grasp_states else "not_grasped"
+            for w in gripper_widths[n:]:
+                w_val = _safe_scalar(w)
+                if w_val is None:
+                    grasp_states.append(None)
+                elif w_val >= open_threshold and last_state != "dropped":
+                    grasp_states.append("not_grasped")
+                else:
+                    grasp_states.append(last_state)
 
         gripper["grasp_state_gt"] = grasp_states if grasp_states else None
 
     def _compute_damage_state(self, raw_gt: Dict) -> None:
         """S-OUT-004: Infer damage state from drop/collision/force data.
 
-        Uses proxy rules when no damage model is available:
-        - High drop + fragile object -> broken
-        - High collision impulse + fragile object -> broken/minor
-        - High gripper force + fragile object -> functional_damage
+        Uses fragility-dependent proxy rules when no material damage model is
+        available. Raw distances are meters.
         """
         outcome = raw_gt.get("outcome_gt", {})
         meta = raw_gt.get("episode_meta", {})
@@ -827,40 +1089,59 @@ class SimRawGTExtractor:
 
         drop_height = outcome.get("drop_height_gt")
         drop_event = outcome.get("drop_event_gt", False)
-        fragility = meta.get("object_fragility_class", "none")
+        fragility = (meta.get("object_fragility_class") or "medium").lower()
 
-        # Get collision impulse
-        impulse = 0.0
-        impulses = coll.get("contact_impulse_gt")
-        if impulses:
-            impulse = sum(i for i in impulses if i is not None and isinstance(i, (int, float)))
+        def _flatten_numbers(value) -> List[float]:
+            nums: List[float] = []
+            if value is None:
+                return nums
+            if isinstance(value, (int, float)):
+                return [float(value)]
+            if isinstance(value, dict):
+                for v in value.values():
+                    nums.extend(_flatten_numbers(v))
+                return nums
+            if isinstance(value, (list, tuple)):
+                for v in value:
+                    nums.extend(_flatten_numbers(v))
+            return nums
 
-        # Get gripper force
-        gripper_force = 0.0
-        forces = gripper.get("gripper_object_contact_force_gt")
-        if forces:
-            gripper_force = max((f for f in forces if f is not None and isinstance(f, (int, float))), default=0.0)
+        impulse_vals = _flatten_numbers(coll.get("contact_impulse_gt"))
+        impulse_peak = max((abs(v) for v in impulse_vals), default=0.0)
 
-        # Apply proxy rules
-        fragility_high = fragility in ("high", "extreme")
-        fragility_medium = fragility in ("medium", "high", "extreme")
+        force_vals = _flatten_numbers(gripper.get("gripper_object_contact_force_gt"))
+        gripper_force_peak = max((abs(v) for v in force_vals), default=0.0)
 
-        damage = False
+        profiles = {
+            "extreme": {"minor_drop": 0.03, "broken_drop": 0.10, "minor_impulse": 1.0, "broken_impulse": 5.0, "force_damage": 25.0},
+            "high": {"minor_drop": 0.05, "broken_drop": 0.20, "minor_impulse": 3.0, "broken_impulse": 10.0, "force_damage": 50.0},
+            "medium": {"minor_drop": 0.15, "broken_drop": 0.50, "minor_impulse": 8.0, "broken_impulse": 25.0, "force_damage": 100.0},
+            "low": {"minor_drop": 0.30, "broken_drop": 1.00, "minor_impulse": 20.0, "broken_impulse": 60.0, "force_damage": 200.0},
+            "none": {"minor_drop": 0.60, "broken_drop": 2.00, "minor_impulse": 50.0, "broken_impulse": 120.0, "force_damage": 400.0},
+        }
+        profile = profiles.get(fragility, profiles["medium"])
+
+        severity_rank = {"none": 0, "minor": 1, "functional_damage": 2, "broken": 3}
         severity = "none"
 
-        if drop_event and drop_height is not None:
-            if drop_height > 50 and fragility_high:
-                damage, severity = True, "broken"
-            elif drop_height > 30 and fragility_medium:
-                damage, severity = True, "minor"
+        def _set_severity(candidate: str) -> None:
+            nonlocal severity
+            if severity_rank[candidate] > severity_rank[severity]:
+                severity = candidate
 
-        if not damage:
-            if impulse > 20 and fragility_high:
-                damage, severity = True, "broken"
-            elif impulse > 10 and fragility_medium:
-                damage, severity = True, "minor"
-            elif gripper_force > 100 and fragility_high:
-                damage, severity = True, "functional_damage"
+        if drop_event and drop_height is not None:
+            if drop_height >= profile["broken_drop"]:
+                _set_severity("broken")
+            elif drop_height >= profile["minor_drop"]:
+                _set_severity("minor")
+
+        if impulse_peak >= profile["broken_impulse"]:
+            _set_severity("broken")
+        elif impulse_peak >= profile["minor_impulse"]:
+            _set_severity("minor")
+
+        if gripper_force_peak >= profile["force_damage"]:
+            _set_severity("functional_damage")
 
         outcome["damage_state_gt"] = severity
 
@@ -898,64 +1179,93 @@ class SimRawGTExtractor:
             return
 
         # ── S-DIST-002: ee_human_distance_gt ──
-        ee_poses = robot.get("ee_pose_gt")
-        if ee_poses and len(ee_poses) > 0:
+        # Compute distances from left/right EE to each obstacle
+        ee_left = robot.get("ee_pose_gt")
+        ee_right = robot.get("ee_pose_right_gt")
+        if (ee_left or ee_right) and obs_trajs:
+            n_steps = max(len(ee_left) if ee_left else 0,
+                         len(ee_right) if ee_right else 0)
             ee_dists = []
-            for i in range(len(ee_poses)):
-                ee = ee_poses[i]
-                if ee is None or len(ee) < 3:
-                    ee_dists.append(None)
-                    continue
-                min_d = float('inf')
-                for obs_name, obs_traj in obs_trajs.items():
-                    idx = min(i, len(obs_traj) - 1)
-                    obs = obs_traj[idx]
-                    dx = ee[0] - obs[0]
-                    dy = ee[1] - obs[1]
-                    dz = ee[2] - obs[2]
-                    d = math.sqrt(dx * dx + dy * dy + dz * dz) * 100.0  # m -> cm
-                    min_d = min(min_d, d)
-                ee_dists.append(min_d if min_d < float('inf') else None)
+            for i in range(n_steps):
+                step_dist = {}
+                # Left arm EE
+                if ee_left and i < len(ee_left) and ee_left[i] and len(ee_left[i]) >= 3:
+                    for obs_name, obs_traj in obs_trajs.items():
+                        idx = min(i, len(obs_traj) - 1)
+                        obs = obs_traj[idx]
+                        dx = ee_left[i][0] - obs[0]
+                        dy = ee_left[i][1] - obs[1]
+                        dz = ee_left[i][2] - obs[2]
+                        d = math.sqrt(dx * dx + dy * dy + dz * dz)
+                        step_dist[f"left_{obs_name}"] = d
+                # Right arm EE
+                if ee_right and i < len(ee_right) and ee_right[i] and len(ee_right[i]) >= 3:
+                    for obs_name, obs_traj in obs_trajs.items():
+                        idx = min(i, len(obs_traj) - 1)
+                        obs = obs_traj[idx]
+                        dx = ee_right[i][0] - obs[0]
+                        dy = ee_right[i][1] - obs[1]
+                        dz = ee_right[i][2] - obs[2]
+                        d = math.sqrt(dx * dx + dy * dy + dz * dz)
+                        step_dist[f"right_{obs_name}"] = d
+                ee_dists.append(step_dist if step_dist else None)
             dist["ee_human_distance_gt"] = ee_dists
 
         # ── S-DIST-003: object_human_distance_gt ──
+        # Compute distances from ALL pick objects to each obstacle
         obj_poses = obj_state.get("object_pose_gt", {})
-        pick_obj = self._find_pick_object(obj_poses)
-        obj_trans = pick_obj.get("translation_per_step") if pick_obj else None
-        if obj_trans and len(obj_trans) > 0:
-            obj_dists = []
-            for i in range(len(obj_trans)):
-                obj = obj_trans[i]
-                if obj is None or len(obj) < 3:
-                    obj_dists.append(None)
-                    continue
-                min_d = float('inf')
-                for obs_name, obs_traj in obs_trajs.items():
-                    idx = min(i, len(obs_traj) - 1)
-                    obs = obs_traj[idx]
-                    dx = obj[0] - obs[0]
-                    dy = obj[1] - obs[1]
-                    dz = obj[2] - obs[2]
-                    d = math.sqrt(dx * dx + dy * dy + dz * dz) * 100.0
-                    min_d = min(min_d, d)
-                obj_dists.append(min_d if min_d < float('inf') else None)
-            dist["object_human_distance_gt"] = obj_dists
+        if obj_poses and obs_trajs:
+            # Find all pick objects
+            pick_objects = {}
+            for name in ["pick_object_left", "pick_object_right", "pick_object"]:
+                if name in obj_poses:
+                    pick_objects[name] = obj_poses[name]
+
+            if pick_objects:
+                n_steps = max(len(v.get("translation_per_step", []))
+                             for v in pick_objects.values())
+                obj_dists = []
+                for i in range(n_steps):
+                    step_dist = {}
+                    for obj_name, obj_data in pick_objects.items():
+                        obj_trans = obj_data.get("translation_per_step", [])
+                        if i < len(obj_trans):
+                            obj = obj_trans[i]
+                            if obj and len(obj) >= 3:
+                                for obs_name, obs_traj in obs_trajs.items():
+                                    idx = min(i, len(obs_traj) - 1)
+                                    obs = obs_traj[idx]
+                                    dx = obj[0] - obs[0]
+                                    dy = obj[1] - obs[1]
+                                    dz = obj[2] - obs[2]
+                                    d = math.sqrt(dx * dx + dy * dy + dz * dz)
+                                    step_dist[f"{obj_name}_{obs_name}"] = d
+                    obj_dists.append(step_dist if step_dist else None)
+                dist["object_human_distance_gt"] = obj_dists
 
         # ── S-DIST-001: robot_human_distance_matrix_gt ──
-        # Simplified: matrix of EE and object distances to each obstacle
-        if ee_poses and obs_trajs:
+        # Compute distances from ALL robot links to each obstacle
+        all_link_poses = robot.get("link_pose_gt")
+        if all_link_poses and obs_trajs:
             matrix = []
-            for i in range(len(ee_poses)):
+            for i in range(len(all_link_poses)):
+                step_links = all_link_poses[i]
+                if not isinstance(step_links, dict):
+                    continue
                 row = {}
-                ee = ee_poses[i]
                 for obs_name, obs_traj in obs_trajs.items():
                     idx = min(i, len(obs_traj) - 1)
                     obs = obs_traj[idx]
-                    if ee and len(ee) >= 3:
-                        dx = ee[0] - obs[0]
-                        dy = ee[1] - obs[1]
-                        dz = ee[2] - obs[2]
-                        row[obs_name] = math.sqrt(dx * dx + dy * dy + dz * dz) * 100.0
+                    # Find minimum distance across all links
+                    min_d = float('inf')
+                    for link_name, link_pose in step_links.items():
+                        if link_pose and len(link_pose) >= 3 and link_pose[0] is not None:
+                            dx = link_pose[0] - obs[0]
+                            dy = link_pose[1] - obs[1]
+                            dz = link_pose[2] - obs[2]
+                            d = math.sqrt(dx * dx + dy * dy + dz * dz)
+                            min_d = min(min_d, d)
+                    row[obs_name] = min_d if min_d < float('inf') else None
                 matrix.append(row)
             dist["robot_human_distance_matrix_gt"] = matrix
 
@@ -1036,53 +1346,65 @@ class SimRawGTExtractor:
             robot["joint_torque_gt"] = torques
 
     def _compute_executed_trajectory(self, raw_gt: Dict) -> None:
-        """S-PLAN-002: Build executed trajectory from joint position time series.
+        """S-PLAN-002: Build executed trajectory from executed robot states.
 
-        Constructs a structured trajectory from the already-available
-        joint_position_q_gt data. This is the actual executed path.
+        Each arm includes joint positions plus the corresponding EE pose as
+        [x, y, z, qx, qy, qz, qw]. Right arm uses ee_pose_right_gt; it should not
+        be silently omitted or filled with zeros when data is available.
         """
         planner = raw_gt.get("planner_log", {})
         robot = raw_gt.get("robot_state", {})
 
         q_left = robot.get("joint_position_q_gt")
         q_right = robot.get("joint_position_q_right_gt")
-        ee_poses = robot.get("ee_pose_gt")
+        ee_left = robot.get("ee_pose_gt")
+        ee_right = robot.get("ee_pose_right_gt")
 
         trajectory = []
         dt = self._dt
 
-        # Left arm trajectory
-        if q_left and len(q_left) > 0:
-            left_traj = []
-            for i, q in enumerate(q_left):
-                entry = {
-                    "t": round(i * dt, 4),
-                    "joint_positions": [round(v, 6) for v in q] if q else None,
-                }
-                # Add EE pose if available
-                if ee_poses and i < len(ee_poses) and ee_poses[i]:
-                    entry["ee_pose"] = [round(v, 6) for v in ee_poses[i][:3]] if len(ee_poses[i]) >= 3 else None
-                left_traj.append(entry)
-            trajectory.append({
-                "arm": "left",
-                "n_steps": len(left_traj),
-                "trajectory": left_traj,
-            })
+        def _build_arm_trajectory(arm: str, joint_series, ee_series):
+            if not joint_series and not ee_series:
+                return None
 
-        # Right arm trajectory
-        if q_right and len(q_right) > 0:
-            right_traj = []
-            for i, q in enumerate(q_right):
+            n_steps = max(len(joint_series) if joint_series else 0,
+                          len(ee_series) if ee_series else 0)
+            arm_traj = []
+            for i in range(n_steps):
+                q = joint_series[i] if joint_series and i < len(joint_series) else None
                 entry = {
                     "t": round(i * dt, 4),
                     "joint_positions": [round(v, 6) for v in q] if q else None,
                 }
-                right_traj.append(entry)
-            trajectory.append({
-                "arm": "right",
-                "n_steps": len(right_traj),
-                "trajectory": right_traj,
-            })
+                if ee_series and i < len(ee_series) and ee_series[i]:
+                    ee = ee_series[i]
+                    if len(ee) >= 7:
+                        entry["ee_pose"] = [round(float(v), 6) for v in ee[:7]]
+                        entry["ee_position"] = entry["ee_pose"][:3]
+                    elif len(ee) >= 3:
+                        entry["ee_pose"] = None
+                        entry["ee_position"] = [round(float(v), 6) for v in ee[:3]]
+                    else:
+                        entry["ee_pose"] = None
+                        entry["ee_position"] = None
+                else:
+                    entry["ee_pose"] = None
+                    entry["ee_position"] = None
+                arm_traj.append(entry)
+
+            return {
+                "arm": arm,
+                "n_steps": len(arm_traj),
+                "trajectory": arm_traj,
+            }
+
+        left = _build_arm_trajectory("left", q_left, ee_left)
+        if left:
+            trajectory.append(left)
+
+        right = _build_arm_trajectory("right", q_right, ee_right)
+        if right:
+            trajectory.append(right)
 
         planner["executed_trajectory"] = trajectory if trajectory else None
 

@@ -823,10 +823,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 physx_summary = self._physx_collector.finalize()
                 contact_events = physx_summary.get("contact_events", [])
                 if contact_events:
-                    raw_gt["collision_gt"]["contact_duration_gt"] = [
-                        {"contact": e["contact"], "duration_s": e["duration_s"]}
-                        for e in contact_events
-                    ]
+                    raw_gt["collision_gt"]["contact_duration_gt"] = contact_events
 
                 raw_gt["distance_gt"]["object_env_distance_gt"] = physx_data.get("object_env_distance_gt")
                 raw_gt["distance_gt"]["link_env_distance_gt"] = physx_data.get("link_env_distance_gt")
@@ -870,7 +867,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 margin = self._compute_support_polygon_margin()
                 if margin is not None:
                     raw_gt["outcome_gt"]["support_polygon_margin_gt"] = margin
-                    print(f"[safety_risk] support_polygon_margin_gt = {margin:.2f} cm")
+                    print(f"[safety_risk] support_polygon_margin_gt = {margin:.4f} m")
             except Exception as e:
                 print(f"[safety_risk] Warning: support_polygon_margin_gt failed: {e}")
 
@@ -929,10 +926,9 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
     def _read_object_physical_params(self) -> dict:
         """S-OBJ-004: Read physical parameters from USD prims for all task objects.
 
-        Returns dict: {object_name: {mass_kg, friction_static, friction_dynamic,
-                                     inertia_kg_m2, bounding_box_m, collision_approx}}
+        Returns dict: {object_name: {bounding_box_m, target_class}}
         """
-        from pxr import UsdPhysics, UsdGeom
+        from pxr import UsdGeom
 
         result = {}
         stage = self.world.stage
@@ -958,48 +954,6 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
             params = {}
 
-            # Read MassAPI
-            if prim.HasAPI(UsdPhysics.MassAPI):
-                mass_api = UsdPhysics.MassAPI(prim)
-                mass = mass_api.GetMassAttr()
-                if mass and mass.Get() is not None:
-                    params["mass_kg"] = float(mass.Get())
-
-                density = mass_api.GetDensityAttr()
-                if density and density.Get() is not None:
-                    params["density_kg_m3"] = float(density.Get())
-
-                inertia_diag = mass_api.GetDiagonalInertiaAttr()
-                if inertia_diag and inertia_diag.Get() is not None:
-                    inertia = inertia_diag.Get()
-                    params["inertia_kg_m2"] = [float(inertia[0]), float(inertia[1]), float(inertia[2])]
-
-            # Read RigidBodyAPI
-            if prim.HasAPI(UsdPhysics.RigidBodyAPI):
-                rb_api = UsdPhysics.RigidBodyAPI(prim)
-                # Angular damping
-                ang_damp = rb_api.GetAngularDampingAttr()
-                if ang_damp and ang_damp.Get() is not None:
-                    params["angular_damping"] = float(ang_damp.Get())
-                # Linear damping
-                lin_damp = rb_api.GetLinearDampingAttr()
-                if lin_damp and lin_damp.Get() is not None:
-                    params["linear_damping"] = float(lin_damp.Get())
-
-            # Read collision properties
-            if prim.HasAPI(UsdPhysics.CollisionAPI):
-                coll_api = UsdPhysics.CollisionAPI(prim)
-                # Friction
-                friction = coll_api.GetFrictionAttr()
-                if friction and friction.Get() is not None:
-                    params["friction_static"] = float(friction.Get())
-                    params["friction_dynamic"] = float(friction.Get())
-
-                # Restitution
-                rest = coll_api.GetRestitutionAttr()
-                if rest and rest.Get() is not None:
-                    params["restitution"] = float(rest.Get())
-
             # Read bounding box
             try:
                 bbox_cache = UsdGeom.BBoxCache(
@@ -1013,8 +967,6 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 pass
 
             # Object config info
-            params["hazard_class"] = obj_cfg.get("hazard_class", "none")
-            params["fragility_class"] = obj_cfg.get("fragility_class", "none")
             params["target_class"] = obj_cfg.get("target_class", "RigidObject")
 
             if params:
@@ -1086,7 +1038,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
         Calculates the distance from the object's center of mass projection
         to the nearest edge of the support surface (table).
-        Returns margin in cm, or None if cannot be computed.
+        Returns margin in meters, or None if cannot be computed.
         """
         import numpy as np
         from pxr import UsdGeom
@@ -1095,28 +1047,18 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         if stage is None:
             return None
 
-        # Get pick object position (handles pick_object, pick_object_left, etc.)
+        # Get pick object positions (handles pick_object, pick_object_left/right).
         if not hasattr(self.task, 'objects'):
             return None
 
-        obj = None
+        pick_objects = []
         for name in ['pick_object', 'pick_object_left', 'pick_object_right']:
             if name in self.task.objects:
-                obj = self.task.objects[name]
-                break
-        if obj is None:
-            # Fallback: first object that starts with 'pick_'
-            for name in self.task.objects:
-                if name.startswith('pick_'):
-                    obj = self.task.objects[name]
-                    break
-        if obj is None:
-            return None
-
-        try:
-            obj_pos, _ = obj.get_world_pose()
-            obj_x, obj_y = float(obj_pos[0]), float(obj_pos[1])
-        except Exception:
+                pick_objects.append(self.task.objects[name])
+        for name, obj in self.task.objects.items():
+            if name.startswith('pick_') and obj not in pick_objects:
+                pick_objects.append(obj)
+        if not pick_objects:
             return None
 
         # Find table prim and get its bounding box
@@ -1142,28 +1084,35 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             table_min_x, table_min_y = float(min_pt[0]), float(min_pt[1])
             table_max_x, table_max_y = float(max_pt[0]), float(max_pt[1])
 
-            # Distance from object to each table edge
-            dist_to_edges = [
-                abs(obj_x - table_min_x),  # left edge
-                abs(obj_x - table_max_x),  # right edge
-                abs(obj_y - table_min_y),  # front edge
-                abs(obj_y - table_max_y),  # back edge
-            ]
+            margins = []
+            for obj in pick_objects:
+                try:
+                    obj_pos, _ = obj.get_world_pose()
+                    obj_x, obj_y = float(obj_pos[0]), float(obj_pos[1])
+                except Exception:
+                    continue
 
-            # Margin = distance to nearest edge
-            margin_m = min(dist_to_edges)
-            return margin_m * 100.0  # m -> cm
+                # Distance from object projection to all four support edges.
+                margins.extend([
+                    obj_x - table_min_x,
+                    table_max_x - obj_x,
+                    obj_y - table_min_y,
+                    table_max_y - obj_y,
+                ])
+
+            if not margins:
+                return None
+            return min(margins)
 
         except Exception:
             return None
 
     def _compute_sensor_fields_from_seg(self, episode_dir, raw_gt: dict) -> dict:
-        """S-SENSOR-004/005/006: Compute instance_id_map, bbox, visibility from segmentation.
+        """S-SENSOR-001..006: Build LMDB-backed sensor GT metadata and per-instance segmentation stats.
 
-        Reads segmentation data from LMDB (encoded as PNG bytes) and computes:
-        - instance_id_map_gt: list of unique instance IDs per frame
-        - object_bbox_gt: bounding box of all objects per frame
-        - visibility_ratio_gt: non-background pixel ratio per frame
+        RGB/depth/segmentation images are large, so sim_raw_gt stores LMDB
+        references instead of embedding image bytes. Segmentation-derived fields
+        are computed per visible instance, not as whole-scene foreground stats.
         """
         import cv2
         import numpy as np
@@ -1178,16 +1127,73 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         import lmdb
         env = lmdb.open(lmdb_path, readonly=True, lock=False)
 
-        # Find seg key prefix
-        seg_prefix = None
+        def _sensor_kind(prefix: str) -> Optional[str]:
+            lower = prefix.lower()
+            if "rgb" in lower:
+                return "rgb"
+            if "depth" in lower:
+                return "depth"
+            if "seg" in lower:
+                return "seg"
+            return None
+
+        def _camera_name(prefix: str, kind: str) -> str:
+            marker = f".{kind}."
+            if marker in prefix:
+                return prefix.split(marker, 1)[1]
+            parts = prefix.split(".")
+            return parts[-1] if parts else "default"
+
+        sensor_prefixes = {"rgb": {}, "depth": {}, "seg": {}}
         with env.begin() as txn:
             cursor = txn.cursor()
             for key, _ in cursor:
                 k = key.decode("utf-8") if isinstance(key, bytes) else key
-                if "seg" in k.lower() and "/" in k:
-                    seg_prefix = k.split("/")[0]
-                    break
+                if "/" not in k:
+                    continue
+                prefix = k.split("/")[0]
+                kind = _sensor_kind(prefix)
+                if kind is None:
+                    continue
+                camera = _camera_name(prefix, kind)
+                sensor_prefixes[kind][camera] = prefix
 
+        def _count_frames(txn, prefix: str) -> int:
+            count = 0
+            while txn.get(f"{prefix}/{str(count).zfill(4)}".encode("utf-8")) is not None:
+                count += 1
+            return count
+
+        with env.begin() as txn:
+            if sensor_prefixes["rgb"]:
+                result["virtual_rgb"] = {
+                    "storage": "lmdb",
+                    "lmdb_path": os.path.join(episode_dir, "lmdb"),
+                    "cameras": {
+                        camera: {"key_prefix": prefix, "num_frames": _count_frames(txn, prefix)}
+                        for camera, prefix in sorted(sensor_prefixes["rgb"].items())
+                    },
+                }
+            if sensor_prefixes["depth"]:
+                result["virtual_depth"] = {
+                    "storage": "lmdb",
+                    "lmdb_path": os.path.join(episode_dir, "lmdb"),
+                    "cameras": {
+                        camera: {"key_prefix": prefix, "num_frames": _count_frames(txn, prefix)}
+                        for camera, prefix in sorted(sensor_prefixes["depth"].items())
+                    },
+                }
+            if sensor_prefixes["seg"]:
+                result["segmentation_mask_gt"] = {
+                    "storage": "lmdb",
+                    "lmdb_path": os.path.join(episode_dir, "lmdb"),
+                    "cameras": {
+                        camera: {"key_prefix": prefix, "num_frames": _count_frames(txn, prefix)}
+                        for camera, prefix in sorted(sensor_prefixes["seg"].items())
+                    },
+                }
+
+        seg_prefix = next(iter(sensor_prefixes["seg"].values()), None)
         if seg_prefix is None:
             print(f"[safety_risk] sensor: no seg keys found in LMDB")
             env.close()
@@ -1195,7 +1201,20 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
         print(f"[safety_risk] sensor: found seg prefix '{seg_prefix}'")
 
-        # Read all seg frames from LMDB
+        def _decode_seg(raw_value):
+            try:
+                data = pickle.loads(raw_value) if isinstance(raw_value, bytes) else raw_value
+                if isinstance(data, np.ndarray):
+                    if data.ndim >= 2:
+                        return data
+                    return cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
+                if isinstance(data, (bytes, memoryview)):
+                    return cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+            except Exception:
+                return None
+            return None
+
+        # Read all seg frames from LMDB.
         instance_ids = []
         bboxes = []
         vis_ratios = []
@@ -1208,44 +1227,40 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 if raw is None:
                     break
 
-                try:
-                    # LMDB stores pickled numpy arrays (encoded PNG bytes)
-                    data = pickle.loads(raw) if isinstance(raw, bytes) else raw
-                    if isinstance(data, np.ndarray):
-                        seg_img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
-                    elif isinstance(data, (bytes, memoryview)):
-                        seg_img = cv2.imdecode(
-                            np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_UNCHANGED
-                        )
-                    else:
-                        seg_img = None
-                except Exception:
-                    seg_img = None
+                seg_img = _decode_seg(raw)
 
                 if seg_img is None or seg_img.size == 0:
-                    instance_ids.append(None)
-                    bboxes.append(None)
-                    vis_ratios.append(None)
+                    instance_ids.append({"frame": frame_idx, "visible_instance_ids": None})
+                    bboxes.append({"frame": frame_idx, "instances": None})
+                    vis_ratios.append({"frame": frame_idx, "instances": None})
                     frame_idx += 1
                     continue
 
-                # Unique instance IDs
-                unique_ids = sorted([int(x) for x in np.unique(seg_img)])
-                instance_ids.append(unique_ids)
+                if seg_img.ndim == 3:
+                    seg_img = seg_img[:, :, 0]
 
-                # Non-background mask
-                object_mask = (seg_img > 0).astype(np.uint8)
-                coords = np.where(object_mask > 0)
+                total_px = int(seg_img.shape[0] * seg_img.shape[1])
+                unique_ids = sorted(int(x) for x in np.unique(seg_img) if int(x) != 0)
+                instance_ids.append({
+                    "frame": frame_idx,
+                    "visible_instance_ids": unique_ids,
+                    "background_id": 0,
+                })
 
-                if len(coords[0]) > 0:
+                frame_bboxes = {}
+                frame_ratios = {}
+                for inst_id in unique_ids:
+                    coords = np.where(seg_img == inst_id)
+                    if len(coords[0]) == 0:
+                        continue
                     y_min, y_max = int(coords[0].min()), int(coords[0].max())
                     x_min, x_max = int(coords[1].min()), int(coords[1].max())
-                    bboxes.append([x_min, y_min, x_max, y_max])
-                    total_px = seg_img.shape[0] * seg_img.shape[1]
-                    vis_ratios.append(round(len(coords[0]) / total_px, 4))
-                else:
-                    bboxes.append(None)
-                    vis_ratios.append(0.0)
+                    key_id = str(inst_id)
+                    frame_bboxes[key_id] = [x_min, y_min, x_max, y_max]
+                    frame_ratios[key_id] = round(len(coords[0]) / total_px, 6)
+
+                bboxes.append({"frame": frame_idx, "instances": frame_bboxes})
+                vis_ratios.append({"frame": frame_idx, "instances": frame_ratios})
 
                 frame_idx += 1
 
@@ -1256,6 +1271,67 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         result["visibility_ratio_gt"] = vis_ratios
 
         return result
+
+    def _fix_obstacle_physics_hierarchy(self):
+        """Fix MANO hand model physics hierarchy.
+
+        Converts the parent mano prim from RigidBody to Articulation Root,
+        which allows child rigid bodies to work correctly in PhysX.
+        """
+        try:
+            from pxr import Usd, UsdPhysics
+            from omni.isaac.core.utils.prims import get_prim_at_path
+
+            stage = self.world.stage
+            if stage is None or not hasattr(self.task, 'objects'):
+                return
+
+            for obj_name, obj in self.task.objects.items():
+                if "obstacle" not in obj_name.lower():
+                    continue
+                try:
+                    prim_path = getattr(obj, 'prim_path', None) or getattr(obj, 'base_prim_path', None)
+                    if not prim_path:
+                        continue
+
+                    prim = get_prim_at_path(prim_path)
+                    if not prim or not prim.IsValid():
+                        continue
+
+                    # Step 1: Remove RigidBodyAPI from parent
+                    if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                        prim.RemoveAPI(UsdPhysics.RigidBodyAPI)
+
+                    # Step 2: Remove MassAPI from parent
+                    if prim.HasAPI(UsdPhysics.MassAPI):
+                        prim.RemoveAPI(UsdPhysics.MassAPI)
+
+                    # Step 3: Keep the parent as a pure Xform.  MANO already
+                    # defines its articulation root inside the referenced asset.
+                    # Adding another root here creates a nested articulation.
+
+                    # Step 4: Fix collision approximation for all descendant meshes.
+                    for child in Usd.PrimRange(prim):
+                        if child == prim:
+                            continue
+                        try:
+                            child_path = str(child.GetPrimPath())
+                            if child.HasAPI(UsdPhysics.CollisionAPI):
+                                mesh_api = UsdPhysics.MeshCollisionAPI.Apply(child)
+                                approx = mesh_api.GetApproximationAttr()
+                                if not approx:
+                                    approx = mesh_api.CreateApproximationAttr()
+                                if approx.Get() in (None, "", "none"):
+                                    approx.Set("convexHull")
+                                    print(f"[safety_risk] Fixed collision approximation for {child_path}")
+                        except Exception as e:
+                            print(f"[safety_risk] Warning: Failed to fix collision prim {child_path}: {e}")
+
+                except Exception as e:
+                    print(f"[safety_risk] Warning: Failed to fix obstacle physics: {e}")
+
+        except Exception as e:
+            print(f"[safety_risk] Warning: Failed to fix obstacle physics hierarchy: {e}")
 
     def _apply_semantic_labels(self):
         """Apply semantic labels to scene objects for segmentation.
@@ -1383,6 +1459,10 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 _physx_collector.configure_safety_gate(sg_cfg)
             except Exception as e:
                 print(f"[safety_risk] Warning: PhysX collector init failed: {e}")
+
+        # ── Fix obstacle physics hierarchy ──
+        if self._safety_eval_enabled:
+            self._fix_obstacle_physics_hierarchy()
 
         # ── Apply semantic labels for segmentation ──
         if self._safety_eval_enabled:

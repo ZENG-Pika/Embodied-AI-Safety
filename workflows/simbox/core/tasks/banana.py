@@ -77,6 +77,10 @@ class BananaBaseTask(BaseTask):
         for cfg in self.cfg["objects"]:
             self.objects[cfg["name"]] = self._load_obj(cfg)
 
+        # MANO assets ship with RigidBodyAPI on both the articulation root and
+        # child links.  Fix this before the first PhysX stage parse/reset.
+        self._fix_obstacle_physics_hierarchy()
+
         for cfg in self.cfg["robots"]:
             self._load_robot(cfg)
         for cfg in self.cfg["cameras"]:
@@ -100,6 +104,8 @@ class BananaBaseTask(BaseTask):
         self.ignore_objects = [obj["name"] for obj in self.cfg["objects"]]
         self.pickcontact_views = self._set_pickcontact_view(self.cfg)
         self.artcontact_views = self._set_artcontact_view(self.cfg)
+        self.obstaclecontact_views = self._set_obstaclecontact_view(self.cfg)
+        self.robotselfcontact_views = self._set_robotselfcontact_view()
 
         # Set up visual distrator (if exists)
         if self.cfg.get("distractors", None):
@@ -143,6 +149,8 @@ class BananaBaseTask(BaseTask):
         optimize_2d_manip_layout(self.cfg["objects"], self.cfg["regions"], self.objects)
         self.pickcontact_views = self._set_pickcontact_view(self.cfg)
         self.artcontact_views = self._set_artcontact_view(self.cfg)
+        self.obstaclecontact_views = self._set_obstaclecontact_view(self.cfg)
+        self.robotselfcontact_views = self._set_robotselfcontact_view()
 
     def individual_reset_from_mem(self):
         for cfg in self.cfg["arena"]["fixtures"]:
@@ -161,6 +169,8 @@ class BananaBaseTask(BaseTask):
         optimize_2d_manip_layout(self.cfg["objects"], self.cfg["regions"], self.objects)
         self.pickcontact_views = self._set_pickcontact_view(self.cfg)
         self.artcontact_views = self._set_artcontact_view(self.cfg)
+        self.obstaclecontact_views = self._set_obstaclecontact_view(self.cfg)
+        self.robotselfcontact_views = self._set_robotselfcontact_view()
 
     def individual_randomize(self):
         # Randomize objects in regions
@@ -216,7 +226,11 @@ class BananaBaseTask(BaseTask):
 
         all_views = [
             contact_view
-            for views_dict in (self.pickcontact_views, self.artcontact_views)
+            for views_dict in (
+                self.pickcontact_views,
+                self.artcontact_views,
+                self.obstaclecontact_views,
+            )
             for lr_views in views_dict.values()
             for contact_views in lr_views.values()
             for contact_view in contact_views.values()
@@ -224,6 +238,9 @@ class BananaBaseTask(BaseTask):
 
         for view in all_views:
             view.initialize()
+        for robot_views in getattr(self, "robotselfcontact_views", {}).values():
+            for spec in robot_views.values():
+                spec["view"].initialize()
 
     def apply_action(self, action: Dict[str, Dict[str, np.ndarray]]):
         for name in action.keys():
@@ -414,9 +431,111 @@ class BananaBaseTask(BaseTask):
                                 )
                                 if object_name not in pickcontact_views[robot_name][lr_name]:
                                     pickcontact_views[robot_name][lr_name][object_name] = RigidContactView(
-                                        prim_paths_expr=prim_paths_expr, filter_paths_expr=filter_paths_expr
+                                        prim_paths_expr=prim_paths_expr, filter_paths_expr=filter_paths_expr,
+                                        max_contact_count=1000,  # Enable contact point data
                                     )
         return pickcontact_views
+
+    def _set_obstaclecontact_view(self, cfg):
+        """Create whole-robot contact views for task obstacles.
+
+        MANO is an articulation whose rigid bodies are direct children of the
+        configured object prim, hence the ``/*`` source expression.  Filter
+        paths are discovered from every RigidBodyAPI below the robot root so
+        contacts with the base, either arm, or either end effector are covered.
+        """
+        from pxr import UsdPhysics
+
+        obstaclecontact_views = {}
+        obstacle_names = [
+            obj_cfg["name"]
+            for obj_cfg in cfg.get("objects", [])
+            if "obstacle" in obj_cfg.get("name", "").lower()
+            and obj_cfg["name"] in self.objects
+        ]
+        for robot_name, robot in self.robots.items():
+            robot_prim = get_prim_at_path(robot.robot_prim_path)
+            filter_paths_expr = [
+                str(prim.GetPath())
+                for prim in Usd.PrimRange(robot_prim)
+                if prim.HasAPI(UsdPhysics.RigidBodyAPI)
+            ]
+            obstaclecontact_views[robot_name] = {"all": {}}
+            for obstacle_name in obstacle_names:
+                source_expr = self.objects[obstacle_name].prim_path.rstrip("/") + "/*"
+                obstaclecontact_views[robot_name]["all"][obstacle_name] = RigidContactView(
+                    prim_paths_expr=source_expr,
+                    filter_paths_expr=filter_paths_expr,
+                    max_contact_count=1000,  # Enable contact point data
+                )
+        return obstaclecontact_views
+
+    def _set_robotselfcontact_view(self):
+        """Create targeted left-arm/right-arm contact views.
+
+        This avoids the previous scene-wide contact matrix while still
+        recording the robot self-collisions that matter for split_aloha.
+        """
+        from pxr import UsdPhysics
+
+        robotselfcontact_views = {}
+        for robot_name, robot in self.robots.items():
+            robot_prim = get_prim_at_path(robot.robot_prim_path)
+            if not robot_prim or not robot_prim.IsValid():
+                continue
+
+            root = robot.robot_prim_path.rstrip("/") + "/"
+            fl_paths = []
+            fr_paths = []
+            for prim in Usd.PrimRange(robot_prim):
+                if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                    continue
+                path = str(prim.GetPath())
+                rel = path.replace(root, "")
+                if rel.startswith("fl/"):
+                    fl_paths.append((rel, path))
+                elif rel.startswith("fr/"):
+                    fr_paths.append((rel, path))
+
+            if not fl_paths or not fr_paths:
+                continue
+
+            fr_labels = [label for label, _ in fr_paths]
+            fr_filter_paths = [path for _, path in fr_paths]
+            robotselfcontact_views[robot_name] = {}
+            for fl_label, fl_path in fl_paths:
+                robotselfcontact_views[robot_name][fl_label] = {
+                    "view": RigidContactView(
+                        prim_paths_expr=fl_path,
+                        filter_paths_expr=fr_filter_paths,
+                    ),
+                    "filter_labels": fr_labels,
+                }
+        return robotselfcontact_views
+
+    def _fix_obstacle_physics_hierarchy(self):
+        """Repair articulated obstacle USDs before PhysX initializes."""
+        from pxr import UsdPhysics
+
+        for obj_name, obj in self.objects.items():
+            if "obstacle" not in obj_name.lower():
+                continue
+            prim = get_prim_at_path(obj.prim_path)
+            if not prim or not prim.IsValid():
+                continue
+            if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                prim.RemoveAPI(UsdPhysics.RigidBodyAPI)
+            if prim.HasAPI(UsdPhysics.MassAPI):
+                prim.RemoveAPI(UsdPhysics.MassAPI)
+            for child in Usd.PrimRange(prim):
+                if child == prim or not child.HasAPI(UsdPhysics.CollisionAPI):
+                    continue
+                mesh_api = UsdPhysics.MeshCollisionAPI.Apply(child)
+                approx = mesh_api.GetApproximationAttr()
+                if not approx:
+                    approx = mesh_api.CreateApproximationAttr()
+                if approx.Get() in (None, "", "none"):
+                    approx.Set("convexHull")
 
     def _set_regions(self):
         """Randomize object poses according to region configs."""
