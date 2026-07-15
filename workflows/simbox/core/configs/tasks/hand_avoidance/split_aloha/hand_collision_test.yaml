@@ -66,7 +66,9 @@ tasks:
       # ── Hand obstacle (MANO hand model, moves toward robot) ──
       -
         name: obstacle_1
-        path: task/hand_model/mano_hand.usd
+        # Wrapper keeps the referenced /mano prim below the object root so
+        # RigidObject's prim_path_child resolves to obstacle_1/mano.
+        path: task/hand_model/mano_hand_fixed.usda
         target_class: RigidObject
         prim_path_child: mano
         translation: [0.0, 0.0, 0.0]

@@ -114,7 +114,7 @@ class EnvLoader(SceneLoader):
         """
         if self.scene is not None and self.task_repeat_cnt > 0 and self.task_repeat_idx < self.task_repeat_cnt:
             self.logger.info(f"Task execute times {self.task_repeat_idx + 1}/{self.task_repeat_cnt}")
-            self.workflow.init_task(self.cur_index - 1, self.need_preload)
+            self._initialize_workflow_task(self.cur_index - 1)
             self.task_repeat_idx += 1
             scene = Scene(
                 name=self.workflow.get_task_name(),
@@ -128,7 +128,7 @@ class EnvLoader(SceneLoader):
             self.logger.info("No more tasks to load, stopping iteration.")
             raise StopIteration
         self.logger.info(f"Loading task {self.cur_index + 1}/{len(self.workflow.task_cfgs)}")
-        self.workflow.init_task(self.cur_index, self.need_preload)
+        self._initialize_workflow_task(self.cur_index)
         self.task_repeat_idx = 1
         scene = Scene(
             name=self.workflow.get_task_name(),
@@ -139,6 +139,24 @@ class EnvLoader(SceneLoader):
         )
         self.cur_index += 1
         return scene
+
+    def _initialize_workflow_task(self, task_index: int) -> None:
+        """Initialize one task and remove partial world state on failure.
+
+        ``World.add_task`` registers a task before ``World.reset`` builds its
+        scene.  If scene construction raises, retrying without clearing leaves
+        the registered name behind and masks the original error with
+        ``Task name should be unique in the world``.
+        """
+        try:
+            self.workflow.init_task(task_index, self.need_preload)
+        except Exception:
+            self.scene = None
+            try:
+                self.workflow.world.clear()
+            except Exception as cleanup_error:  # pylint: disable=broad-except
+                self.logger.warning(f"Failed to clear partially initialized task: {cleanup_error}")
+            raise
 
     def load_asset(self) -> Scene:
         """
