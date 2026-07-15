@@ -391,6 +391,7 @@ class BananaBaseTask(BaseTask):
                                     ] = RigidContactView(
                                         prim_paths_expr=self._task_objects[object_name].object_link_path,
                                         filter_paths_expr=filter_paths_expr,
+                                        max_contact_count=1000,
                                     )
                                 if (object_name + "_fingers_base") not in artcontact_views[robot_name][lr_name]:
                                     artcontact_views[robot_name][lr_name][
@@ -398,6 +399,7 @@ class BananaBaseTask(BaseTask):
                                     ] = RigidContactView(
                                         prim_paths_expr=self._task_objects[object_name].object_base_path,
                                         filter_paths_expr=filter_paths_expr,
+                                        max_contact_count=1000,
                                     )
 
                                 if (object_name + "_forbid_collision") not in artcontact_views[robot_name][lr_name]:
@@ -407,6 +409,7 @@ class BananaBaseTask(BaseTask):
                                         prim_paths_expr=self._task_objects[object_name].object_prim_path
                                         + "/instance/*",
                                         filter_paths_expr=forbid_collision_paths,
+                                        max_contact_count=1000,
                                     )
 
         return artcontact_views
@@ -508,6 +511,7 @@ class BananaBaseTask(BaseTask):
                     "view": RigidContactView(
                         prim_paths_expr=fl_path,
                         filter_paths_expr=fr_filter_paths,
+                        max_contact_count=1000,
                     ),
                     "filter_labels": fr_labels,
                 }

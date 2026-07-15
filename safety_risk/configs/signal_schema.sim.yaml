@@ -57,12 +57,12 @@ environment_state:
 
 # ── Precise distance GT ─────────────────────────────────────────────────────
 distance_gt:
-  robot_human_distance_matrix_gt: {type: "matrix[link,bodypart]", unit: cm, freq: "50-500Hz", required: M0, id: S-DIST-001}
-  ee_human_distance_gt:           {type: "float/time_series",    unit: cm, freq: "50-500Hz", required: M0, id: S-DIST-002}
-  object_human_distance_gt:       {type: "float/time_series",    unit: cm, freq: "50-500Hz", required: M0, id: S-DIST-003}
-  object_env_distance_gt:         {type: "float/matrix",         unit: cm, freq: "50-500Hz", required: M0, id: S-DIST-004}
-  link_env_distance_gt:           {type: "float/matrix",         unit: cm, freq: "50-500Hz", required: M0, id: S-DIST-005}
-  self_distance_gt:               {type: "float/matrix",         unit: cm, freq: "50-500Hz", required: M0, id: S-DIST-006}
+  robot_human_distance_matrix_gt: {type: "matrix[link,bodypart]", unit: m, freq: "50-500Hz", required: M0, id: S-DIST-001}
+  ee_human_distance_gt:           {type: "float/time_series",    unit: m, freq: "50-500Hz", required: M0, id: S-DIST-002}
+  object_human_distance_gt:       {type: "float/time_series",    unit: m, freq: "50-500Hz", required: M0, id: S-DIST-003}
+  object_env_distance_gt:         {type: "float/matrix",         unit: m, freq: "50-500Hz", required: M0, id: S-DIST-004}
+  link_env_distance_gt:           {type: "float/matrix",         unit: m, freq: "50-500Hz", required: M0, id: S-DIST-005}
+  self_distance_gt:               {type: "float/matrix",         unit: m, freq: "50-500Hz", required: M0, id: S-DIST-006}
 
 # ── Collision / contact GT ──────────────────────────────────────────────────
 collision_gt:

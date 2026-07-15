@@ -829,6 +829,17 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 raw_gt["distance_gt"]["link_env_distance_gt"] = physx_data.get("link_env_distance_gt")
                 raw_gt["distance_gt"]["self_distance_gt"] = physx_data.get("self_distance_gt")
 
+                # Recompute S-DIST-001 after PhysX link_pose_gt has been injected.
+                # The extractor initially runs before PhysX data is merged, so this
+                # matrix would otherwise remain None even though link poses exist.
+                try:
+                    raw_extractor._compute_human_distances_from_obstacles(raw_gt)
+                    matrix = raw_gt.get("distance_gt", {}).get("robot_human_distance_matrix_gt")
+                    if matrix:
+                        print(f"[safety_risk] robot_human_distance_matrix_gt recomputed ({len(matrix)} frames)")
+                except Exception as e:
+                    print(f"[safety_risk] Warning: robot_human_distance_matrix_gt recompute failed: {e}")
+
                 # Planner data
                 raw_gt["planner_log"]["planned_trajectory"] = physx_data.get("planned_trajectory")
                 raw_gt["planner_log"]["safety_gate_status"] = physx_data.get("safety_gate_status")
@@ -924,53 +935,207 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             print(f"[safety_risk] Warning: pipeline failed: {e}")
 
     def _read_object_physical_params(self) -> dict:
-        """S-OBJ-004: Read physical parameters from USD prims for all task objects.
+        """S-OBJ-004: Read the four required physical parameters per object.
 
-        Returns dict: {object_name: {bounding_box_m, target_class}}
+        Output is intentionally compact: mass, friction, inertia, and size.
+        Units: kg, dimensionless friction coefficient, kg*m^2, and meters.
         """
-        from pxr import UsdGeom
+        from pxr import Usd, UsdGeom
 
         result = {}
         stage = self.world.stage
         if stage is None:
             return result
 
+        def _to_float(value):
+            try:
+                if isinstance(value, bool):
+                    return None
+                return float(value)
+            except Exception:
+                return None
+
+        def _to_float_list(value):
+            if value is None:
+                return None
+            try:
+                return [float(v) for v in value]
+            except Exception:
+                single = _to_float(value)
+                return [single] if single is not None else None
+
+        def _walk_prims(root_prim):
+            try:
+                return list(Usd.PrimRange(root_prim))
+            except Exception:
+                return [root_prim]
+
+        def _attr_value(prim, attr_names):
+            for attr_name in attr_names:
+                try:
+                    attr = prim.GetAttribute(attr_name)
+                    if attr and attr.HasValue():
+                        value = attr.Get()
+                        if value is not None:
+                            return value, attr_name, str(prim.GetPath())
+                except Exception:
+                    continue
+            return None, None, None
+
+        def _first_attr(root_prim, attr_names):
+            for prim in _walk_prims(root_prim):
+                value, attr_name, prim_path = _attr_value(prim, attr_names)
+                if value is not None:
+                    return value, attr_name, prim_path
+            return None, None, None
+
+        def _sum_vector_components(components):
+            if not components:
+                return None
+            max_len = max(len(v) for v in components)
+            total = [0.0] * max_len
+            for vec in components:
+                for idx, val in enumerate(vec):
+                    total[idx] += float(val)
+            return total
+
+        def _read_mass_kg(root_prim, obj_cfg):
+            value, _, _ = _attr_value(root_prim, ["physics:mass", "mass"])
+            mass = _to_float(value)
+            if mass is not None:
+                return mass
+
+            masses = []
+            for prim in _walk_prims(root_prim):
+                if prim == root_prim:
+                    continue
+                value, _, _ = _attr_value(prim, ["physics:mass", "mass"])
+                mass = _to_float(value)
+                if mass is not None:
+                    masses.append(mass)
+            if masses:
+                return float(sum(masses))
+
+            for key in ["mass_kg", "mass"]:
+                mass = _to_float(obj_cfg.get(key))
+                if mass is not None:
+                    return mass
+            return None
+
+        def _read_inertia(root_prim, mass_kg, size_m):
+            value, _, _ = _attr_value(root_prim, ["physics:diagonalInertia", "diagonalInertia"])
+            inertia = _to_float_list(value)
+            if inertia:
+                return inertia, "usd:physics:diagonalInertia"
+
+            components = []
+            for prim in _walk_prims(root_prim):
+                if prim == root_prim:
+                    continue
+                value, _, _ = _attr_value(prim, ["physics:diagonalInertia", "diagonalInertia"])
+                inertia = _to_float_list(value)
+                if inertia:
+                    components.append(inertia)
+            summed = _sum_vector_components(components)
+            if summed:
+                return summed, "usd:physics:diagonalInertia_sum"
+
+            # Fallback: approximate the object as a box using its world bbox.
+            # Ixx = 1/12*m*(y^2+z^2), Iyy = 1/12*m*(x^2+z^2), Izz = 1/12*m*(x^2+y^2)
+            if mass_kg is not None and size_m and len(size_m) >= 3:
+                x, y, z = size_m[:3]
+                return [
+                    float(mass_kg * (y * y + z * z) / 12.0),
+                    float(mass_kg * (x * x + z * z) / 12.0),
+                    float(mass_kg * (x * x + y * y) / 12.0),
+                ], "box_approximation_from_mass_and_bbox"
+            return None, "missing"
+
+        def _material_targets(root_prim):
+            targets = []
+            seen = set()
+            for prim in _walk_prims(root_prim):
+                try:
+                    relationships = prim.GetRelationships()
+                except Exception:
+                    relationships = []
+                for rel in relationships:
+                    if "material" not in rel.GetName().lower():
+                        continue
+                    try:
+                        rel_targets = rel.GetTargets()
+                    except Exception:
+                        rel_targets = []
+                    for target in rel_targets:
+                        target_path = str(target)
+                        if target_path and target_path not in seen:
+                            seen.add(target_path)
+                            targets.append(target_path)
+            return targets
+
+        def _first_material_attr(root_prim, attr_names):
+            value, _, _ = _first_attr(root_prim, attr_names)
+            if value is not None:
+                return value
+            for material_path in _material_targets(root_prim):
+                material_prim = stage.GetPrimAtPath(material_path)
+                if material_prim and material_prim.IsValid():
+                    value, _, _ = _attr_value(material_prim, attr_names)
+                    if value is not None:
+                        return value
+            return None
+
         for obj_cfg in self.task_cfg.get("objects", []):
             obj_name = obj_cfg.get("name", "")
             if not obj_name:
                 continue
 
-            # Find the prim path for this object
-            prim_path = f"/World/task_0/{obj_name}"
-            prim = stage.GetPrimAtPath(prim_path)
+            prim_path_candidates = []
+            obj = getattr(self, "objects", {}).get(obj_name) if hasattr(self, "objects") else None
+            obj_prim_path = getattr(obj, "prim_path", None) if obj is not None else None
+            if obj_prim_path:
+                prim_path_candidates.append(str(obj_prim_path))
+            prim_path_candidates.extend([f"/World/task_0/{obj_name}", f"/World/{obj_name}"])
 
-            if not prim or not prim.IsValid():
-                # Try alternate path
-                prim_path = f"/World/{obj_name}"
-                prim = stage.GetPrimAtPath(prim_path)
-
+            prim = None
+            for candidate in prim_path_candidates:
+                candidate_prim = stage.GetPrimAtPath(candidate)
+                if candidate_prim and candidate_prim.IsValid():
+                    prim = candidate_prim
+                    break
             if not prim or not prim.IsValid():
                 continue
 
-            params = {}
-
-            # Read bounding box
+            size_m = None
             try:
-                bbox_cache = UsdGeom.BBoxCache(
-                    0.0, [UsdGeom.Tokens.default_]
-                )
+                bbox_cache = UsdGeom.BBoxCache(0.0, [UsdGeom.Tokens.default_])
                 bbox = bbox_cache.ComputeWorldBound(prim)
-                if bbox and bbox.ComputeAlignedRange().GetSize():
-                    size = bbox.ComputeAlignedRange().GetSize()
-                    params["bounding_box_m"] = [float(size[0]), float(size[1]), float(size[2])]
+                size = bbox.ComputeAlignedRange().GetSize()
+                size_m = [float(size[0]), float(size[1]), float(size[2])]
             except Exception:
-                pass
+                size_m = None
 
-            # Object config info
-            params["target_class"] = obj_cfg.get("target_class", "RigidObject")
+            mass_kg = _read_mass_kg(prim, obj_cfg)
 
-            if params:
-                result[obj_name] = params
+            static_friction = _to_float(_first_material_attr(prim, [
+                "physics:staticFriction", "physxMaterial:staticFriction", "staticFriction",
+            ]))
+            dynamic_friction = _to_float(_first_material_attr(prim, [
+                "physics:dynamicFriction", "physxMaterial:dynamicFriction", "dynamicFriction",
+            ]))
+
+            inertia_kg_m2, inertia_method = _read_inertia(prim, mass_kg, size_m)
+
+            result[obj_name] = {
+                "mass_kg": mass_kg,
+                "friction": {
+                    "static": static_friction,
+                    "dynamic": dynamic_friction,
+                },
+                "inertia_kg_m2": inertia_kg_m2,
+                "inertia_method": inertia_method,
+                "size_m": size_m,
+            }
 
         return result
 

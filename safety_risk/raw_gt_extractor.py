@@ -1244,30 +1244,54 @@ class SimRawGTExtractor:
                 dist["object_human_distance_gt"] = obj_dists
 
         # ── S-DIST-001: robot_human_distance_matrix_gt ──
-        # Compute distances from ALL robot links to each obstacle
+        # Compute a per-step robot-link × human-surrogate distance matrix.
+        # Current PhysX collector writes link_pose_gt as:
+        #   [{robot_name: {link_name: [x, y, z, qx, qy, qz, qw]}}]
+        # Older outputs may be flat:
+        #   [{link_name: [x, y, z, ...]}]
+        # Support both shapes and keep all link-level distances in meters.
         all_link_poses = robot.get("link_pose_gt")
         if all_link_poses and obs_trajs:
             matrix = []
-            for i in range(len(all_link_poses)):
-                step_links = all_link_poses[i]
+
+            def _iter_link_positions(step_links):
                 if not isinstance(step_links, dict):
-                    continue
+                    return
+                for name, value in step_links.items():
+                    # Nested shape: robot_name -> {link_name: pose}
+                    if isinstance(value, dict):
+                        robot_name = str(name)
+                        for link_name, link_pose in value.items():
+                            if (link_pose is not None and hasattr(link_pose, "__len__")
+                                    and len(link_pose) >= 3 and link_pose[0] is not None):
+                                yield f"{robot_name}/{link_name}", link_pose
+                    # Flat shape: link_name -> pose
+                    elif (value is not None and hasattr(value, "__len__")
+                          and len(value) >= 3 and value[0] is not None):
+                        yield str(name), value
+
+            for i, step_links in enumerate(all_link_poses):
                 row = {}
+                link_items = list(_iter_link_positions(step_links))
+                if not link_items:
+                    matrix.append(None)
+                    continue
+
                 for obs_name, obs_traj in obs_trajs.items():
                     idx = min(i, len(obs_traj) - 1)
                     obs = obs_traj[idx]
-                    # Find minimum distance across all links
-                    min_d = float('inf')
-                    for link_name, link_pose in step_links.items():
-                        if link_pose and len(link_pose) >= 3 and link_pose[0] is not None:
-                            dx = link_pose[0] - obs[0]
-                            dy = link_pose[1] - obs[1]
-                            dz = link_pose[2] - obs[2]
-                            d = math.sqrt(dx * dx + dy * dy + dz * dz)
-                            min_d = min(min_d, d)
-                    row[obs_name] = min_d if min_d < float('inf') else None
-                matrix.append(row)
-            dist["robot_human_distance_matrix_gt"] = matrix
+                    obs_row = {}
+                    for link_name, link_pose in link_items:
+                        dx = float(link_pose[0]) - obs[0]
+                        dy = float(link_pose[1]) - obs[1]
+                        dz = float(link_pose[2]) - obs[2]
+                        obs_row[link_name] = math.sqrt(dx * dx + dy * dy + dz * dz)
+                    row[obs_name] = obs_row
+
+                matrix.append(row if row else None)
+
+            if any(step is not None for step in matrix):
+                dist["robot_human_distance_matrix_gt"] = matrix
 
     def _compute_joint_torque_from_pd(self, raw_gt: Dict, dt: float) -> None:
         """S-ROBOT-004: Estimate joint torques from PD control law.

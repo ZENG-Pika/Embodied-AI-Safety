@@ -657,6 +657,89 @@ class PhysXDataCollector:
                 pass
             return None
 
+        def _hertzian_depth(force_magnitude, stiffness=1e6):
+            return float((max(float(force_magnitude), 0.0) / stiffness) ** (2.0 / 3.0))
+
+        def _penetration_from_contact_data(contact_data, start_indices, contact_counts, force_magnitude):
+            """Return penetration-depth metadata from PhysX contact data if available.
+
+            Isaac/PhysX contact views expose detailed contact arrays via
+            get_contact_force_data(). The fourth returned array is treated as
+            the per-contact distance/separation signal. Negative separation and
+            positive penetration conventions vary across APIs/configs, so the
+            reported depth_m is the mean absolute contact distance, while the
+            raw signed mean/min/max are kept for validation. If detailed contact
+            distances are unavailable, fall back to a low-confidence Hertzian
+            force-based estimate.
+            """
+            fallback_reason = "no_contact_data"
+            try:
+                if start_indices.size > 0 and contact_counts.size > 0 and len(contact_data) > 3:
+                    distances = np.asarray(contact_data[3], dtype=float).reshape(-1)
+                    counts = np.asarray(contact_counts)
+                    starts = np.asarray(start_indices)
+
+                    if counts.size == 0 or starts.size == 0 or distances.size == 0:
+                        fallback_reason = "empty_contact_buffers"
+                    else:
+                        # pair_contacts_count/start_indices are matrices with shape
+                        # (num_shapes, num_filters).  The previous implementation only
+                        # checked [0, 0], which misses obstacle-vs-whole-robot contacts
+                        # when the active robot link is any other filter column.
+                        counts = counts.reshape(starts.shape) if counts.shape != starts.shape else counts
+                        all_vals = []
+                        active_pair_slots = []
+                        invalid_pair_slots = []
+                        for pair_idx in np.ndindex(counts.shape):
+                            n_contacts = int(counts[pair_idx])
+                            if n_contacts <= 0:
+                                continue
+                            start = int(starts[pair_idx])
+                            end = start + n_contacts
+                            if start < 0 or end > len(distances):
+                                invalid_pair_slots.append({
+                                    "pair_index": [int(x) for x in pair_idx],
+                                    "start": start,
+                                    "count": n_contacts,
+                                })
+                                continue
+                            vals = distances[start:end]
+                            if vals.size > 0:
+                                all_vals.append(vals)
+                                active_pair_slots.append({
+                                    "pair_index": [int(x) for x in pair_idx],
+                                    "start": start,
+                                    "count": n_contacts,
+                                })
+
+                        if all_vals:
+                            vals = np.concatenate(all_vals).astype(float).reshape(-1)
+                            return {
+                                "depth_m": float(np.mean(np.abs(vals))),
+                                "method": "physx_contact_distance",
+                                "source": "contact_view.get_contact_force_data()[3]",
+                                "confidence": "medium_high",
+                                "num_contact_points": int(vals.size),
+                                "active_contact_pair_slots": len(active_pair_slots),
+                                "active_contact_pair_indices_sample": active_pair_slots[:8],
+                                "invalid_contact_pair_slots": len(invalid_pair_slots),
+                                "contact_distance_mean_m": float(np.mean(vals)),
+                                "contact_distance_min_m": float(np.min(vals)),
+                                "contact_distance_max_m": float(np.max(vals)),
+                            }
+                        fallback_reason = "zero_contact_counts"
+            except Exception as exc:
+                fallback_reason = f"exception:{type(exc).__name__}"
+            return {
+                "depth_m": _hertzian_depth(force_magnitude),
+                "method": "hertzian_fallback",
+                "source": "contact_force_magnitude",
+                "confidence": "low",
+                "num_contact_points": 0,
+                "hertzian_stiffness_n_per_m": 1e6,
+                "fallback_reason": fallback_reason,
+            }
+
         if hasattr(task, 'pickcontact_views'):
             for robot_name, lr_dict in task.pickcontact_views.items():
                 for lr_name, obj_dict in lr_dict.items():
@@ -667,8 +750,8 @@ class PhysXDataCollector:
                             if contact_data is not None:
                                 forces = contact_data[0]      # (max_contact_count, 1)
                                 points = contact_data[1]      # (max_contact_count, 3)
-                                start_indices = contact_data[4]  # (num_shapes, num_filters)
-                                contact_counts = contact_data[5]  # (num_shapes, num_filters)
+                                contact_counts = contact_data[4]  # (num_shapes, num_filters)
+                                start_indices = contact_data[5]  # (num_shapes, num_filters)
 
                                 force_magnitude = float(np.sum(np.abs(forces)))
                                 if force_magnitude <= 0.01:
@@ -714,23 +797,14 @@ class PhysXDataCollector:
                                             "location_m": obj_pos,
                                         })
 
-                                # Penetration depth from contact distances
-                                if start_indices.size > 0 and contact_counts.size > 0:
-                                    start = int(start_indices[0, 0]) if start_indices.ndim >= 2 else int(start_indices[0])
-                                    n_contacts = int(contact_counts[0, 0]) if contact_counts.ndim >= 2 else int(contact_counts[0])
-                                    if n_contacts > 0 and start + n_contacts <= len(contact_data[3]):
-                                        depths = contact_data[3][start:start + n_contacts]
-                                        avg_depth = float(np.mean(np.abs(depths)))
-                                    else:
-                                        avg_depth = (force_magnitude / 1e6) ** (2.0 / 3.0)
-                                else:
-                                    avg_depth = (force_magnitude / 1e6) ** (2.0 / 3.0)
-
-                                penetration_depths.append({
+                                depth_info = _penetration_from_contact_data(
+                                    contact_data, start_indices, contact_counts, force_magnitude
+                                )
+                                depth_info.update({
                                     "bodyA": f"robot/{robot_name}/{lr_name}",
                                     "bodyB": f"object/{obj_name}",
-                                    "depth_m": avg_depth,
                                 })
+                                penetration_depths.append(depth_info)
 
                                 total_force[0] += float(np.sum(forces[:, 0])) if forces.size > 0 else 0
                                 total_force[1] += 0
@@ -767,6 +841,11 @@ class PhysXDataCollector:
                                             "bodyA": f"robot/{robot_name}/{lr_name}",
                                             "bodyB": f"object/{obj_name}",
                                             "depth_m": delta,
+                                            "method": "hertzian_fallback",
+                                            "source": "contact_view.get_contact_force_matrix()",
+                                            "confidence": "low",
+                                            "num_contact_points": 0,
+                                            "hertzian_stiffness_n_per_m": stiffness,
                                         })
                                         total_force[0] += float(force_sum[0]) if len(force_sum) > 0 else 0
                                         total_force[1] += float(force_sum[1]) if len(force_sum) > 1 else 0
@@ -807,6 +886,11 @@ class PhysXDataCollector:
                                         "bodyA": f"robot/{robot_name}/{lr_name}",
                                         "bodyB": f"environment/{view_name}",
                                         "depth_m": delta,
+                                        "method": "hertzian_fallback",
+                                        "source": "contact_view.get_contact_force_matrix()",
+                                        "confidence": "low",
+                                        "num_contact_points": 0,
+                                        "hertzian_stiffness_n_per_m": stiffness,
                                     })
 
                                     total_impulse += force_magnitude * dt
@@ -827,8 +911,8 @@ class PhysXDataCollector:
                             if contact_data is not None:
                                 forces = contact_data[0]
                                 points = contact_data[1]
-                                start_indices = contact_data[4]
-                                contact_counts = contact_data[5]
+                                contact_counts = contact_data[4]
+                                start_indices = contact_data[5]
 
                                 force_magnitude = float(np.sum(np.abs(forces)))
                                 if force_magnitude <= 0.01:
@@ -870,23 +954,14 @@ class PhysXDataCollector:
                                         "location_m": obj_pos,
                                     })
 
-                                # Penetration depth from contact distances
-                                if start_indices.size > 0 and contact_counts.size > 0:
-                                    start = int(start_indices[0, 0]) if start_indices.ndim >= 2 else int(start_indices[0])
-                                    n_contacts = int(contact_counts[0, 0]) if contact_counts.ndim >= 2 else int(contact_counts[0])
-                                    if n_contacts > 0 and start + n_contacts <= len(contact_data[3]):
-                                        depths = contact_data[3][start:start + n_contacts]
-                                        avg_depth = float(np.mean(np.abs(depths)))
-                                    else:
-                                        avg_depth = (force_magnitude / 1e6) ** (2.0 / 3.0)
-                                else:
-                                    avg_depth = (force_magnitude / 1e6) ** (2.0 / 3.0)
-
-                                penetration_depths.append({
+                                depth_info = _penetration_from_contact_data(
+                                    contact_data, start_indices, contact_counts, force_magnitude
+                                )
+                                depth_info.update({
                                     "bodyA": body_a,
                                     "bodyB": body_b,
-                                    "depth_m": avg_depth,
                                 })
+                                penetration_depths.append(depth_info)
                                 total_impulse += force_magnitude * dt
                             else:
                                 # Fallback to get_contact_force_matrix
@@ -913,7 +988,12 @@ class PhysXDataCollector:
                                     penetration_depths.append({
                                         "bodyA": body_a,
                                         "bodyB": body_b,
-                                        "depth_m": (force_magnitude / 1e6) ** (2.0 / 3.0),
+                                        "depth_m": _hertzian_depth(force_magnitude),
+                                        "method": "hertzian_fallback",
+                                        "source": "contact_view.get_contact_force_matrix()",
+                                        "confidence": "low",
+                                        "num_contact_points": 0,
+                                        "hertzian_stiffness_n_per_m": 1e6,
                                     })
                                     total_impulse += force_magnitude * dt
                         except Exception as exc:
@@ -967,7 +1047,12 @@ class PhysXDataCollector:
                             penetration_depths.append({
                                 "bodyA": body_a,
                                 "bodyB": body_b,
-                                "depth_m": (force_magnitude / 1e6) ** (2.0 / 3.0),
+                                "depth_m": _hertzian_depth(force_magnitude),
+                                "method": "hertzian_fallback",
+                                "source": "contact_view.get_contact_force_matrix()",
+                                "confidence": "low",
+                                "num_contact_points": 0,
+                                "hertzian_stiffness_n_per_m": 1e6,
                             })
                             total_impulse += force_magnitude * dt
                     except Exception as exc:
@@ -1137,47 +1222,59 @@ class PhysXDataCollector:
                 except Exception:
                     obj_env_dists[obj_name] = None
 
-        # Link-env distances using robot EE and base positions
+        # Link-env distances: every discovered robot link to every task object.
+        # Earlier versions only reported base/fl_ee_path/fr_ee_path nearest-object
+        # distances.  Use link_pose_gt collected in this same step so the output is
+        # complete for all robot links and still stays easy for downstream code to
+        # reduce via min(value).
         link_env_dists = {}
+        latest_link_poses = self._data.get("link_pose_gt")[-1] if self._data.get("link_pose_gt") else None
+
         for robot_name, robot in task.robots.items():
             try:
-                # Collect known robot positions
-                link_positions = []
+                link_positions = {}
 
-                # Base position
-                try:
-                    base_pos, _ = robot.get_world_pose()
-                    link_positions.append(("base", list(base_pos)))
-                except Exception:
-                    pass
+                if isinstance(latest_link_poses, dict):
+                    robot_links = latest_link_poses.get(robot_name, {})
+                    if isinstance(robot_links, dict):
+                        for link_name, link_pose in robot_links.items():
+                            if (isinstance(link_pose, (list, tuple)) and len(link_pose) >= 3
+                                    and link_pose[0] is not None):
+                                link_positions[link_name] = [float(link_pose[0]), float(link_pose[1]), float(link_pose[2])]
 
-                # EE positions from known paths
-                for ee_attr in ['fl_ee_path', 'fr_ee_path']:
-                    if hasattr(robot, ee_attr):
-                        ee_path = getattr(robot, ee_attr)
-                        if ee_path:
-                            try:
-                                from omni.isaac.core.utils.prims import get_prim_at_path
-                                from omni.isaac.core.utils.xforms import get_world_pose
-                                prim = get_prim_at_path(ee_path)
-                                if prim and prim.IsValid():
-                                    pos, _ = get_world_pose(ee_path)
-                                    link_positions.append((ee_attr, list(pos)))
-                            except Exception:
-                                pass
+                # Fallbacks keep the field non-empty even if link discovery fails.
+                if not link_positions:
+                    try:
+                        base_pos, _ = robot.get_world_pose()
+                        link_positions["base"] = list(base_pos)
+                    except Exception:
+                        pass
 
-                # Compute distance from each link to nearest object
-                for link_name, link_pos in link_positions:
-                    min_dist = float('inf')
-                    if hasattr(task, 'objects'):
+                    for ee_attr in ['fl_ee_path', 'fr_ee_path']:
+                        if hasattr(robot, ee_attr):
+                            ee_path = getattr(robot, ee_attr)
+                            if ee_path:
+                                try:
+                                    from omni.isaac.core.utils.prims import get_prim_at_path
+                                    from omni.isaac.core.utils.xforms import get_world_pose
+                                    prim = get_prim_at_path(ee_path)
+                                    if prim and prim.IsValid():
+                                        pos, _ = get_world_pose(ee_path)
+                                        link_positions[ee_attr] = list(pos)
+                                except Exception:
+                                    pass
+
+                if hasattr(task, 'objects'):
+                    for link_name, link_pos in link_positions.items():
+                        link_xyz = np.array(link_pos[:3], dtype=float)
                         for obj_name, obj in task.objects.items():
                             try:
                                 obj_pos, _ = obj.get_world_pose()
-                                d = float(np.linalg.norm(np.array(link_pos) - np.array(obj_pos)))
-                                min_dist = min(min_dist, d)
+                                d = float(np.linalg.norm(link_xyz - np.array(obj_pos, dtype=float)))
+                                key = f"{robot_name}/{link_name}→{obj_name}"
+                                link_env_dists[key] = d
                             except Exception:
                                 pass
-                    link_env_dists[link_name] = min_dist if min_dist < float('inf') else None
 
             except Exception:
                 pass
