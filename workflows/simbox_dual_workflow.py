@@ -940,7 +940,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         Output is intentionally compact: mass, friction, inertia, and size.
         Units: kg, dimensionless friction coefficient, kg*m^2, and meters.
         """
-        from pxr import Usd, UsdGeom
+        from pxr import Gf, Usd, UsdGeom
 
         result = {}
         stage = self.world.stage
@@ -999,6 +999,16 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     total[idx] += float(val)
             return total
 
+        def _valid_inertia(value):
+            """Reject unset/placeholder inertia values authored as zero."""
+            inertia = _to_float_list(value)
+            if inertia is None or len(inertia) < 3:
+                return None
+            inertia = inertia[:3]
+            if not all(math.isfinite(component) and component > 0.0 for component in inertia):
+                return None
+            return inertia
+
         def _read_mass_kg(root_prim, obj_cfg):
             value, _, _ = _attr_value(root_prim, ["physics:mass", "mass"])
             mass = _to_float(value)
@@ -1024,32 +1034,47 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
         def _read_inertia(root_prim, mass_kg, size_m):
             value, _, _ = _attr_value(root_prim, ["physics:diagonalInertia", "diagonalInertia"])
-            inertia = _to_float_list(value)
-            if inertia:
+            inertia = _valid_inertia(value)
+            if inertia is not None:
                 return inertia, "usd:physics:diagonalInertia"
 
-            components = []
-            for prim in _walk_prims(root_prim):
-                if prim == root_prim:
-                    continue
-                value, _, _ = _attr_value(prim, ["physics:diagonalInertia", "diagonalInertia"])
-                inertia = _to_float_list(value)
-                if inertia:
-                    components.append(inertia)
-            summed = _sum_vector_components(components)
-            if summed:
-                return summed, "usd:physics:diagonalInertia_sum"
-
-            # Fallback: approximate the object as a box using its world bbox.
-            # Ixx = 1/12*m*(y^2+z^2), Iyy = 1/12*m*(x^2+z^2), Izz = 1/12*m*(x^2+y^2)
-            if mass_kg is not None and size_m and len(size_m) >= 3:
+            # A zero diagonal inertia is commonly authored as an USD placeholder.
+            # Prefer a whole-object estimate over summing child-link inertias: a
+            # correct aggregate would also require every link pose and the
+            # parallel-axis theorem.
+            if (
+                mass_kg is not None
+                and math.isfinite(mass_kg)
+                and mass_kg > 0.0
+                and size_m
+                and len(size_m) >= 3
+                and all(math.isfinite(v) and v > 0.0 for v in size_m[:3])
+            ):
                 x, y, z = size_m[:3]
                 return [
                     float(mass_kg * (y * y + z * z) / 12.0),
                     float(mass_kg * (x * x + z * z) / 12.0),
                     float(mass_kg * (x * x + y * y) / 12.0),
                 ], "box_approximation_from_mass_and_bbox"
+
+            # Last resort for assets whose world bounding box is unavailable.
+            components = []
+            for prim in _walk_prims(root_prim):
+                if prim == root_prim:
+                    continue
+                value, _, _ = _attr_value(prim, ["physics:diagonalInertia", "diagonalInertia"])
+                inertia = _valid_inertia(value)
+                if inertia is not None:
+                    components.append(inertia)
+            summed = _sum_vector_components(components)
+            if summed:
+                return summed, "usd:physics:diagonalInertia_sum"
             return None, "missing"
+
+        def _friction_from_config(obj_cfg, component):
+            physical_params = obj_cfg.get("physical_params", {}) or {}
+            friction = physical_params.get("friction", {}) or {}
+            return _to_float(friction.get(component))
 
         def _material_targets(root_prim):
             targets = []
@@ -1109,9 +1134,14 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             size_m = None
             try:
                 bbox_cache = UsdGeom.BBoxCache(0.0, [UsdGeom.Tokens.default_])
-                bbox = bbox_cache.ComputeWorldBound(prim)
+                # Use orientation-independent local dimensions, then apply the
+                # composed world scale. A world-aligned bbox changes whenever a
+                # randomly placed object rotates and would make inertia unstable.
+                bbox = bbox_cache.ComputeLocalBound(prim)
                 size = bbox.ComputeAlignedRange().GetSize()
-                size_m = [float(size[0]), float(size[1]), float(size[2])]
+                transform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(0.0)
+                scale = Gf.Transform(transform).GetScale()
+                size_m = [abs(float(size[i]) * float(scale[i])) for i in range(3)]
             except Exception:
                 size_m = None
 
@@ -1123,6 +1153,10 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             dynamic_friction = _to_float(_first_material_attr(prim, [
                 "physics:dynamicFriction", "physxMaterial:dynamicFriction", "dynamicFriction",
             ]))
+            if static_friction is None:
+                static_friction = _friction_from_config(obj_cfg, "static")
+            if dynamic_friction is None:
+                dynamic_friction = _friction_from_config(obj_cfg, "dynamic")
 
             inertia_kg_m2, inertia_method = _read_inertia(prim, mass_kg, size_m)
 

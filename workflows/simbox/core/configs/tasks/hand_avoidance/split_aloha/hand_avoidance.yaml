@@ -75,6 +75,12 @@ tasks:
         euler: [0.0, 0.0, 0.0]
         scale: [1.25, 1.25, 1.25]
         apply_randomization: False
+        # MANO does not bind a PhysicsMaterial. Use an explicit task-level
+        # fallback instead of emitting null friction in object_physical_params.
+        physical_params:
+          friction:
+            static: 0.5
+            dynamic: 0.5
 
     # ── Region placement ──
     regions:
