@@ -829,16 +829,32 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 raw_gt["distance_gt"]["link_env_distance_gt"] = physx_data.get("link_env_distance_gt")
                 raw_gt["distance_gt"]["self_distance_gt"] = physx_data.get("self_distance_gt")
 
-                # Recompute S-DIST-001 after PhysX link_pose_gt has been injected.
-                # The extractor initially runs before PhysX data is merged, so this
-                # matrix would otherwise remain None even though link poses exist.
+                # Rebuild EE poses from full per-step PhysX link_pose_gt before
+                # recomputing human distances.  LMDB T_base_ee_fl/fr can be scoped
+                # to manipulation segments and is often shorter than the sim.
+                try:
+                    raw_extractor._rebuild_ee_poses_from_link_pose_gt(raw_gt)
+                    ee_left = raw_gt.get("robot_state", {}).get("ee_pose_gt") or []
+                    ee_right = raw_gt.get("robot_state", {}).get("ee_pose_right_gt") or []
+                    if ee_left or ee_right:
+                        print(f"[safety_risk] ee_pose_gt rebuilt from link_pose_gt (left={len(ee_left)}, right={len(ee_right)})")
+                except Exception as e:
+                    print(f"[safety_risk] Warning: ee_pose_gt rebuild failed: {e}")
+
+                # Recompute S-DIST-001/002/003 after PhysX link_pose_gt and rebuilt
+                # EE pose have been injected. The extractor initially runs before
+                # PhysX data is merged, so these distances may otherwise be stale or
+                # shorter than the simulation timeline.
                 try:
                     raw_extractor._compute_human_distances_from_obstacles(raw_gt)
                     matrix = raw_gt.get("distance_gt", {}).get("robot_human_distance_matrix_gt")
+                    ee_human = raw_gt.get("distance_gt", {}).get("ee_human_distance_gt")
                     if matrix:
                         print(f"[safety_risk] robot_human_distance_matrix_gt recomputed ({len(matrix)} frames)")
+                    if ee_human:
+                        print(f"[safety_risk] ee_human_distance_gt recomputed ({len(ee_human)} frames)")
                 except Exception as e:
-                    print(f"[safety_risk] Warning: robot_human_distance_matrix_gt recompute failed: {e}")
+                    print(f"[safety_risk] Warning: human distance recompute failed: {e}")
 
                 # Planner data
                 raw_gt["planner_log"]["planned_trajectory"] = physx_data.get("planned_trajectory")

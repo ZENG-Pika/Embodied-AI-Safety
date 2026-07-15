@@ -1145,6 +1145,76 @@ class SimRawGTExtractor:
 
         outcome["damage_state_gt"] = severity
 
+    def _rebuild_ee_poses_from_link_pose_gt(self, raw_gt: Dict) -> None:
+        """Rebuild per-step left/right EE poses from complete PhysX link poses.
+
+        LMDB T_base_ee_fl/fr can be skill/segment scoped and shorter than the
+        simulation timeline.  link_pose_gt is collected every PhysX step, so use
+        the configured EE link paths there to make ee_pose_gt and
+        ee_pose_right_gt full-length time series.
+        """
+        robot = raw_gt.get("robot_state", {})
+        link_pose_gt = robot.get("link_pose_gt")
+        if not isinstance(link_pose_gt, list) or not link_pose_gt:
+            return
+
+        def _task_robot_configs():
+            cfg = getattr(self, "task_cfg", None) or {}
+            robots = cfg.get("robots", []) if isinstance(cfg, dict) else []
+            if isinstance(robots, list):
+                return robots
+            return []
+
+        def _ee_suffixes(side: str):
+            # side: "fl" or "fr"
+            suffixes = []
+            attr = f"{side}_ee_path"
+            for robot_cfg in _task_robot_configs():
+                ee_path = robot_cfg.get(attr) if isinstance(robot_cfg, dict) else None
+                if ee_path:
+                    suffixes.append(str(ee_path))
+            # split_aloha/lift2 default EE link is link6. link8 is kept only as a
+            # fallback for gripper/collision-only assets or other robot configs.
+            suffixes.extend([f"/{side}/link6", f"/{side}/link8", f"{side}/link6", f"{side}/link8"])
+            return suffixes
+
+        def _find_pose_in_frame(frame, side: str):
+            if not isinstance(frame, dict):
+                return None
+            suffixes = _ee_suffixes(side)
+            candidate_items = []
+            for robot_name, links in frame.items():
+                if isinstance(links, dict):
+                    for link_name, pose in links.items():
+                        candidate_items.append((robot_name, link_name, pose))
+            for suffix in suffixes:
+                normalized_suffix = suffix.strip("/")
+                for _, link_name, pose in candidate_items:
+                    link_norm = str(link_name).strip("/")
+                    if link_norm == normalized_suffix or link_norm.endswith("/" + normalized_suffix):
+                        if isinstance(pose, (list, tuple)) and len(pose) >= 7 and pose[0] is not None:
+                            return [float(v) for v in pose[:7]]
+            return None
+
+        left_poses = []
+        right_poses = []
+        left_found = 0
+        right_found = 0
+        for frame in link_pose_gt:
+            left = _find_pose_in_frame(frame, "fl")
+            right = _find_pose_in_frame(frame, "fr")
+            left_poses.append(left)
+            right_poses.append(right)
+            if left is not None:
+                left_found += 1
+            if right is not None:
+                right_found += 1
+
+        if left_found > 0:
+            robot["ee_pose_gt"] = left_poses
+        if right_found > 0:
+            robot["ee_pose_right_gt"] = right_poses
+
     def _compute_human_distances_from_obstacles(self, raw_gt: Dict) -> None:
         """S-DIST-001/002/003: Compute human distances using obstacle surrogates.
 

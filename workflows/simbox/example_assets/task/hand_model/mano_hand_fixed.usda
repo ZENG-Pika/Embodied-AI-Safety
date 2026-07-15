@@ -8,7 +8,7 @@
 def Xform "Root"
 {
     def Xform "mano" (
-        references = @mano_hand.usd@</mano>
+        references = @mano_hand.usd@</Root/mano>
     )
     {
     }
