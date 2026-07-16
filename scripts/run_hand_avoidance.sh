@@ -59,7 +59,10 @@ if [[ -d /usr/local/cuda-12.8 ]]; then
   export LD_LIBRARY_PATH="/usr/local/cuda-12.8/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 
-export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-12.0}"
+if [[ -n "${TORCH_CUDA_ARCH_LIST:-}" ]]; then
+  export TORCH_CUDA_ARCH_LIST
+  echo "Using TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST"
+fi
 
 echo "Using ISAACSIM_ROOT=$ISAACSIM_ROOT"
 echo "Using CONFIG=$CONFIG"
