@@ -191,6 +191,18 @@ wrapper 使用相对引用 `@mano_hand.usd@`，不要改回某台机器专用的
 
 ### 4.1 推荐启动命令
 
+最新版仓库已提供便捷脚本。该脚本会自动寻找 Isaac Sim，并配置
+PyTorch、CUDA、`LD_LIBRARY_PATH` 和 `TORCH_CUDA_ARCH_LIST`：
+
+```bash
+cd /home/wp/Embodied-AI-Safety
+
+ISAACSIM_ROOT=/home/wp/isaacsim-4.1.0 \
+./scripts/run_hand_avoidance.sh
+```
+
+以下原始命令仍然有效，可用于排查环境变量问题：
+
 ```bash
 cd /home/wp/Embodied-AI-Safety
 
@@ -206,7 +218,17 @@ export PATH=/usr/local/cuda-12.8/bin:${PATH}
 
 ### 4.2 推荐的日志运行方式
 
-长时间运行时建议保存日志：
+使用便捷脚本保存日志：
+
+```bash
+cd /home/wp/Embodied-AI-Safety
+
+ISAACSIM_ROOT=/home/wp/isaacsim-4.1.0 \
+LOG_FILE=/tmp/hand-avoidance-run.log \
+./scripts/run_hand_avoidance.sh
+```
+
+也可以使用原始命令重定向日志：
 
 ```bash
 cd /home/wp/Embodied-AI-Safety
@@ -228,7 +250,27 @@ export PATH=/usr/local/cuda-12.8/bin:${PATH}
 tail -f /tmp/hand-avoidance-run.log
 ```
 
-### 4.3 启动前快速检查
+### 4.3 可视化与无界面运行
+
+显示 Isaac Sim 窗口：
+
+```yaml
+headless: false
+```
+
+无界面批量运行：
+
+```yaml
+headless: true
+```
+
+该设置位于：
+
+```text
+configs/simbox/de_hand_avoidance.yaml
+```
+
+### 4.4 启动前快速检查
 
 确认 PyTorch 可导入：
 
@@ -238,12 +280,13 @@ PYTHONPATH=/home/wp/isaacsim-4.1.0/torch-cu128 \
   "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
-确认 MANO 文件和 wrapper 存在：
+确认 MANO 文件、wrapper 和本机兼容路径存在：
 
 ```bash
 test -f workflows/simbox/example_assets/task/hand_model/mano_hand.usd
 test -f workflows/simbox/example_assets/task/hand_model/mano_hand_fixed.usda
-test -f workflows/simbox/example_assets/task/hand_model/configuration/mano_physics.usd
+test -f InternDataAssets/assets/mano_urdf/mano.usd
+test -f /home/pika/Workspace/pika/InternDataEngine/InternDataAssets/assets/mano_urdf/mano/mano.usd
 ```
 
 确认两个任务配置正在使用 wrapper：
@@ -340,24 +383,179 @@ pipeline failed
 
 ## 7. 仓库更新注意事项
 
-后续执行 `git pull` 后，应确认以下本机资源没有被远程路径覆盖：
+当前仓库中的 MANO USD 同时依赖仓库根目录相对路径和资产内部的作者绝对路径。
+本机已创建以下两个兼容软链接：
 
 ```text
-workflows/simbox/example_assets/task/hand_model/mano_hand.usd
-workflows/simbox/example_assets/task/hand_model/configuration
+/home/wp/Embodied-AI-Safety/InternDataAssets -> /home/wp/InternDataAssets
+/home/pika/Workspace/pika/InternDataEngine/InternDataAssets -> /home/wp/InternDataAssets
 ```
 
-本机正确目标应位于：
+普通 `git pull`、切换分支或更新 tracked 文件不会删除这两个链接，因此通常不需要
+重复创建。以下情况需要重新检查或创建：
 
-```text
-/home/wp/InternDataAssets/assets/mano_urdf/mano/
+1. 重新克隆仓库；
+2. 换电脑或重装系统；
+3. 移动 `/home/wp/InternDataAssets`；
+4. 执行会删除未跟踪文件的 `git clean -fd`；
+5. 上游再次修改 MANO 资产路径。
+
+重新创建仓库根目录兼容链接：
+
+```bash
+cd /home/wp/Embodied-AI-Safety
+ln -s /home/wp/InternDataAssets InternDataAssets
 ```
 
-可通过以下命令确认：
+重新创建作者绝对路径兼容链接（需要管理员权限）：
+
+```bash
+sudo mkdir -p /home/pika/Workspace/pika/InternDataEngine
+sudo ln -s /home/wp/InternDataAssets \
+  /home/pika/Workspace/pika/InternDataEngine/InternDataAssets
+```
+
+验证链接：
 
 ```bash
 readlink -f workflows/simbox/example_assets/task/hand_model/mano_hand.usd
-readlink -f workflows/simbox/example_assets/task/hand_model/configuration
+readlink -f /home/pika/Workspace/pika/InternDataEngine/InternDataAssets
 ```
 
-同时确保 `mano_hand_fixed.usda` 已纳入后续提交；否则在其他工作副本中仅修改 YAML 会造成 wrapper 文件缺失。
+如果上游后续已经修复为完全相对路径，则 `/home/pika/...` 兼容链接可以删除。
+
+## 8. 自己从 GitHub 更新和上传分支
+
+### 8.1 查看当前状态
+
+进入仓库并确认当前分支、未提交文件和远程地址：
+
+```bash
+cd /home/wp/Embodied-AI-Safety
+
+git status --short --branch
+git branch -vv
+git remote -v
+```
+
+本机的 `InternDataAssets` 是兼容软链接，不应提交到 GitHub。`output/` 是运行产物，
+也不应作为代码提交。
+
+### 8.2 没有本地修改时更新当前分支
+
+```bash
+cd /home/wp/Embodied-AI-Safety
+
+git fetch origin --prune
+git pull --ff-only
+```
+
+`--ff-only` 可以避免 Git 在不知情的情况下自动生成合并提交。如果提示无法快进，
+应先检查本地和远程提交，不要直接使用强制覆盖命令。
+
+### 8.3 有本地修改时更新当前分支
+
+先临时保存 tracked 和 untracked 修改：
+
+```bash
+cd /home/wp/Embodied-AI-Safety
+
+git status --short --branch
+git stash push -u -m "local changes before pull"
+git pull --ff-only
+git stash pop
+```
+
+如果 `git stash pop` 报冲突，应停止并逐个检查冲突文件，不要使用
+`git reset --hard`。确认本机兼容链接仍然存在：
+
+```bash
+test -L InternDataAssets
+readlink -f InternDataAssets
+```
+
+对于已经完成且应该上传的代码，优先先提交到自己的分支，再更新远程；不要长期依赖 stash。
+
+### 8.4 创建自己的开发分支
+
+建议从最新目标分支创建新分支。以下以当前修复分支为基础：
+
+```bash
+cd /home/wp/Embodied-AI-Safety
+
+git fetch origin --prune
+git switch fix/hand-avoidance-runtime
+git pull --ff-only
+git switch -c fix/my-change
+```
+
+分支名示例：
+
+```text
+fix/object-physical-params
+fix/mano-asset-path
+docs/update-runbook
+```
+
+### 8.5 暂存和检查准备上传的文件
+
+只添加本次确实需要提交的文件，不建议直接使用 `git add .`：
+
+```bash
+git add path/to/file1 path/to/file2
+
+git status --short
+git diff --cached --check
+git diff --cached --stat
+git diff --cached
+```
+
+重点确认暂存区中没有以下内容：
+
+```text
+InternDataAssets
+output/
+/home/wp/... 等本机绝对路径
+密码、密钥和访问令牌
+```
+
+### 8.6 提交并上传新分支
+
+首次使用时可设置当前仓库的 Git 身份：
+
+```bash
+git config user.name "syh-i"
+git config user.email "1932957180@qq.com"
+```
+
+提交并推送：
+
+```bash
+git commit -m "Describe the change"
+git push -u origin fix/my-change
+```
+
+后续继续向同一分支上传：
+
+```bash
+git push
+```
+
+上传后可在 GitHub 上从 `fix/my-change` 向目标分支创建 Pull Request。
+
+### 8.7 更新已经存在的远程分支
+
+如果当前分支已经跟踪同名远程分支：
+
+```bash
+git status --short --branch
+git pull --ff-only
+
+# 修改并检查文件后：
+git add path/to/changed-file
+git diff --cached --check
+git commit -m "Describe the change"
+git push
+```
+
+不要使用 `git push --force`，除非明确理解它会改写远程提交历史，并已获得其他协作者同意。

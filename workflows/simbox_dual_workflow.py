@@ -951,12 +951,18 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             print(f"[safety_risk] Warning: pipeline failed: {e}")
 
     def _read_object_physical_params(self) -> dict:
-        """S-OBJ-004: Read the four required physical parameters per object.
+        """S-OBJ-004: Export traceable physical parameters for task objects.
 
-        Output is intentionally compact: mass, friction, inertia, and size.
+        Dynamic rigid-body mass properties come from the live PhysX tensor
+        views. USD is used for explicitly authored material properties and as a
+        fallback only when a runtime view is unavailable. Zero USD inertia is
+        treated as an instruction for PhysX to compute inertia, not as data.
+
         Units: kg, dimensionless friction coefficient, kg*m^2, and meters.
         """
-        from pxr import Gf, Usd, UsdGeom
+        from omni.isaac.core.articulations import ArticulationView
+        from omni.isaac.core.prims import RigidPrimView
+        from pxr import Usd, UsdGeom, UsdPhysics
 
         result = {}
         stage = self.world.stage
@@ -979,6 +985,20 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             except Exception:
                 single = _to_float(value)
                 return [single] if single is not None else None
+
+        def _to_numpy(value):
+            if value is None:
+                return None
+            try:
+                if hasattr(value, "detach"):
+                    value = value.detach()
+                if hasattr(value, "cpu"):
+                    value = value.cpu()
+                if hasattr(value, "numpy"):
+                    value = value.numpy()
+                return np.asarray(value, dtype=np.float64)
+            except Exception:
+                return None
 
         def _walk_prims(root_prim):
             try:
@@ -1005,16 +1025,6 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     return value, attr_name, prim_path
             return None, None, None
 
-        def _sum_vector_components(components):
-            if not components:
-                return None
-            max_len = max(len(v) for v in components)
-            total = [0.0] * max_len
-            for vec in components:
-                for idx, val in enumerate(vec):
-                    total[idx] += float(val)
-            return total
-
         def _valid_inertia(value):
             """Reject unset/placeholder inertia values authored as zero."""
             inertia = _to_float_list(value)
@@ -1025,67 +1035,39 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 return None
             return inertia
 
-        def _read_mass_kg(root_prim, obj_cfg):
-            value, _, _ = _attr_value(root_prim, ["physics:mass", "mass"])
+        def _read_authored_mass_kg(root_prim, obj_cfg):
+            value, attr_name, prim_path = _attr_value(root_prim, ["physics:mass", "mass"])
             mass = _to_float(value)
             if mass is not None:
-                return mass
+                return mass, f"usd:{prim_path}:{attr_name}"
 
             masses = []
+            mass_sources = []
             for prim in _walk_prims(root_prim):
                 if prim == root_prim:
                     continue
-                value, _, _ = _attr_value(prim, ["physics:mass", "mass"])
+                value, attr_name, prim_path = _attr_value(prim, ["physics:mass", "mass"])
                 mass = _to_float(value)
                 if mass is not None:
                     masses.append(mass)
+                    mass_sources.append(f"{prim_path}:{attr_name}")
             if masses:
-                return float(sum(masses))
+                return float(sum(masses)), "usd_sum:" + ",".join(mass_sources)
 
             for key in ["mass_kg", "mass"]:
                 mass = _to_float(obj_cfg.get(key))
                 if mass is not None:
-                    return mass
-            return None
+                    return mass, f"task_config:{key}"
+            return None, "missing"
 
-        def _read_inertia(root_prim, mass_kg, size_m):
-            value, _, _ = _attr_value(root_prim, ["physics:diagonalInertia", "diagonalInertia"])
+        def _read_authored_inertia(root_prim):
+            value, attr_name, prim_path = _attr_value(
+                root_prim, ["physics:diagonalInertia", "diagonalInertia"]
+            )
             inertia = _valid_inertia(value)
             if inertia is not None:
-                return inertia, "usd:physics:diagonalInertia"
-
-            # A zero diagonal inertia is commonly authored as an USD placeholder.
-            # Prefer a whole-object estimate over summing child-link inertias: a
-            # correct aggregate would also require every link pose and the
-            # parallel-axis theorem.
-            if (
-                mass_kg is not None
-                and math.isfinite(mass_kg)
-                and mass_kg > 0.0
-                and size_m
-                and len(size_m) >= 3
-                and all(math.isfinite(v) and v > 0.0 for v in size_m[:3])
-            ):
-                x, y, z = size_m[:3]
-                return [
-                    float(mass_kg * (y * y + z * z) / 12.0),
-                    float(mass_kg * (x * x + z * z) / 12.0),
-                    float(mass_kg * (x * x + y * y) / 12.0),
-                ], "box_approximation_from_mass_and_bbox"
-
-            # Last resort for assets whose world bounding box is unavailable.
-            components = []
-            for prim in _walk_prims(root_prim):
-                if prim == root_prim:
-                    continue
-                value, _, _ = _attr_value(prim, ["physics:diagonalInertia", "diagonalInertia"])
-                inertia = _valid_inertia(value)
-                if inertia is not None:
-                    components.append(inertia)
-            summed = _sum_vector_components(components)
-            if summed:
-                return summed, "usd:physics:diagonalInertia_sum"
-            return None, "missing"
+                return inertia, f"usd:{prim_path}:{attr_name}"
+            return None, "missing_or_zero_placeholder"
 
         def _friction_from_config(obj_cfg, component):
             physical_params = obj_cfg.get("physical_params", {}) or {}
@@ -1115,16 +1097,152 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             return targets
 
         def _first_material_attr(root_prim, attr_names):
-            value, _, _ = _first_attr(root_prim, attr_names)
+            value, attr_name, prim_path = _first_attr(root_prim, attr_names)
             if value is not None:
-                return value
+                return value, f"usd:{prim_path}:{attr_name}"
             for material_path in _material_targets(root_prim):
                 material_prim = stage.GetPrimAtPath(material_path)
                 if material_prim and material_prim.IsValid():
-                    value, _, _ = _attr_value(material_prim, attr_names)
+                    value, attr_name, prim_path = _attr_value(material_prim, attr_names)
                     if value is not None:
-                        return value
+                        return value, f"usd_physics_material:{prim_path}:{attr_name}"
+            return None, "unbound_or_missing"
+
+        def _matrix_and_principal_moments(flat_matrix):
+            array = _to_numpy(flat_matrix)
+            if array is None or array.size < 9:
+                return None, None
+            matrix = array.reshape((-1, 9))[0].reshape((3, 3))
+            matrix = 0.5 * (matrix + matrix.T)
+            if not np.all(np.isfinite(matrix)):
+                return None, None
+            try:
+                moments = np.linalg.eigvalsh(matrix)
+            except Exception:
+                return None, None
+            if not np.all(np.isfinite(moments)) or np.any(moments <= 0.0):
+                return None, None
+            return matrix.tolist(), moments.tolist()
+
+        def _read_runtime_rigid_body(obj, rigid_prim_path, obj_name):
+            """Read the live PhysX body, rebuilding a stale wrapper view if needed."""
+
+            def _read_view(view):
+                if view is None:
+                    return None
+                try:
+                    if not view.is_physics_handle_valid():
+                        view.initialize(self.world.physics_sim_view)
+                except Exception:
+                    # Older Isaac Sim view variants do not expose the validity
+                    # helper; initialize against the active simulation anyway.
+                    view.initialize(self.world.physics_sim_view)
+
+                masses = _to_numpy(view.get_masses())
+                inertia_matrix, moments = _matrix_and_principal_moments(view.get_inertias())
+                if masses is None or masses.size == 0 or inertia_matrix is None:
+                    return None
+                mass = float(masses.reshape(-1)[0])
+                if not math.isfinite(mass) or mass <= 0.0:
+                    return None
+
+                center_of_mass = None
+                principal_axes = None
+                try:
+                    com_result = view.get_coms()
+                    if com_result is not None:
+                        positions = _to_numpy(com_result[0])
+                        orientations = _to_numpy(com_result[1])
+                        if positions is not None and positions.size >= 3:
+                            center_of_mass = positions.reshape((-1, 3))[0].tolist()
+                        if orientations is not None and orientations.size >= 4:
+                            principal_axes = orientations.reshape((-1, 4))[0].tolist()
+                except Exception:
+                    pass
+
+                return {
+                    "mass_kg": mass,
+                    "inertia_kg_m2": moments,
+                    "inertia_matrix_kg_m2": inertia_matrix,
+                    "center_of_mass_m": center_of_mass,
+                    "principal_axes_quat_wxyz": principal_axes,
+                }
+
+            errors = []
+            existing_view = getattr(obj, "_rigid_prim_view", None)
+            if existing_view is not None:
+                try:
+                    runtime_data = _read_view(existing_view)
+                    if runtime_data is not None:
+                        return runtime_data
+                    errors.append("existing view returned no valid mass/inertia")
+                except Exception as exc:
+                    errors.append(f"existing view: {exc}")
+
+            # RigidObject views are invalidated by the hard resets used during
+            # layout randomization. A fresh read-only view bound to the current
+            # simulation makes the exported values reflect the saved episode.
+            try:
+                fresh_view = RigidPrimView(
+                    prim_paths_expr=rigid_prim_path,
+                    name=f"physical_params_{obj_name}",
+                    reset_xform_properties=False,
+                    prepare_contact_sensors=False,
+                )
+                fresh_view.initialize(self.world.physics_sim_view)
+                runtime_data = _read_view(fresh_view)
+                if runtime_data is not None:
+                    return runtime_data
+                errors.append("fresh view returned no valid mass/inertia")
+            except Exception as exc:
+                errors.append(f"fresh view: {exc}")
+
+            print(
+                f"[safety_risk] Warning: PhysX rigid-body read failed for {obj_name} "
+                f"at {rigid_prim_path}: {'; '.join(errors)}"
+            )
             return None
+
+        def _find_articulation_root(root_prim):
+            for candidate in _walk_prims(root_prim):
+                try:
+                    if candidate.HasAPI(UsdPhysics.ArticulationRootAPI):
+                        return candidate
+                except Exception:
+                    continue
+            return None
+
+        def _read_runtime_articulation(articulation_prim, obj_name):
+            try:
+                view = ArticulationView(
+                    prim_paths_expr=str(articulation_prim.GetPath()),
+                    name=f"physical_params_{obj_name}",
+                )
+                view.initialize(self.world.physics_sim_view)
+                masses = _to_numpy(view.get_body_masses())
+                inertias = _to_numpy(view.get_body_inertias())
+                if masses is None or inertias is None:
+                    return None
+                masses = masses.reshape((view.count, view.num_bodies))[0]
+                inertias = inertias.reshape((view.count, view.num_bodies, 9))[0]
+                body_names = list(view.body_names or [])
+                bodies = []
+                for index, mass in enumerate(masses):
+                    matrix, moments = _matrix_and_principal_moments(inertias[index])
+                    bodies.append({
+                        "name": body_names[index] if index < len(body_names) else f"body_{index}",
+                        "mass_kg": float(mass),
+                        "inertia_kg_m2": moments,
+                        "inertia_matrix_kg_m2": matrix,
+                    })
+                return {
+                    "mass_kg": float(np.sum(masses)),
+                    "body_count": len(bodies),
+                    "bodies": bodies,
+                }
+            except Exception as exc:
+                print(f"[safety_risk] Warning: PhysX articulation read failed for {obj_name}: {exc}")
+                return None
 
         for obj_cfg in self.task_cfg.get("objects", []):
             obj_name = obj_cfg.get("name", "")
@@ -1132,7 +1250,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 continue
 
             prim_path_candidates = []
-            obj = getattr(self, "objects", {}).get(obj_name) if hasattr(self, "objects") else None
+            obj = getattr(self.task, "objects", {}).get(obj_name) if hasattr(self, "task") else None
             obj_prim_path = getattr(obj, "prim_path", None) if obj is not None else None
             if obj_prim_path:
                 prim_path_candidates.append(str(obj_prim_path))
@@ -1150,42 +1268,116 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             size_m = None
             try:
                 bbox_cache = UsdGeom.BBoxCache(0.0, [UsdGeom.Tokens.default_])
-                # Use orientation-independent local dimensions, then apply the
-                # composed world scale. A world-aligned bbox changes whenever a
-                # randomly placed object rotates and would make inertia unstable.
                 bbox = bbox_cache.ComputeLocalBound(prim)
                 size = bbox.ComputeAlignedRange().GetSize()
-                transform = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(0.0)
-                scale = Gf.Transform(transform).GetScale()
+                scale = obj.get_world_scale() if obj is not None else [1.0, 1.0, 1.0]
                 size_m = [abs(float(size[i]) * float(scale[i])) for i in range(3)]
             except Exception:
                 size_m = None
 
-            mass_kg = _read_mass_kg(prim, obj_cfg)
-
-            static_friction = _to_float(_first_material_attr(prim, [
+            authored_mass_kg, authored_mass_source = _read_authored_mass_kg(prim, obj_cfg)
+            static_value, static_source = _first_material_attr(prim, [
                 "physics:staticFriction", "physxMaterial:staticFriction", "staticFriction",
-            ]))
-            dynamic_friction = _to_float(_first_material_attr(prim, [
+            ])
+            dynamic_value, dynamic_source = _first_material_attr(prim, [
                 "physics:dynamicFriction", "physxMaterial:dynamicFriction", "dynamicFriction",
-            ]))
-            if static_friction is None:
-                static_friction = _friction_from_config(obj_cfg, "static")
-            if dynamic_friction is None:
-                dynamic_friction = _friction_from_config(obj_cfg, "dynamic")
+            ])
+            static_friction = _to_float(static_value)
+            dynamic_friction = _to_float(dynamic_value)
+            configured_friction = {
+                "static": _friction_from_config(obj_cfg, "static"),
+                "dynamic": _friction_from_config(obj_cfg, "dynamic"),
+            }
 
-            inertia_kg_m2, inertia_method = _read_inertia(prim, mass_kg, size_m)
-
-            result[obj_name] = {
-                "mass_kg": mass_kg,
+            target_class = obj_cfg.get("target_class", "")
+            articulation_prim = _find_articulation_root(prim)
+            common = {
+                "asset_path": obj_cfg.get("path"),
+                "prim_path": str(prim.GetPath()),
                 "friction": {
                     "static": static_friction,
                     "dynamic": dynamic_friction,
                 },
-                "inertia_kg_m2": inertia_kg_m2,
-                "inertia_method": inertia_method,
+                "configured_friction_not_applied": configured_friction,
                 "size_m": size_m,
+                "sources": {
+                    "friction_static": static_source,
+                    "friction_dynamic": dynamic_source,
+                    "size": "usd_local_bbox_x_runtime_world_scale",
+                },
             }
+
+            if target_class == "GeometryObject":
+                common.update({
+                    "physical_role": "static_collider",
+                    "mass_kg": None,
+                    "authored_mass_kg": authored_mass_kg,
+                    "inertia_kg_m2": None,
+                    "inertia_matrix_kg_m2": None,
+                    "inertia_method": "not_applicable_static_collider",
+                })
+                common["sources"].update({
+                    "mass": "not_applicable_static_collider",
+                    "authored_mass": authored_mass_source,
+                    "inertia": "not_applicable_static_collider",
+                })
+                result[obj_name] = common
+                continue
+
+            if articulation_prim is not None:
+                runtime_articulation = _read_runtime_articulation(articulation_prim, obj_name)
+                common.update({
+                    "physical_role": "articulation",
+                    "mass_kg": runtime_articulation.get("mass_kg") if runtime_articulation else authored_mass_kg,
+                    "inertia_kg_m2": None,
+                    "inertia_matrix_kg_m2": None,
+                    "inertia_method": "not_applicable_articulation_use_bodies",
+                    "body_count": runtime_articulation.get("body_count") if runtime_articulation else None,
+                    "bodies": runtime_articulation.get("bodies") if runtime_articulation else None,
+                })
+                common["sources"].update({
+                    "mass": "physx_runtime_articulation" if runtime_articulation else authored_mass_source,
+                    "inertia": "physx_runtime_articulation_bodies" if runtime_articulation else "unavailable",
+                })
+                result[obj_name] = common
+                continue
+
+            runtime_rigid = (
+                _read_runtime_rigid_body(obj, str(prim.GetPath()), obj_name)
+                if obj is not None
+                else None
+            )
+            if runtime_rigid is not None:
+                common.update({
+                    "physical_role": "dynamic_rigid_body",
+                    **runtime_rigid,
+                    "inertia_method": "physx_runtime_tensor",
+                })
+                common["sources"].update({
+                    "mass": "physx_runtime_tensor",
+                    "inertia": "physx_runtime_tensor",
+                    "center_of_mass": "physx_runtime_tensor",
+                })
+            else:
+                authored_inertia, authored_inertia_source = _read_authored_inertia(prim)
+                common.update({
+                    "physical_role": "dynamic_rigid_body",
+                    "mass_kg": authored_mass_kg,
+                    "inertia_kg_m2": authored_inertia,
+                    "inertia_matrix_kg_m2": (
+                        np.diag(authored_inertia).tolist() if authored_inertia is not None else None
+                    ),
+                    "center_of_mass_m": None,
+                    "principal_axes_quat_wxyz": None,
+                    "inertia_method": "usd_authored" if authored_inertia is not None else "unavailable",
+                })
+                common["sources"].update({
+                    "mass": authored_mass_source,
+                    "inertia": authored_inertia_source,
+                    "center_of_mass": "unavailable",
+                })
+
+            result[obj_name] = common
 
         return result
 

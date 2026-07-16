@@ -9,7 +9,7 @@ load_stage:
         physics_dt: 1/30
         rendering_dt: 1/30
         stage_units_in_meters: 1.0
-        headless: true
+        headless: false
         anti_aliasing: 0
   layout_random_generator:
     type: env_randomizer

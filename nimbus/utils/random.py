@@ -22,7 +22,10 @@ def set_all_seeds(seed):
     random.seed(seed)
 
     if o3d and hasattr(o3d, "utility") and hasattr(o3d.utility, "random"):
-        o3d.utility.random.seed(seed)
+        # Open3D's pybind API accepts a signed 32-bit seed, while Nimbus
+        # episode seeds are unsigned 32-bit values. Keep the original seed for
+        # Python/NumPy/Torch and map only Open3D into its supported range.
+        o3d.utility.random.seed(seed % (2**31))
 
     torch.manual_seed(seed)
     if torch.cuda.is_available():
