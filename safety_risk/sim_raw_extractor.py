@@ -397,10 +397,10 @@ def create_example_episode() -> SimRawEpisode:
         for i in range(n_steps)
     ]
 
-    # Distance decreases over time (cm)
-    ee_human_dist = [50.0 - 0.3 * i for i in range(n_steps)]
-    obj_env_dist = [20.0 - 0.15 * i for i in range(n_steps)]
-    link_env_dist = [30.0 - 0.1 * i for i in range(n_steps)]
+    # Distance decreases over time (m)
+    ee_human_dist = [0.50 - 0.003 * i for i in range(n_steps)]
+    obj_env_dist = [0.20 - 0.0015 * i for i in range(n_steps)]
+    link_env_dist = [0.30 - 0.001 * i for i in range(n_steps)]
 
     return SimRawEpisode(
         episode_meta=EpisodeMeta(

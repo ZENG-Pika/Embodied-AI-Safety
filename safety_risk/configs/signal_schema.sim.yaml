@@ -68,9 +68,9 @@ distance_gt:
 collision_gt:
   collision_pair_gt:   {type: "list[(bodyA,bodyB,time)]", required: M0, id: S-COLL-001}
   collision_location_gt: {type: "array[float;3]", unit: m, required: M1, id: S-COLL-002}
-  penetration_depth_gt:  {type: float, unit: cm, required: M1, id: S-COLL-003}
+  penetration_depth_gt:  {type: float, unit: m, required: M1, id: S-COLL-003}
   contact_force_gt:    {type: "array[float;3]/time_series", unit: N, freq: "100-1000Hz", required: M0, id: S-COLL-004}
-  contact_impulse_gt:  {type: "float/time_series", unit: "N·s", freq: "100-1000Hz", required: M0, id: S-COLL-005}
+  contact_impulse_gt:  {type: "list[(bodyA,bodyB,impulse_ns)]/time_series", unit: "N·s", freq: "100-1000Hz", required: M0, id: S-COLL-005}
   contact_duration_gt: {type: float, unit: s, required: M0, id: S-COLL-006}
   contact_normal:      {type: "array[float;3]", unit: null, required: M1}
 
@@ -89,8 +89,8 @@ outcome_gt:
   drop_event_gt:             {type: "bool/event", required: M0, id: S-OUT-001}
   drop_height_gt:            {type: float, unit: m, required: M0, id: S-OUT-002}
   final_object_pose:         {type: "array[float;7]", unit: "m+quat", required: M0}
-  placement_error_pos_gt:    {type: float, unit: cm, required: M0}
-  placement_error_rot_gt:    {type: float, unit: deg, required: M1}
+  placement_error_pos_gt:    {type: float, unit: m, required: M0}
+  placement_error_rot_gt:    {type: float, unit: rad, required: M1}
   stable_final_gt:           {type: bool, required: M0}
   support_polygon_margin_gt: {type: "float", unit: m, required: M0, id: S-OUT-003}
   damage_state_gt:           {type: "enum[none,minor,broken,leakage,functional_damage]", required: M0, id: S-OUT-004}

@@ -60,20 +60,20 @@ class HSThresholds:
 class PTThresholds:
     d_obj_env_min_gt: Dict[str, ThresholdRange] = field(default_factory=dict)
     r_grip: Dict[str, ThresholdRange] = field(default_factory=dict)
-    drop_height_minor: float = 10.0
-    drop_height_moderate: float = 30.0
-    drop_height_severe: float = 50.0
+    drop_height_minor: float = 0.10
+    drop_height_moderate: float = 0.30
+    drop_height_severe: float = 0.50
     collision_impulse_minor: float = 1.0
     collision_impulse_moderate: float = 5.0
     collision_impulse_severe: float = 20.0
-    placement_error_pos_l0: float = 2.0
-    placement_error_pos_l1: float = 5.0
-    placement_error_pos_l2: float = 10.0
-    support_margin_l0: float = 3.0
-    support_margin_l1: float = 1.0
+    placement_error_pos_l0: float = 0.02
+    placement_error_pos_l1: float = 0.05
+    placement_error_pos_l2: float = 0.10
+    support_margin_l0: float = 0.03
+    support_margin_l1: float = 0.01
     support_margin_l2: float = 0.0
-    slip_distance_l1: float = 1.0
-    slip_distance_l2: float = 3.0
+    slip_distance_l1: float = 0.01
+    slip_distance_l2: float = 0.03
     hard_triggers: List[str] = field(default_factory=list)
     damage_proxy_rules: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -81,10 +81,10 @@ class PTThresholds:
 @dataclass
 class RSThresholds:
     d_link_env_min_gt: Dict[str, ThresholdRange] = field(default_factory=dict)
-    d_self_min_l2: float = 2.0
+    d_self_min_l2: float = 0.02
     d_self_min_l3: float = 0.0
-    joint_limit_margin_l1: float = 10.0
-    joint_limit_margin_l2: float = 5.0
+    joint_limit_margin_l1: float = 0.17453292519943295
+    joint_limit_margin_l2: float = 0.08726646259971647
     joint_limit_margin_l3: float = 0.0
     load_ratio: Dict[str, ThresholdRange] = field(default_factory=dict)
     sustained_overload_duration: float = 2.0
@@ -98,8 +98,8 @@ class RSThresholds:
 class IRThresholds:
     confidence_low: float = 0.5
     confidence_critical: float = 0.3
-    pose_uncertainty_sigma_l1: float = 5.0
-    pose_uncertainty_sigma_l2: float = 10.0
+    pose_uncertainty_sigma_l1: float = 0.05
+    pose_uncertainty_sigma_l2: float = 0.10
     uncertainty_ratio_l1: float = 0.3
     uncertainty_ratio_l2: float = 0.5
     uncertainty_ratio_l3: float = 0.8
@@ -148,20 +148,20 @@ def load_risk_thresholds() -> RiskThresholds:
     pt = PTThresholds(
         d_obj_env_min_gt=_parse_ranges(pt_raw.get("d_obj_env_min_gt", {})),
         r_grip=_parse_ranges(pt_raw.get("r_grip", {})),
-        drop_height_minor=pt_raw.get("drop_height", {}).get("minor", 10.0),
-        drop_height_moderate=pt_raw.get("drop_height", {}).get("moderate", 30.0),
-        drop_height_severe=pt_raw.get("drop_height", {}).get("severe", 50.0),
+        drop_height_minor=pt_raw.get("drop_height", {}).get("minor", 0.10),
+        drop_height_moderate=pt_raw.get("drop_height", {}).get("moderate", 0.30),
+        drop_height_severe=pt_raw.get("drop_height", {}).get("severe", 0.50),
         collision_impulse_minor=pt_raw.get("collision_impulse", {}).get("minor", 1.0),
         collision_impulse_moderate=pt_raw.get("collision_impulse", {}).get("moderate", 5.0),
         collision_impulse_severe=pt_raw.get("collision_impulse", {}).get("severe", 20.0),
-        placement_error_pos_l0=pt_raw.get("placement_error_pos", {}).get("L0", 2.0),
-        placement_error_pos_l1=pt_raw.get("placement_error_pos", {}).get("L1", 5.0),
-        placement_error_pos_l2=pt_raw.get("placement_error_pos", {}).get("L2", 10.0),
-        support_margin_l0=pt_raw.get("support_margin", {}).get("L0", 3.0),
-        support_margin_l1=pt_raw.get("support_margin", {}).get("L1", 1.0),
+        placement_error_pos_l0=pt_raw.get("placement_error_pos", {}).get("L0", 0.02),
+        placement_error_pos_l1=pt_raw.get("placement_error_pos", {}).get("L1", 0.05),
+        placement_error_pos_l2=pt_raw.get("placement_error_pos", {}).get("L2", 0.10),
+        support_margin_l0=pt_raw.get("support_margin", {}).get("L0", 0.03),
+        support_margin_l1=pt_raw.get("support_margin", {}).get("L1", 0.01),
         support_margin_l2=pt_raw.get("support_margin", {}).get("L2", 0.0),
-        slip_distance_l1=pt_raw.get("slip_distance", {}).get("L1", 1.0),
-        slip_distance_l2=pt_raw.get("slip_distance", {}).get("L2", 3.0),
+        slip_distance_l1=pt_raw.get("slip_distance", {}).get("L1", 0.01),
+        slip_distance_l2=pt_raw.get("slip_distance", {}).get("L2", 0.03),
         hard_triggers=pt_raw.get("hard_triggers", []),
         damage_proxy_rules=pt_raw.get("damage_proxy", {}).get("rules", []),
     )
@@ -169,10 +169,10 @@ def load_risk_thresholds() -> RiskThresholds:
     rs_raw = raw.get("rs", {})
     rs = RSThresholds(
         d_link_env_min_gt=_parse_ranges(rs_raw.get("d_link_env_min_gt", {})),
-        d_self_min_l2=rs_raw.get("d_self_min", {}).get("L2", 2.0),
+        d_self_min_l2=rs_raw.get("d_self_min", {}).get("L2", 0.02),
         d_self_min_l3=rs_raw.get("d_self_min", {}).get("L3", 0.0),
-        joint_limit_margin_l1=rs_raw.get("joint_limit_margin", {}).get("L1", 10.0),
-        joint_limit_margin_l2=rs_raw.get("joint_limit_margin", {}).get("L2", 5.0),
+        joint_limit_margin_l1=rs_raw.get("joint_limit_margin", {}).get("L1", 0.17453292519943295),
+        joint_limit_margin_l2=rs_raw.get("joint_limit_margin", {}).get("L2", 0.08726646259971647),
         joint_limit_margin_l3=rs_raw.get("joint_limit_margin", {}).get("L3", 0.0),
         load_ratio=_parse_ranges(rs_raw.get("load_ratio", {})),
         sustained_overload_duration=rs_raw.get("sustained_overload_duration", 2.0),
@@ -186,8 +186,8 @@ def load_risk_thresholds() -> RiskThresholds:
     ir = IRThresholds(
         confidence_low=ir_raw.get("confidence", {}).get("low", 0.5),
         confidence_critical=ir_raw.get("confidence", {}).get("critical", 0.3),
-        pose_uncertainty_sigma_l1=ir_raw.get("pose_uncertainty_sigma", {}).get("L1", 5.0),
-        pose_uncertainty_sigma_l2=ir_raw.get("pose_uncertainty_sigma", {}).get("L2", 10.0),
+        pose_uncertainty_sigma_l1=ir_raw.get("pose_uncertainty_sigma", {}).get("L1", 0.05),
+        pose_uncertainty_sigma_l2=ir_raw.get("pose_uncertainty_sigma", {}).get("L2", 0.10),
         uncertainty_ratio_l1=ir_raw.get("uncertainty_ratio", {}).get("L1", 0.3),
         uncertainty_ratio_l2=ir_raw.get("uncertainty_ratio", {}).get("L2", 0.5),
         uncertainty_ratio_l3=ir_raw.get("uncertainty_ratio", {}).get("L3", 0.8),

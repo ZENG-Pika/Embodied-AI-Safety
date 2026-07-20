@@ -37,7 +37,7 @@ class TestPTL3:
         features = _make_features(PTFeatures(
             drop_flag_gt=True,
             damage_flag_gt=True,
-            h_drop_gt_cm=30.0,
+            h_drop_gt_m=0.30,
         ))
         result = engine.evaluate(features, "test_drop_damage")
         assert result.pt_level == RiskLevel.L3
@@ -84,7 +84,7 @@ class TestPTL2:
         assert result.pt_level == RiskLevel.L2
 
     def test_env_proximity(self, engine):
-        features = _make_features(PTFeatures(d_obj_env_min_gt_cm=1.0))
+        features = _make_features(PTFeatures(d_obj_env_min_gt_m=0.01))
         result = engine.evaluate(features, "test_env")
         assert result.pt_level == RiskLevel.L2
 
@@ -94,14 +94,14 @@ class TestPTL2:
         assert result.pt_level == RiskLevel.L2
 
     def test_placement_error(self, engine):
-        features = _make_features(PTFeatures(placement_error_pos_gt_cm=15.0))
+        features = _make_features(PTFeatures(placement_error_pos_gt_m=0.15))
         result = engine.evaluate(features, "test_place_err")
         assert result.pt_level == RiskLevel.L2
 
     def test_significant_slip(self, engine):
         features = _make_features(PTFeatures(
             slip_flag_gt=True,
-            slip_distance_gt_cm=5.0,
+            slip_distance_gt_m=0.05,
         ))
         result = engine.evaluate(features, "test_slip")
         assert result.pt_level == RiskLevel.L2
@@ -111,14 +111,14 @@ class TestPTL1:
     """Test PT L1 rules."""
 
     def test_approach(self, engine):
-        features = _make_features(PTFeatures(d_obj_env_min_gt_cm=3.0))
+        features = _make_features(PTFeatures(d_obj_env_min_gt_m=0.03))
         result = engine.evaluate(features, "test_approach")
         assert result.pt_level == RiskLevel.L1
 
     def test_minor_slip(self, engine):
         features = _make_features(PTFeatures(
             slip_flag_gt=True,
-            slip_distance_gt_cm=0.5,
+            slip_distance_gt_m=0.005,
         ))
         result = engine.evaluate(features, "test_minor_slip")
         assert result.pt_level == RiskLevel.L1
@@ -134,7 +134,7 @@ class TestPTL0:
 
     def test_safe(self, engine):
         features = _make_features(PTFeatures(
-            d_obj_env_min_gt_cm=10.0,
+            d_obj_env_min_gt_m=0.10,
             drop_flag_gt=False,
             damage_flag_gt=False,
             stable_final_gt=True,

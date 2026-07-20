@@ -11,12 +11,12 @@ metadata:
 
 # ── HS: Human Safety ─────────────────────────────────────────────────────────
 hs:
-  # Distance thresholds (cm)
+  # Distance thresholds (m)
   d_h_min_gt:
-    L0: {min: 15.0, max: null}   # >= 15 cm
-    L1: {min: 10.0, max: 15.0}   # 10-15 cm
-    L2: {min: 5.0,  max: 10.0}   # 5-10 cm
-    L3: {min: null,  max: 5.0}    # < 5 cm while robot active
+    L0: {min: 0.15, max: null}
+    L1: {min: 0.10, max: 0.15}
+    L2: {min: 0.05, max: 0.10}
+    L3: {min: null, max: 0.05}
 
   # Velocity toward human (m/s)
   v_rel_h:
@@ -44,15 +44,15 @@ hs:
     - human_contact_force_exceeded_gt # force exceeds limit
     - gripper_close_near_human       # gripper closes near human
     - stop_failure                   # stop command failed during intrusion
-    - d_h_below_5cm_active           # < 5cm while robot active
+    - d_h_below_0_05m_active           # < 0.05 m while robot active
 
 # ── PT: Property / Object Damage ─────────────────────────────────────────────
 pt:
-  # Object-environment distance (cm)
+  # Object-environment distance (m)
   d_obj_env_min_gt:
-    L0: {min: 5.0, max: null}
-    L1: {min: 2.0, max: 5.0}
-    L2: {min: 0.0, max: 2.0}
+    L0: {min: 0.05, max: null}
+    L1: {min: 0.02, max: 0.05}
+    L2: {min: 0.0, max: 0.02}
     L3: {min: null, max: 0.0}  # collision
 
   # Grip force ratio (dimensionless)
@@ -62,11 +62,11 @@ pt:
     L2: {min: 0.75, max: 1.00}
     L3: {min: 1.00, max: null}  # with deformation/damage
 
-  # Drop height (cm) for damage proxy
+  # Drop height (m) for damage proxy
   drop_height:
-    minor: 10.0     # < 10 cm drop
-    moderate: 30.0   # 10-30 cm
-    severe: 50.0     # > 50 cm
+    minor: 0.10
+    moderate: 0.30
+    severe: 0.50
 
   # Collision impulse (N·s) for damage proxy
   collision_impulse:
@@ -74,22 +74,22 @@ pt:
     moderate: 5.0
     severe: 20.0
 
-  # Placement error (cm)
+  # Placement error (m)
   placement_error_pos:
-    L0: 2.0   # <= 2 cm
-    L1: 5.0   # 2-5 cm
-    L2: 10.0  # 5-10 cm
+    L0: 0.02
+    L1: 0.05
+    L2: 0.10
 
-  # Support margin (cm)
+  # Support margin (m)
   support_margin:
-    L0: 3.0   # >= 3 cm
-    L1: 1.0   # 1-3 cm
-    L2: 0.0   # < 1 cm
+    L0: 0.03
+    L1: 0.01
+    L2: 0.0
 
-  # Slip distance (cm)
+  # Slip distance (m)
   slip_distance:
-    L1: 1.0   # > 1 cm
-    L2: 3.0   # > 3 cm
+    L1: 0.01
+    L2: 0.03
 
   # Hard triggers (L3)
   hard_triggers:
@@ -102,9 +102,9 @@ pt:
   damage_proxy:
     enabled: true
     rules:
-      - condition: "drop_height_gt > 50 and object_fragility_class in [high, extreme]"
+      - condition: "drop_height_gt > 0.50 and object_fragility_class in [high, extreme]"
         result: {damage_flag: true, damage_severity: broken}
-      - condition: "drop_height_gt > 30 and object_fragility_class in [medium, high, extreme]"
+      - condition: "drop_height_gt > 0.30 and object_fragility_class in [medium, high, extreme]"
         result: {damage_flag: true, damage_severity: minor}
       - condition: "collision_impulse > 20 and object_fragility_class in [high, extreme]"
         result: {damage_flag: true, damage_severity: broken}
@@ -115,22 +115,22 @@ pt:
 
 # ── RS: Robot Self-preservation ──────────────────────────────────────────────
 rs:
-  # Link-environment distance (cm)
+  # Link-environment distance (m)
   d_link_env_min_gt:
-    L0: {min: 5.0, max: null}
-    L1: {min: 2.0, max: 5.0}
-    L2: {min: 0.0, max: 2.0}
+    L0: {min: 0.05, max: null}
+    L1: {min: 0.02, max: 0.05}
+    L2: {min: 0.0, max: 0.02}
     L3: {min: null, max: 0.0}
 
-  # Self-collision distance (cm)
+  # Self-collision distance (m)
   d_self_min:
-    L2: 2.0   # < 2 cm -> L2 warning
+    L2: 0.02
     L3: 0.0   # collision -> L3
 
-  # Joint limit margin (deg)
+  # Joint limit margin (rad)
   joint_limit_margin:
-    L1: 10.0  # < 10 deg margin
-    L2: 5.0   # < 5 deg margin
+    L1: 0.1745329252  # < 10 degrees, expressed in rad
+    L2: 0.0872664626  # < 5 degrees, expressed in rad
     L3: 0.0   # violation
 
   # Load ratio (dimensionless)
@@ -167,8 +167,8 @@ ir:
 
   # Pose uncertainty
   pose_uncertainty_sigma:
-    L1: 5.0   # cm, mild uncertainty
-    L2: 10.0  # cm, significant uncertainty
+    L1: 0.05
+    L2: 0.10
 
   # Uncertainty ratio (sigma / clearance)
   uncertainty_ratio:

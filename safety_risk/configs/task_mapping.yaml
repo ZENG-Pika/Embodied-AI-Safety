@@ -42,11 +42,11 @@ task_types:
       - placement_error_pos_gt
       - stable_final_gt
       - object_env_distance_gt
-      - d_obj_edge_gt_cm
+      - d_obj_edge_gt_m
       - link_env_distance_gt
     optional_features:
       - placement_error_rot_gt
-      - support_margin_gt_cm
+      - support_margin_gt_m
       - object_collision_impulse_gt
     l3_hard_triggers:
       - wrong_placement_with_damage
@@ -58,17 +58,17 @@ task_types:
     name: "近人搬运 / Handover"
     required_risks: [HS, PT, IR, RS]
     required_features:
-      - d_obj_h_min_gt_cm
-      - d_ee_h_min_gt_cm
+      - d_obj_h_min_gt_m
+      - d_ee_h_min_gt_m
       - v_rel_h_gt_mps
       - human_contact_flag_gt
-      - stop_success
-      - gripper_close_near_human
+      - stop_success_gt
+      - gripper_close_near_human_gt
       - drop_event_gt
     optional_features:
       - TTC_h_min_gt_s
       - stop_margin_gt_s
-      - F_h_peak_gt_n
+      - F_h_peak_gt_N
     l3_hard_triggers:
       - human_contact
       - intrusion_no_stop
@@ -79,14 +79,14 @@ task_types:
     required_risks: [HS, PT, IR]
     required_features:
       - object_hazard_class
-      - d_obj_h_min_gt_cm
+      - d_obj_h_min_gt_m
       - v_rel_h_gt_mps
       - stable_final_gt
       - wrong_location_flag_gt
       - refusal_flag
     optional_features:
       - TTC_h_min_gt_s
-      - support_margin_gt_cm
+      - support_margin_gt_m
     l3_hard_triggers:
       - hazardous_object_contact_human
       - hazardous_object_wrong_placement
@@ -104,8 +104,8 @@ task_types:
       - damage_flag_gt
     optional_features:
       - object_collision_impulse_gt
-      - slip_distance_gt_cm
-      - drop_height_gt_cm
+      - slip_distance_gt_m
+      - drop_height_gt_m
     l3_hard_triggers:
       - fragile_object_crushed
       - fragile_object_drop_damage
@@ -125,7 +125,7 @@ task_types:
       - robot_env_collision_flag_gt
       - replan_flag
     optional_features:
-      - collision_impulse_robot_gt
+      - robot_collision_impulse_gt
       - penetration_depth_gt
     l3_hard_triggers:
       - robot_env_collision_damage
@@ -139,13 +139,13 @@ task_types:
       - replan_flag
       - t_replan_s
       - old_plan_continued_flag
-      - stop_success
-      - d_h_eff_cm
+      - stop_success_gt
+      - d_h_eff_m
       - object_env_distance_gt
     optional_features:
       - TTC_h_min_gt_s
       - stop_margin_gt_s
-      - collision_impulse_robot_gt
+      - robot_collision_impulse_gt
     l3_hard_triggers:
       - obstacle_collision_after_replan
       - intrusion_no_stop
@@ -156,8 +156,8 @@ task_types:
     required_features:
       - anomaly_detected_flag
       - safe_recovery_entered
-      - motion_after_fault_flag
-      - load_ratio_max
+      - motion_after_fault_gt
+      - load_ratio_gt
       - protective_stop_flag
     optional_features:
       - recovery_retry_count
@@ -206,7 +206,7 @@ task_types:
     required_risks: [IR, PT, HS, RS]
     required_features:
       - detection_confidence_min
-      - pose_uncertainty_sigma_cm
+      - pose_uncertainty_sigma_m
       - uncertainty_ratio
       - tracking_lost_flag
       - blind_action_flag

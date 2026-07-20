@@ -42,14 +42,14 @@ class TestRSL3:
 
     def test_sustained_overload(self, engine):
         features = _make_features(RSFeatures(
-            sustained_overload_flag=True,
-            load_ratio_max=1.2,
+            sustained_overload_gt=True,
+            load_ratio_gt=1.2,
         ))
         result = engine.evaluate(features, "test_overload")
         assert result.rs_level == RiskLevel.L3
 
     def test_motion_after_fault(self, engine):
-        features = _make_features(RSFeatures(motion_after_fault_flag=True))
+        features = _make_features(RSFeatures(motion_after_fault_gt=True))
         result = engine.evaluate(features, "test_maf")
         assert result.rs_level == RiskLevel.L3
 
@@ -61,7 +61,7 @@ class TestRSL3:
     def test_severe_collision(self, engine):
         features = _make_features(RSFeatures(
             robot_env_collision_flag_gt=True,
-            collision_impulse_robot_gt=60.0,
+            robot_collision_impulse_gt=60.0,
         ))
         result = engine.evaluate(features, "test_severe")
         assert result.rs_level == RiskLevel.L3
@@ -71,14 +71,14 @@ class TestRSL2:
     """Test RS L2 rules."""
 
     def test_env_proximity(self, engine):
-        features = _make_features(RSFeatures(d_link_env_min_gt_cm=1.0))
+        features = _make_features(RSFeatures(d_link_env_min_gt_m=0.01))
         result = engine.evaluate(features, "test_prox")
         assert result.rs_level == RiskLevel.L2
 
     def test_minor_collision(self, engine):
         features = _make_features(RSFeatures(
             robot_env_collision_flag_gt=True,
-            collision_impulse_robot_gt=5.0,
+            robot_collision_impulse_gt=5.0,
         ))
         result = engine.evaluate(features, "test_minor")
         assert result.rs_level == RiskLevel.L2
@@ -89,17 +89,17 @@ class TestRSL2:
         assert result.rs_level == RiskLevel.L2
 
     def test_self_proximity(self, engine):
-        features = _make_features(RSFeatures(d_self_min_gt_cm=1.0))
+        features = _make_features(RSFeatures(d_self_min_gt_m=0.01))
         result = engine.evaluate(features, "test_self_prox")
         assert result.rs_level == RiskLevel.L2
 
     def test_near_joint_limit(self, engine):
-        features = _make_features(RSFeatures(joint_limit_margin_min_deg=3.0))
+        features = _make_features(RSFeatures(joint_limit_margin_gt_rad=0.0523598776))
         result = engine.evaluate(features, "test_jl")
         assert result.rs_level == RiskLevel.L2
 
     def test_high_load(self, engine):
-        features = _make_features(RSFeatures(load_ratio_max=0.90))
+        features = _make_features(RSFeatures(load_ratio_gt=0.90))
         result = engine.evaluate(features, "test_load")
         assert result.rs_level == RiskLevel.L2
 
@@ -108,12 +108,12 @@ class TestRSL1:
     """Test RS L1 rules."""
 
     def test_approach(self, engine):
-        features = _make_features(RSFeatures(d_link_env_min_gt_cm=3.0))
+        features = _make_features(RSFeatures(d_link_env_min_gt_m=0.03))
         result = engine.evaluate(features, "test_approach")
         assert result.rs_level == RiskLevel.L1
 
     def test_moderate_load(self, engine):
-        features = _make_features(RSFeatures(load_ratio_max=0.75))
+        features = _make_features(RSFeatures(load_ratio_gt=0.75))
         result = engine.evaluate(features, "test_mod")
         assert result.rs_level == RiskLevel.L1
 
@@ -123,8 +123,8 @@ class TestRSL0:
 
     def test_safe(self, engine):
         features = _make_features(RSFeatures(
-            d_link_env_min_gt_cm=10.0,
-            load_ratio_max=0.50,
+            d_link_env_min_gt_m=0.10,
+            load_ratio_gt=0.50,
         ))
         result = engine.evaluate(features, "test_safe")
         assert result.rs_level == RiskLevel.L0

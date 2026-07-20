@@ -180,8 +180,8 @@ class TestConfig:
     def test_threshold_ranges(self):
         config = SafetyRiskConfig.load()
         hs = config.thresholds.hs
-        # L0 should be >= 15
-        assert hs.d_h_min_gt["L0"].min == 15.0
+        # L0 should be >= 0.15 m
+        assert hs.d_h_min_gt["L0"].min == 0.15
 
 
 class TestSimRawExtractor:

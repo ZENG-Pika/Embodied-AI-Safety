@@ -30,8 +30,8 @@ from safety_risk.schema import (
 
 logger = logging.getLogger(__name__)
 
-# Contact threshold: distance below this is treated as "human contact" (cm)
-CONTACT_THRESHOLD_CM = 5.0
+# Contact threshold in metres.
+CONTACT_THRESHOLD_M = 0.05
 
 
 def _pose_distance_3d(p1: List[float], p2: List[float]) -> float:
@@ -102,7 +102,7 @@ def _compute_min_distance_per_step(
 ) -> List[float]:
     """Compute minimum distance from EE to any obstacle at each timestep.
 
-    Returns distances in **centimeters**.
+    Returns distances in metres.
     """
     n = min(len(ee_positions), len(obstacle_positions))
     distances = []
@@ -117,19 +117,19 @@ def _compute_min_distance_per_step(
 class WorkflowSafetyAdapter:
     """Adapts InternDataEngine workflow logger data to SimRawEpisode."""
 
-    def __init__(self, obstacle_names: Optional[List[str]] = None, contact_threshold_cm: float = CONTACT_THRESHOLD_CM):
+    def __init__(self, obstacle_names: Optional[List[str]] = None, contact_threshold_m: float = CONTACT_THRESHOLD_M):
         """
         Parameters
         ----------
         obstacle_names : list[str], optional
             Object names to treat as human surrogates. If provided, the adapter
             computes EE-to-obstacle distances and fills HS features.
-        contact_threshold_cm : float
-            Distance threshold (cm) below which an obstacle is considered
-            "contacting" the robot (default 5.0 cm).
+        contact_threshold_m : float
+            Distance threshold in metres below which an obstacle is considered
+            "contacting" the robot (default 0.05 m).
         """
         self.obstacle_names = obstacle_names or []
-        self.contact_threshold_cm = contact_threshold_cm
+        self.contact_threshold_m = contact_threshold_m
         self._warnings: List[str] = []
 
     @property
@@ -366,7 +366,7 @@ class WorkflowSafetyAdapter:
                 # Pad with last value
                 all_obstacle_trajs[obs_name] = traj + [traj[-1]] * (n_ee - len(traj))
 
-        # Compute per-step minimum distance to any obstacle (in cm)
+        # Compute per-step minimum distance to any obstacle in metres.
         n_steps = n_ee
         ee_human_dists = []
         collision_pairs = []
@@ -379,20 +379,20 @@ class WorkflowSafetyAdapter:
         dt = 0.033  # ~30 Hz
 
         for i in range(n_steps):
-            min_dist_cm = float("inf")
+            min_dist_m = float("inf")
             closest_obs = None
 
             for obs_name, obs_traj in all_obstacle_trajs.items():
                 if i < len(obs_traj):
                     d_m = _pose_distance_3d(ee_positions[i], obs_traj[i])
-                    if d_m < min_dist_cm:
-                        min_dist_cm = d_m
+                    if d_m < min_dist_m:
+                        min_dist_m = d_m
                         closest_obs = obs_name
 
-            ee_human_dists.append(min_dist_cm)
+            ee_human_dists.append(min_dist_m)
 
             # Detect contact (distance < threshold)
-            if min_dist_cm < self.contact_threshold_cm:
+            if min_dist_m < self.contact_threshold_m:
                 if not in_contact:
                     in_contact = True
                     contact_start = i
@@ -400,11 +400,11 @@ class WorkflowSafetyAdapter:
                     "bodyA": "ee/gripper",
                     "bodyB": f"human_surrogate/{closest_obs}",
                     "time": i * dt,
-                    "distance_cm": min_dist_cm,
+                    "distance_m": min_dist_m,
                 })
                 # Approximate contact force from proximity (closer = harder)
-                # Linear interpolation: at threshold -> 0N, at 0cm -> 50N
-                force = max(0, 50.0 * (1.0 - min_dist_cm / self.contact_threshold_cm))
+                # Linear interpolation: at threshold -> 0 N, at 0 m -> 50 N.
+                force = max(0, 50.0 * (1.0 - min_dist_m / self.contact_threshold_m))
                 contact_forces.append(force)
             else:
                 if in_contact:
@@ -418,10 +418,10 @@ class WorkflowSafetyAdapter:
         # Log findings
         n_contacts = len(collision_pairs)
         if n_contacts > 0:
-            self._warn(f"EE-obstacle proximity events: {n_contacts} steps below {self.contact_threshold_cm}cm threshold")
+            self._warn(f"EE-obstacle proximity events: {n_contacts} steps below {self.contact_threshold_m}m threshold")
         min_d = min(ee_human_dists) if ee_human_dists else None
         if min_d is not None:
-            self._warn(f"Min EE-to-obstacle distance: {min_d:.1f}cm")
+            self._warn(f"Min EE-to-obstacle distance: {min_d:.4f}m")
 
         distance_gt = DistanceGT(
             ee_human_distance=ee_human_dists,
@@ -436,9 +436,9 @@ class WorkflowSafetyAdapter:
         # HS extra features for direct inclusion
         hs_extra = {
             "human_contact_flag_gt": n_contacts > 0,
-            "F_h_peak_gt_n": max(contact_forces) if contact_forces else 0.0,
-            "contact_duration_gt_s": sum(contact_durations),
-            "d_ee_h_min_gt_cm": min_d,
+            "F_h_peak_gt_N": max(contact_forces) if contact_forces else 0.0,
+            "contact_duration_h_gt_s": sum(contact_durations),
+            "d_ee_h_min_gt_m": min_d,
         }
 
         return distance_gt, collision_gt, hs_extra

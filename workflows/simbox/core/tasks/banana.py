@@ -440,12 +440,12 @@ class BananaBaseTask(BaseTask):
         return pickcontact_views
 
     def _set_obstaclecontact_view(self, cfg):
-        """Create whole-robot contact views for task obstacles.
+        """Create per-link robot contact views for task obstacles.
 
         MANO is an articulation whose rigid bodies are direct children of the
-        configured object prim, hence the ``/*`` source expression.  Filter
-        paths are discovered from every RigidBodyAPI below the robot root so
-        contacts with the base, either arm, or either end effector are covered.
+        configured object prim, hence the ``/*`` source expression.  A separate
+        contact view is created for each robot rigid body so Sim_Raw_GT can name
+        the exact robot link instead of reporting ``robot/.../all``.
         """
         from pxr import UsdPhysics
 
@@ -458,19 +458,25 @@ class BananaBaseTask(BaseTask):
         ]
         for robot_name, robot in self.robots.items():
             robot_prim = get_prim_at_path(robot.robot_prim_path)
-            filter_paths_expr = [
-                str(prim.GetPath())
-                for prim in Usd.PrimRange(robot_prim)
-                if prim.HasAPI(UsdPhysics.RigidBodyAPI)
-            ]
-            obstaclecontact_views[robot_name] = {"all": {}}
+            robot_root = robot.robot_prim_path.rstrip("/") + "/"
+            rigid_links = []
+            for prim in Usd.PrimRange(robot_prim):
+                if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                    continue
+                link_path = str(prim.GetPath())
+                link_label = link_path.replace(robot_root, "")
+                rigid_links.append((link_label, link_path))
+
+            obstaclecontact_views[robot_name] = {}
             for obstacle_name in obstacle_names:
                 source_expr = self.objects[obstacle_name].prim_path.rstrip("/") + "/*"
-                obstaclecontact_views[robot_name]["all"][obstacle_name] = RigidContactView(
-                    prim_paths_expr=source_expr,
-                    filter_paths_expr=filter_paths_expr,
-                    max_contact_count=1000,  # Enable contact point data
-                )
+                for link_label, link_path in rigid_links:
+                    obstaclecontact_views[robot_name].setdefault(link_label, {})
+                    obstaclecontact_views[robot_name][link_label][obstacle_name] = RigidContactView(
+                        prim_paths_expr=source_expr,
+                        filter_paths_expr=[link_path],
+                        max_contact_count=1000,  # Enable contact point data
+                    )
         return obstaclecontact_views
 
     def _set_robotselfcontact_view(self):

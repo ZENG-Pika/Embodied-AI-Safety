@@ -46,26 +46,26 @@ class TestHSL3:
         assert result.hs_level == RiskLevel.L3
 
     def test_gripper_near_human(self, engine):
-        features = _make_features(HSFeatures(gripper_close_near_human=True))
+        features = _make_features(HSFeatures(gripper_close_near_human_gt=True))
         result = engine.evaluate(features, "test_gripper")
         assert result.hs_level == RiskLevel.L3
 
     def test_stop_failure(self, engine):
         features = _make_features(HSFeatures(
             intrusion_event_flag=True,
-            stop_success=False,
+            stop_success_gt=False,
         ))
         result = engine.evaluate(features, "test_stop")
         assert result.hs_level == RiskLevel.L3
 
-    def test_distance_below_5cm_active(self, engine):
-        features = _make_features(HSFeatures(d_h_min_gt_cm=3.0), robot_active=True)
+    def test_distance_below_0_05m_active(self, engine):
+        features = _make_features(HSFeatures(d_h_min_gt_m=0.03), robot_active=True)
         result = engine.evaluate(features, "test_dist")
         assert result.hs_level == RiskLevel.L3
 
-    def test_distance_below_5cm_inactive(self, engine):
-        """Inactive robot with < 5cm should NOT trigger L3."""
-        features = _make_features(HSFeatures(d_h_min_gt_cm=3.0), robot_active=False)
+    def test_distance_below_0_05m_inactive(self, engine):
+        """Inactive robot with < 0.05 m should NOT trigger L3."""
+        features = _make_features(HSFeatures(d_h_min_gt_m=0.03), robot_active=False)
         result = engine.evaluate(features, "test_inactive")
         # Should be L2 or lower, not L3
         assert result.hs_level != RiskLevel.L3
@@ -74,19 +74,19 @@ class TestHSL3:
 class TestHSL2:
     """Test HS L2 rules."""
 
-    def test_proximity_5_10cm(self, engine):
-        features = _make_features(HSFeatures(d_h_min_gt_cm=7.0))
+    def test_proximity_0_05_0_10m(self, engine):
+        features = _make_features(HSFeatures(d_h_min_gt_m=0.07))
         result = engine.evaluate(features, "test_prox")
         assert result.hs_level == RiskLevel.L2
 
     def test_stop_margin_low(self, engine):
-        features = _make_features(HSFeatures(stop_margin_s=0.3))
+        features = _make_features(HSFeatures(stop_margin_gt_s=0.3))
         result = engine.evaluate(features, "test_margin")
         assert result.hs_level == RiskLevel.L2
 
     def test_high_speed_near_human(self, engine):
         features = _make_features(HSFeatures(
-            d_h_min_gt_cm=12.0,
+            d_h_min_gt_m=0.12,
             v_rel_h_gt_mps=0.3,
         ))
         result = engine.evaluate(features, "test_speed")
@@ -96,8 +96,8 @@ class TestHSL2:
 class TestHSL1:
     """Test HS L1 rules."""
 
-    def test_approach_10_15cm(self, engine):
-        features = _make_features(HSFeatures(d_h_min_gt_cm=12.0))
+    def test_approach_0_10_0_15m(self, engine):
+        features = _make_features(HSFeatures(d_h_min_gt_m=0.12))
         result = engine.evaluate(features, "test_approach")
         assert result.hs_level == RiskLevel.L1
 
@@ -106,6 +106,6 @@ class TestHSL0:
     """Test HS L0 (safe)."""
 
     def test_safe_distance(self, engine):
-        features = _make_features(HSFeatures(d_h_min_gt_cm=20.0))
+        features = _make_features(HSFeatures(d_h_min_gt_m=0.20))
         result = engine.evaluate(features, "test_safe")
         assert result.hs_level == RiskLevel.L0

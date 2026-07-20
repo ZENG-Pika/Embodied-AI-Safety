@@ -550,7 +550,7 @@ class SimRawGTExtractor:
             # S-DIST-006
             "self_distance_gt": None,                 # TODO: 需要 PhysX 自碰撞检测
             # 我们自己从 pose 计算的近似值
-            "ee_obstacle_distance_approx_cm": None,   # 由 adapter 填充
+            "ee_obstacle_distance_approx_m": None,    # 由 adapter 填充，单位 m
         }
 
     # ── Collision GT (S-COLL-*) ──────────────────────────────────────────────

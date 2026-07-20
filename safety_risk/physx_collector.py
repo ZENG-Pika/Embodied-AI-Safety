@@ -207,7 +207,10 @@ class PhysXDataCollector:
         if step_id % 50 == 0 or d_min_m < self.SAFETY_DISTANCE_M:
             closest_link = getattr(self, '_debug_closest_link', '?')
             closest_obj = getattr(self, '_debug_closest_obj', '?')
-            print(f"[safety_gate] step {step_id}: d_min={d_min_m*100:.1f}cm ({closest_link}→{closest_obj}) threshold={self.SAFETY_DISTANCE_M*100:.0f}cm")
+            print(
+                f"[safety_gate] step {step_id}: d_min={d_min_m:.4f}m "
+                f"({closest_link}→{closest_obj}) threshold={self.SAFETY_DISTANCE_M:.4f}m"
+            )
 
         # Compute approach velocity from distance history
         approach_vel_mps = None
@@ -234,7 +237,7 @@ class PhysXDataCollector:
 
             logger.info(
                 f"[safety_gate] STOP triggered at step {step_id}: "
-                f"d={d_min_m*100:.1f}cm, TTC={ttc_s:.2f}s"
+                f"d={d_min_m:.4f}m, TTC={ttc_s:.2f}s"
             )
             return True
 
@@ -657,6 +660,33 @@ class PhysXDataCollector:
                 pass
             return None
 
+        def _nearest_robot_link_body(robot_name, lr_name, point_m=None):
+            """Return a robot body label, resolving legacy whole-robot views to a link."""
+            if lr_name != "all":
+                return f"robot/{robot_name}/{lr_name}"
+            link_poses = self._data.get("link_pose_gt")[-1] if self._data.get("link_pose_gt") else None
+            robot_links = link_poses.get(robot_name, {}) if isinstance(link_poses, dict) else {}
+            if not point_m or not robot_links:
+                return f"robot/{robot_name}/unknown_link"
+
+            best_name = None
+            best_dist = None
+            for link_name, pose in robot_links.items():
+                if not isinstance(pose, (list, tuple)) or len(pose) < 3 or pose[0] is None:
+                    continue
+                dist = math.sqrt(
+                    (float(pose[0]) - float(point_m[0])) ** 2
+                    + (float(pose[1]) - float(point_m[1])) ** 2
+                    + (float(pose[2]) - float(point_m[2])) ** 2
+                )
+                if best_dist is None or dist < best_dist:
+                    best_dist = dist
+                    best_name = link_name
+
+            if best_name:
+                return f"robot/{robot_name}/{best_name}"
+            return f"robot/{robot_name}/unknown_link"
+
         def _hertzian_depth(force_magnitude, stiffness=1e6):
             return float((max(float(force_magnitude), 0.0) / stiffness) ** (2.0 / 3.0))
 
@@ -918,7 +948,7 @@ class PhysXDataCollector:
                                 if force_magnitude <= 0.01:
                                     continue
 
-                                body_a = f"robot/{robot_name}/{lr_name}"
+                                body_a = _nearest_robot_link_body(robot_name, lr_name)
                                 body_b = f"obstacle/{obj_name}"
                                 collision_pairs.append({
                                     "bodyA": body_a,
@@ -928,31 +958,26 @@ class PhysXDataCollector:
                                 })
 
                                 # Get actual contact points
+                                location_m = None
                                 if start_indices.size > 0 and contact_counts.size > 0:
                                     start = int(start_indices[0, 0]) if start_indices.ndim >= 2 else int(start_indices[0])
                                     n_contacts = int(contact_counts[0, 0]) if contact_counts.ndim >= 2 else int(contact_counts[0])
                                     if n_contacts > 0 and start + n_contacts <= len(points):
                                         contact_pts = points[start:start + n_contacts]
                                         avg_point = np.mean(contact_pts, axis=0)
-                                        collision_locations.append({
-                                            "bodyA": body_a,
-                                            "bodyB": body_b,
-                                            "location_m": [float(avg_point[0]), float(avg_point[1]), float(avg_point[2])],
-                                        })
+                                        location_m = [float(avg_point[0]), float(avg_point[1]), float(avg_point[2])]
                                     else:
-                                        obj_pos = _get_pos(obj_name)
-                                        collision_locations.append({
-                                            "bodyA": body_a,
-                                            "bodyB": body_b,
-                                            "location_m": obj_pos,
-                                        })
+                                        location_m = _get_pos(obj_name)
                                 else:
-                                    obj_pos = _get_pos(obj_name)
-                                    collision_locations.append({
-                                        "bodyA": body_a,
-                                        "bodyB": body_b,
-                                        "location_m": obj_pos,
-                                    })
+                                    location_m = _get_pos(obj_name)
+
+                                body_a = _nearest_robot_link_body(robot_name, lr_name, location_m)
+                                collision_pairs[-1]["bodyA"] = body_a
+                                collision_locations.append({
+                                    "bodyA": body_a,
+                                    "bodyB": body_b,
+                                    "location_m": location_m,
+                                })
 
                                 depth_info = _penetration_from_contact_data(
                                     contact_data, start_indices, contact_counts, force_magnitude
@@ -971,7 +996,8 @@ class PhysXDataCollector:
                                     force_magnitude = float(np.sum(force_matrix))
                                     if force_magnitude <= 0.01:
                                         continue
-                                    body_a = f"robot/{robot_name}/{lr_name}"
+                                    obj_pos = _get_pos(obj_name)
+                                    body_a = _nearest_robot_link_body(robot_name, lr_name, obj_pos)
                                     body_b = f"obstacle/{obj_name}"
                                     collision_pairs.append({
                                         "bodyA": body_a,
@@ -979,7 +1005,6 @@ class PhysXDataCollector:
                                         "step": step_id,
                                         "force_n": force_magnitude,
                                     })
-                                    obj_pos = _get_pos(obj_name)
                                     collision_locations.append({
                                         "bodyA": body_a,
                                         "bodyB": body_b,
@@ -1100,15 +1125,23 @@ class PhysXDataCollector:
         self._data["collision_pair_gt"].append(collision_pairs if collision_pairs else [])
         self._data["collision_location_gt"].append(collision_locations if collision_locations else [])
         self._data["penetration_depth_gt"].append(penetration_depths if penetration_depths else [])
+        contact_impulses = []
         for pair in collision_pairs:
+            force_n = float(pair.get("force_n", 0.0) or 0.0)
             contact_forces.append({
                 "bodyA": pair["bodyA"],
                 "bodyB": pair["bodyB"],
                 "step": pair.get("step", step_id),
-                "force_n": pair.get("force_n", 0.0),
+                "force_n": force_n,
+            })
+            contact_impulses.append({
+                "bodyA": pair["bodyA"],
+                "bodyB": pair["bodyB"],
+                "step": pair.get("step", step_id),
+                "impulse_ns": force_n * dt,
             })
         self._data["contact_force_gt"].append(contact_forces if contact_forces else [])
-        self._data["contact_impulse_gt"].append(total_impulse)
+        self._data["contact_impulse_gt"].append(contact_impulses if contact_impulses else [])
 
         # S-GRASP-001: Collect gripper-object contact force per arm.
         gripper_obj_force = {"left": 0.0, "right": 0.0}

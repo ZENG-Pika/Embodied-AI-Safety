@@ -146,7 +146,7 @@ class EnvironmentState(BaseModel):
 class DistanceGT(BaseModel):
     """Precise distance ground truth (S-DIST-*)."""
 
-    # Time series of distances (cm)
+    # Time series of distances (m)
     robot_human_distance_matrix: Optional[List[Any]] = None  # [timestep][link][bodypart]
     ee_human_distance: Optional[List[float]] = None  # [timestep]
     object_human_distance: Optional[List[float]] = None  # [timestep]
@@ -160,7 +160,7 @@ class CollisionGT(BaseModel):
 
     collision_pair: Optional[List[Dict[str, Any]]] = None  # [{bodyA, bodyB, time, ...}]
     collision_location: Optional[List[List[float]]] = None  # [[x,y,z], ...]
-    penetration_depth: Optional[List[float]] = None  # cm
+    penetration_depth: Optional[List[float]] = None  # m
     contact_force: Optional[List[Any]] = None  # [timestep] force vectors
     contact_impulse: Optional[List[float]] = None  # N·s per event
     contact_duration: Optional[List[float]] = None  # s per event
@@ -176,19 +176,19 @@ class GripperGT(BaseModel):
     gripper_object_contact_force: Optional[List[float]] = None  # N per timestep
     grasp_state: Optional[List[str]] = None  # GraspState per timestep
     object_relative_pose_to_gripper: Optional[List[List[float]]] = None  # [timestep][7]
-    slip_distance: Optional[List[float]] = None  # cm per timestep
+    slip_distance: Optional[List[float]] = None  # m per timestep
 
 
 class OutcomeGT(BaseModel):
     """Drop / placement / damage ground truth (S-OUT-*)."""
 
     drop_event: bool = False
-    drop_height: Optional[float] = None  # cm
+    drop_height: Optional[float] = None  # m
     final_object_pose: Optional[List[float]] = None  # [x,y,z,qx,qy,qz,qw]
-    placement_error_pos: Optional[float] = None  # cm
-    placement_error_rot: Optional[float] = None  # deg
+    placement_error_pos: Optional[float] = None  # m
+    placement_error_rot: Optional[float] = None  # rad
     stable_final: Optional[bool] = None
-    support_polygon_margin: Optional[float] = None  # cm
+    support_polygon_margin: Optional[float] = None  # m
     damage_state: str = "none"  # DamageSeverity
 
 
@@ -257,53 +257,53 @@ class CommonFeatures(BaseModel):
 class HSFeatures(BaseModel):
     """Human Safety risk features (SF-HS-*)."""
 
-    d_robot_h_min_gt_cm: Optional[float] = None
-    d_ee_h_min_gt_cm: Optional[float] = None
-    d_obj_h_min_gt_cm: Optional[float] = None
-    d_h_min_gt_cm: Optional[float] = None  # min of above three
-    d_h_eff_cm: Optional[float] = None  # effective distance (conservative)
+    d_robot_h_min_gt_m: Optional[float] = None
+    d_ee_h_min_gt_m: Optional[float] = None
+    d_obj_h_min_gt_m: Optional[float] = None
+    d_h_min_gt_m: Optional[float] = None  # min of above three
+    d_h_eff_m: Optional[float] = None  # effective distance (conservative)
     v_rel_h_gt_mps: Optional[float] = None
     TTC_h_min_gt_s: Optional[float] = None
-    time_d_h_below_15cm_s: float = 0.0
-    time_d_h_below_10cm_s: float = 0.0
-    time_d_h_below_5cm_s: float = 0.0
+    time_d_h_below_0_15m_s: float = 0.0
+    time_d_h_below_0_10m_s: float = 0.0
+    time_d_h_below_0_05m_s: float = 0.0
     human_contact_flag_gt: bool = False
     human_contact_force_exceeded_gt: bool = False
-    F_h_peak_gt_n: float = 0.0
-    contact_duration_gt_s: float = 0.0
-    gripper_close_near_human: bool = False
+    F_h_peak_gt_N: float = 0.0
+    contact_duration_h_gt_s: float = 0.0
+    gripper_close_near_human_gt: bool = False
     intrusion_event_flag: bool = False
     t_stop_s: Optional[float] = None
-    stop_success: Optional[bool] = None
-    stop_margin_s: Optional[float] = None
+    stop_success_gt: Optional[bool] = None
+    stop_margin_gt_s: Optional[float] = None
     stop_command_obeyed: Optional[bool] = None
 
 
 class PTFeatures(BaseModel):
     """Property / Object Damage risk features (SF-PT-*)."""
 
-    d_obj_env_min_gt_cm: Optional[float] = None
-    d_obj_env_eff_cm: Optional[float] = None
-    d_obj_edge_gt_cm: Optional[float] = None
-    d_obj_target_gt_cm: Optional[float] = None
+    d_obj_env_min_gt_m: Optional[float] = None
+    d_obj_env_eff_m: Optional[float] = None
+    d_obj_edge_gt_m: Optional[float] = None
+    d_obj_target_gt_m: Optional[float] = None
     object_collision_flag_gt: bool = False
     object_collision_impulse_gt: float = 0.0
-    gripper_force_gt_n: float = 0.0
-    F_obj_peak_gt_n: float = 0.0
-    r_grip_gt: float = 0.0
-    over_grip_flag: bool = False
+    gripper_object_force_gt_N: float = 0.0
+    F_obj_peak_gt_N: float = 0.0
+    r_grip_gt: Optional[float] = None
+    over_grip_flag: Optional[bool] = None
     grasp_success_flag: bool = False
     target_object_id: str = ""
     expected_object_id: str = ""
-    wrong_object_flag_gt: bool = False
+    wrong_object_flag_gt: Optional[bool] = None
     slip_flag_gt: bool = False
-    slip_distance_gt_cm: float = 0.0
+    slip_distance_gt_m: Optional[float] = None
     drop_flag_gt: bool = False
-    h_drop_gt_cm: float = 0.0
-    placement_error_pos_gt_cm: float = 0.0
-    placement_error_rot_gt_deg: float = 0.0
+    h_drop_gt_m: Optional[float] = None
+    placement_error_pos_gt_m: Optional[float] = None
+    placement_error_rot_gt_rad: Optional[float] = None
     stable_final_gt: Optional[bool] = None
-    support_margin_gt_cm: Optional[float] = None
+    support_margin_gt_m: Optional[float] = None
     damage_flag_gt: bool = False
     damage_severity_gt: str = "none"
     wrong_location_flag_gt: bool = False
@@ -315,19 +315,19 @@ class PTFeatures(BaseModel):
 class RSFeatures(BaseModel):
     """Robot Self-preservation risk features (SF-RS-*)."""
 
-    d_link_env_min_gt_cm: Optional[float] = None
-    d_ee_env_min_gt_cm: Optional[float] = None
-    d_self_min_gt_cm: Optional[float] = None
-    d_link_env_eff_cm: Optional[float] = None
+    d_link_env_min_gt_m: Optional[float] = None
+    d_ee_env_min_gt_m: Optional[float] = None
+    d_self_min_gt_m: Optional[float] = None
+    d_link_env_eff_m: Optional[float] = None
     robot_env_collision_flag_gt: bool = False
     self_collision_flag_gt: bool = False
-    collision_impulse_robot_gt: float = 0.0
-    joint_limit_margin_min_deg: Optional[float] = None
+    robot_collision_impulse_gt: float = 0.0
+    joint_limit_margin_gt_rad: Optional[float] = None
     joint_limit_violation: bool = False
-    joint_torque_ratio_max: float = 0.0
+    joint_torque_ratio_gt: Optional[float] = None
     joint_current_ratio_max: float = 0.0
-    load_ratio_max: float = 0.0
-    sustained_overload_flag: bool = False
+    load_ratio_gt: Optional[float] = None
+    sustained_overload_gt: Optional[bool] = None
     protective_stop_flag: bool = False
     emergency_stop_flag: bool = False
     fault_code: Optional[str] = None
@@ -335,22 +335,23 @@ class RSFeatures(BaseModel):
     unrecoverable_fault_flag: bool = False
     anomaly_detected_flag: bool = False
     safe_recovery_entered: bool = False
-    motion_after_fault_flag: bool = False
+    motion_after_fault_gt: Optional[bool] = None
     recovery_retry_count: int = 0
 
 
 class IRFeatures(BaseModel):
     """Input Robustness risk features (SF-IR-*)."""
 
-    detection_confidence_min: Optional[float] = None
-    pose_uncertainty_sigma_cm: Optional[float] = None
-    uncertainty_ratio: Optional[float] = None
-    occlusion_ratio: Optional[float] = None
-    tracking_lost_flag: bool = False
+    perception_confidence_min_sim: Optional[float] = None
+    pose_estimation_error_gt_m: Optional[float] = None
+    pose_uncertainty_sigma_m: Optional[float] = None
+    uncertainty_ratio_sim: Optional[float] = None
+    true_occlusion_ratio: Optional[float] = None
+    tracking_lost_flag_sim: Optional[bool] = None
     tracking_lost_duration_s: float = 0.0
     reobserve_flag: bool = False
     degrade_mode_flag: bool = False
-    blind_action_flag: bool = False
+    blind_action_flag_sim: Optional[bool] = None
     ambiguous_command_flag: bool = False
     target_candidates_count: int = 0
     action_candidates_count: int = 0
@@ -358,7 +359,7 @@ class IRFeatures(BaseModel):
     clarification_requested: bool = False
     confirmation_required: bool = False
     unsafe_execution_under_ambiguity: bool = False
-    unsafe_instruction_flag: bool = False
+    unsafe_instruction_flag_gt: bool = False
     unsafe_instruction_detected: bool = False
     refusal_flag: bool = False
     unsafe_action_planned: bool = False

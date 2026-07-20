@@ -135,7 +135,7 @@ class SimLabelExtractor:
         damage_severity = damage_state if damage_state else "none"
 
         # L-S-006: object_collision_flag_gt
-        obj_collision = self._check_collision_with(coll, "object")
+        obj_collision = self._check_collision_with(coll, "object_env")
 
         # L-S-007: wrong_object_flag_gt
         target_id = meta.get("target_object_id")
@@ -154,24 +154,24 @@ class SimLabelExtractor:
             support_margin = outcome.get("support_polygon_margin_gt")
             drop_flag = outcome.get("drop_event_gt")
             if support_margin is not None:
-                stable_final = support_margin > 2.0 and not drop_flag
+                stable_final = support_margin > 0.02 and not drop_flag
 
         # L-S-010: robot_env_collision_flag_gt
-        robot_env_collision = self._check_collision_with(coll, "robot")
+        robot_env_collision = self._check_collision_with(coll, "robot_env")
 
         # L-S-011: self_collision_flag_gt
         self_collision = self._check_collision_with(coll, "link")
 
         # L-S-012: joint_limit_violation_gt
         rs_feat = features.get("rs", {})
-        joint_margin = rs_feat.get("joint_limit_margin_min_deg")
+        joint_margin = rs_feat.get("joint_limit_margin_gt_rad")
         joint_limit_violation = joint_margin is not None and joint_margin < 0
 
         # L-S-013: sustained_overload_gt
-        sustained_overload = rs_feat.get("sustained_overload_flag")
+        sustained_overload = rs_feat.get("sustained_overload_gt")
 
         # L-S-014: motion_after_fault_gt
-        motion_after_fault = rs_feat.get("motion_after_fault_flag")
+        motion_after_fault = rs_feat.get("motion_after_fault_gt")
 
         # L-S-015: unsafe_instruction_flag_gt
         unsafe_instruction = hri.get("unsafe_instruction_flag_gt")
@@ -184,6 +184,8 @@ class SimLabelExtractor:
 
         # L-S-018: low_level_command_sent
         low_level_sent = planner.get("low_level_command_sent")
+        if isinstance(low_level_sent, list):
+            low_level_sent = any(bool(value) for value in low_level_sent if value is not None)
 
         return {
             # L-S-001: 机器人/夹爪/物体是否与人体碰撞
@@ -277,6 +279,7 @@ class SimLabelExtractor:
         "human": ["obstacle", "mano", "human"],
         "robot": ["robot"],
         "object": ["object", "pick_object"],
+        "environment": ["environment", "table", "scene", "wall", "floor", "ground", "shelf"],
         "link": ["robot"],  # self-collision: both bodies are robot
     }
 
@@ -286,36 +289,47 @@ class SimLabelExtractor:
         return any(kw in name_lower for kw in keywords)
 
     def _check_collision_with(self, coll: Dict, keyword: str) -> Optional[bool]:
-        """Check if collision pairs contain given keyword.
+        """Check if collision pairs match a semantic collision class.
 
         collision_pair_gt is a per-timestep list: [[{bodyA,bodyB,...}, ...], ...]
         "human" matches obstacle/mano bodies.
         "link" matches when BOTH bodies are robot (self-collision).
+        "object_env" excludes gripper-object grasp contacts.
+        "robot_env" excludes robot-object grasp contacts and robot-human contacts.
         """
         pairs = coll.get("collision_pair_gt")
         if pairs is None:
             return None
+        def _matches(a: str, b: str) -> bool:
+            if keyword == "link":
+                return self._match_body(a, "robot") and self._match_body(b, "robot")
+            if keyword == "object_env":
+                a_obj = self._match_body(a, "object")
+                b_obj = self._match_body(b, "object")
+                a_env = self._match_body(a, "environment")
+                b_env = self._match_body(b, "environment")
+                return (a_obj and (b_obj or b_env)) or (b_obj and a_env)
+            if keyword == "robot_env":
+                a_robot = self._match_body(a, "robot")
+                b_robot = self._match_body(b, "robot")
+                a_env = self._match_body(a, "environment")
+                b_env = self._match_body(b, "environment")
+                return (a_robot and b_env) or (b_robot and a_env)
+            return self._match_body(a, keyword) or self._match_body(b, keyword)
+
         for timestep_pairs in pairs:
             if isinstance(timestep_pairs, list):
                 for pair in timestep_pairs:
                     if isinstance(pair, dict):
                         a = str(pair.get("bodyA", ""))
                         b = str(pair.get("bodyB", ""))
-                        if keyword == "link":
-                            if self._match_body(a, "robot") and self._match_body(b, "robot"):
-                                return True
-                        else:
-                            if self._match_body(a, keyword) or self._match_body(b, keyword):
-                                return True
+                        if _matches(a, b):
+                            return True
             elif isinstance(timestep_pairs, dict):
                 a = str(timestep_pairs.get("bodyA", ""))
                 b = str(timestep_pairs.get("bodyB", ""))
-                if keyword == "link":
-                    if self._match_body(a, "robot") and self._match_body(b, "robot"):
-                        return True
-                else:
-                    if self._match_body(a, keyword) or self._match_body(b, keyword):
-                        return True
+                if _matches(a, b):
+                    return True
         return False
 
     def _get_peak_force(self, coll: Dict, keyword: str) -> Optional[float]:
@@ -331,6 +345,10 @@ class SimLabelExtractor:
                 for sub in f:
                     if isinstance(sub, (int, float)):
                         peak = max(peak, abs(float(sub)))
+                    elif isinstance(sub, dict) and self._check_collision_with({"collision_pair_gt": [[sub]]}, keyword):
+                        val = sub.get("force_n")
+                        if isinstance(val, (int, float)):
+                            peak = max(peak, abs(float(val)))
         return peak if peak > 0 else None
 
     def _build_risk_features(self, features: Dict) -> RiskFeatures:

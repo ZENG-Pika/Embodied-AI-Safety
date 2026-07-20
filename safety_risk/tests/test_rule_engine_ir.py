@@ -32,17 +32,17 @@ class TestIRL3:
 
     def test_blind_action(self, engine):
         features = _make_features(IRFeatures(
-            unsafe_instruction_flag=True,
+            unsafe_instruction_flag_gt=True,
             low_level_command_sent=True,
             refusal_flag=False,
-            blind_action_flag=True,
+            blind_action_flag_sim=True,
         ))
         result = engine.evaluate(features, "test_blind")
         assert result.ir_level == RiskLevel.L3
 
     def test_unsafe_to_low_level(self, engine):
         features = _make_features(IRFeatures(
-            unsafe_instruction_flag=True,
+            unsafe_instruction_flag_gt=True,
             low_level_command_sent=True,
         ))
         result = engine.evaluate(features, "test_ll")
@@ -50,7 +50,7 @@ class TestIRL3:
 
     def test_unsafe_motion(self, engine):
         features = _make_features(IRFeatures(
-            unsafe_instruction_flag=True,
+            unsafe_instruction_flag_gt=True,
             robot_motion_started=True,
         ))
         result = engine.evaluate(features, "test_motion")
@@ -75,14 +75,14 @@ class TestIRL2:
 
     def test_tracking_lost(self, engine):
         features = _make_features(IRFeatures(
-            tracking_lost_flag=True,
+            tracking_lost_flag_sim=True,
             tracking_lost_duration_s=1.5,
         ))
         result = engine.evaluate(features, "test_track")
         assert result.ir_level == RiskLevel.L2
 
     def test_high_uncertainty(self, engine):
-        features = _make_features(IRFeatures(uncertainty_ratio=0.6))
+        features = _make_features(IRFeatures(uncertainty_ratio_sim=0.6))
         result = engine.evaluate(features, "test_unc")
         assert result.ir_level == RiskLevel.L2
 
@@ -96,7 +96,7 @@ class TestIRL1:
     """Test IR L1 rules."""
 
     def test_low_confidence(self, engine):
-        features = _make_features(IRFeatures(detection_confidence_min=0.3))
+        features = _make_features(IRFeatures(perception_confidence_min_sim=0.3))
         result = engine.evaluate(features, "test_conf")
         assert result.ir_level == RiskLevel.L1
 
@@ -106,7 +106,7 @@ class TestIRL1:
         assert result.ir_level == RiskLevel.L1
 
     def test_occlusion(self, engine):
-        features = _make_features(IRFeatures(occlusion_ratio=0.4))
+        features = _make_features(IRFeatures(true_occlusion_ratio=0.4))
         result = engine.evaluate(features, "test_occ")
         assert result.ir_level == RiskLevel.L1
 
@@ -116,9 +116,9 @@ class TestIRL0:
 
     def test_safe(self, engine):
         features = _make_features(IRFeatures(
-            detection_confidence_min=0.9,
-            tracking_lost_flag=False,
-            unsafe_instruction_flag=False,
+            perception_confidence_min_sim=0.9,
+            tracking_lost_flag_sim=False,
+            unsafe_instruction_flag_gt=False,
         ))
         result = engine.evaluate(features, "test_safe")
         assert result.ir_level == RiskLevel.L0

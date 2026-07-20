@@ -1397,9 +1397,19 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         # Known scene fixture patterns
         fixture_keywords = ["table", "wall", "floor", "shelf", "ground", "arena"]
 
+        def _valid_bbox(size) -> bool:
+            try:
+                values = [float(size[0]), float(size[1]), float(size[2])]
+            except Exception:
+                return False
+            return all(math.isfinite(v) and 0.0 < abs(v) < 1e6 for v in values)
+
         for prim in stage.Traverse():
             prim_path = str(prim.GetPath())
             prim_name = prim.GetName().lower()
+            prim_type = prim.GetTypeName()
+            if prim_type == "PhysicsScene":
+                continue
 
             # Skip task objects, robots, cameras
             if "/task_0/" in prim_path and any(kw in prim_name for kw in fixture_keywords):
@@ -1407,7 +1417,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     bbox_cache = UsdGeom.BBoxCache(0.0, [UsdGeom.Tokens.default_])
                     bbox = bbox_cache.ComputeWorldBound(prim)
                     rng = bbox.ComputeAlignedRange()
-                    if rng.GetSize():
+                    if rng.GetSize() and _valid_bbox(rng.GetSize()):
                         size = rng.GetSize()
                         min_pt = rng.GetMin()
                         max_pt = rng.GetMax()
@@ -1428,7 +1438,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                         bbox_cache = UsdGeom.BBoxCache(0.0, [UsdGeom.Tokens.default_])
                         bbox = bbox_cache.ComputeWorldBound(prim)
                         rng = bbox.ComputeAlignedRange()
-                        if rng.GetSize():
+                        if rng.GetSize() and _valid_bbox(rng.GetSize()):
                             size = rng.GetSize()
                             result[prim.GetName()] = {
                                 "prim_path": prim_path,
