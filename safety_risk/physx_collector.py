@@ -78,6 +78,70 @@ class PhysXDataCollector:
         self._link_paths: Dict[str, List[str]] = {}  # robot_name -> [link_paths]
         self._initialized = False
         self._contact_state: Dict[tuple, dict] = {}  # (bodyA, bodyB) -> active contact state
+        self._physics_dt_s = 0.033
+        self._pending_contact_reports = []
+        self._contact_report_sub = None
+        self._data["contact_coverage_status"] = {
+            "configured": False,
+            "successful_steps": 0,
+            "failed_steps": 0,
+            "last_error": None,
+        }
+        self._data["contact_report_status"] = {
+            "subscribed": False,
+            "steps_with_reports": 0,
+            "total_report_headers": 0,
+        }
+        self._data["runtime_physics"] = {
+            "physics_dt_s": None,
+            "gravity_direction": None,
+            "gravity_magnitude_mps2": None,
+        }
+        try:
+            from omni.physx import get_physx_simulation_interface
+            from omni.physx.scripts import physicsUtils
+
+            def _decode_path(encoded):
+                try:
+                    return str(physicsUtils.PhysicsSchemaTools.intToSdfPath(encoded))
+                except Exception:
+                    return ""
+
+            def _on_contact_report(contact_headers, contact_data):
+                pending = []
+                for header in contact_headers:
+                    start = int(header.contact_data_offset)
+                    count = int(header.num_contact_data)
+                    if count <= 0:
+                        continue
+                    impulses = []
+                    positions = []
+                    separations = []
+                    for index in range(start, start + count):
+                        datum = contact_data[index]
+                        impulses.append([float(value) for value in datum.impulse])
+                        positions.append([float(value) for value in datum.position])
+                        separations.append(float(datum.separation))
+                    pending.append({
+                        "actor0": _decode_path(header.actor0),
+                        "actor1": _decode_path(header.actor1),
+                        "collider0": _decode_path(header.collider0),
+                        "collider1": _decode_path(header.collider1),
+                        "impulses_ns": impulses,
+                        "positions_m": positions,
+                        "separations_m": separations,
+                        "source": "PhysX contact-report callback",
+                    })
+                self._pending_contact_reports.extend(pending)
+
+            self._contact_report_sub = (
+                get_physx_simulation_interface().subscribe_contact_report_events(
+                    _on_contact_report
+                )
+            )
+            self._data["contact_report_status"]["subscribed"] = True
+        except Exception as exc:
+            logger.warning("PhysX contact-report subscription unavailable: %s", exc)
 
         # Safety gate runtime state
         self._stop_triggered = False
@@ -426,7 +490,7 @@ class PhysXDataCollector:
 
         result_poses = {}
         result_velocities = {}
-        dt = 0.033
+        dt = self._physics_dt_s
 
         for robot_name, robot in task.robots.items():
             # Discover link paths on first step
@@ -648,7 +712,28 @@ class PhysXDataCollector:
         contact_forces = []
         total_force = [0.0, 0.0, 0.0]
         total_impulse = 0.0
-        dt = 0.033
+        dt = self._physics_dt_s
+        try:
+            from omni.isaac.core.simulation_context import SimulationContext
+
+            simulation_context = SimulationContext.instance()
+            if simulation_context is not None:
+                measured_dt = float(simulation_context.get_physics_dt())
+                if measured_dt > 0:
+                    dt = measured_dt
+                    self._physics_dt_s = measured_dt
+                    self._data["runtime_physics"]["physics_dt_s"] = measured_dt
+                gravity_direction, gravity_magnitude = (
+                    simulation_context.get_physics_context().get_gravity()
+                )
+                self._data["runtime_physics"]["gravity_direction"] = [
+                    float(value) for value in gravity_direction
+                ]
+                self._data["runtime_physics"]["gravity_magnitude_mps2"] = float(
+                    gravity_magnitude
+                )
+        except Exception:
+            pass
 
         # Helper to get object position
         def _get_pos(obj_name):
@@ -776,7 +861,7 @@ class PhysXDataCollector:
                     for obj_name, contact_view in obj_dict.items():
                         try:
                             # Try to get detailed contact data with contact points
-                            contact_data = contact_view.get_contact_force_data()
+                            contact_data = contact_view.get_contact_force_data(dt=dt)
                             if contact_data is not None:
                                 forces = contact_data[0]      # (max_contact_count, 1)
                                 points = contact_data[1]      # (max_contact_count, 3)
@@ -842,7 +927,7 @@ class PhysXDataCollector:
                                 total_impulse += force_magnitude * dt
                             else:
                                 # Fallback to get_contact_force_matrix
-                                force_matrix = contact_view.get_contact_force_matrix()
+                                force_matrix = contact_view.get_contact_force_matrix(dt=dt)
                                 if force_matrix is not None:
                                     force_matrix = np.abs(force_matrix).squeeze()
                                     if force_matrix.ndim >= 2:
@@ -890,7 +975,7 @@ class PhysXDataCollector:
                 for lr_name, view_dict in lr_dict.items():
                     for view_name, contact_view in view_dict.items():
                         try:
-                            force_matrix = contact_view.get_contact_force_matrix()
+                            force_matrix = contact_view.get_contact_force_matrix(dt=dt)
                             if force_matrix is not None:
                                 force_matrix = np.abs(force_matrix).squeeze()
                                 force_magnitude = float(np.sum(force_matrix))
@@ -937,7 +1022,7 @@ class PhysXDataCollector:
                     for obj_name, contact_view in obj_dict.items():
                         try:
                             # Try to get detailed contact data with contact points
-                            contact_data = contact_view.get_contact_force_data()
+                            contact_data = contact_view.get_contact_force_data(dt=dt)
                             if contact_data is not None:
                                 forces = contact_data[0]
                                 points = contact_data[1]
@@ -990,7 +1075,7 @@ class PhysXDataCollector:
                                 total_impulse += force_magnitude * dt
                             else:
                                 # Fallback to get_contact_force_matrix
-                                force_matrix = contact_view.get_contact_force_matrix()
+                                force_matrix = contact_view.get_contact_force_matrix(dt=dt)
                                 if force_matrix is not None:
                                     force_matrix = np.abs(force_matrix).squeeze()
                                     force_magnitude = float(np.sum(force_matrix))
@@ -1027,64 +1112,243 @@ class PhysXDataCollector:
                                 robot_name, lr_name, obj_name, exc,
                             )
 
-        # Targeted robot self-collision views: left arm links against right arm
-        # links.  These are intentionally narrower than a scene-wide contact
-        # matrix so contact recording does not perturb the rest of the pipeline.
-        if hasattr(task, 'robotselfcontact_views'):
-            for robot_name, source_dict in task.robotselfcontact_views.items():
-                for source_link, spec in source_dict.items():
-                    try:
-                        contact_view = spec["view"]
-                        filter_labels = spec.get("filter_labels", [])
-                        matrix = contact_view.get_contact_force_matrix()
-                        if matrix is None:
-                            continue
-                        matrix = np.asarray(matrix)
-                        for filter_idx, filter_link in enumerate(filter_labels):
-                            if matrix.ndim >= 3:
-                                if filter_idx >= matrix.shape[1]:
-                                    continue
-                                force_magnitude = float(np.linalg.norm(matrix[0, filter_idx]))
-                            elif matrix.ndim == 2:
-                                if filter_idx >= matrix.shape[0]:
-                                    continue
-                                force_magnitude = float(np.linalg.norm(matrix[filter_idx]))
-                            else:
-                                if filter_idx != 0:
-                                    continue
-                                force_magnitude = float(np.linalg.norm(matrix))
-                            if force_magnitude <= 0.01:
-                                continue
+        # One complete tensor matrix covers the four missing collision
+        # categories.  Aggregate colliders that share a semantic body label and
+        # canonicalize symmetric pairs so no contact is double-counted.
+        safetycontact_spec = getattr(task, "safetycontact_view", None)
+        coverage_status = self._data["contact_coverage_status"]
+        coverage_status["configured"] = bool(safetycontact_spec)
+        if safetycontact_spec:
+            try:
+                matrix = safetycontact_spec["view"].get_contact_force_matrix(dt=dt)
+                if matrix is None:
+                    raise RuntimeError("PhysX returned no safety contact matrix")
+                matrix = np.asarray(matrix, dtype=float)
+                source_labels = safetycontact_spec.get("source_labels", [])
+                filter_labels = safetycontact_spec.get("filter_labels", [])
+                expected_shape = (len(source_labels), len(filter_labels), 3)
+                if matrix.ndim != 3 or tuple(matrix.shape) != expected_shape:
+                    raise RuntimeError(
+                        f"safety contact matrix shape {tuple(matrix.shape)} != {expected_shape}"
+                    )
 
-                            body_a = f"robot/{robot_name}/{source_link}"
-                            body_b = f"robot/{robot_name}/{filter_link}"
-                            collision_pairs.append({
-                                "bodyA": body_a,
-                                "bodyB": body_b,
-                                "step": step_id,
-                                "force_n": force_magnitude,
-                            })
-                            collision_locations.append({
-                                "bodyA": body_a,
-                                "bodyB": body_b,
-                                "location_m": None,
-                            })
-                            penetration_depths.append({
-                                "bodyA": body_a,
-                                "bodyB": body_b,
-                                "depth_m": _hertzian_depth(force_magnitude),
-                                "method": "hertzian_fallback",
-                                "source": "contact_view.get_contact_force_matrix()",
-                                "confidence": "low",
-                                "num_contact_points": 0,
-                                "hertzian_stiffness_n_per_m": 1e6,
-                            })
-                            total_impulse += force_magnitude * dt
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to read robot self contact view %s/%s: %s",
-                            robot_name, source_link, exc,
-                        )
+                aggregated = {}
+                for source_idx, source in enumerate(source_labels):
+                    source_kind = source.get("kind")
+                    source_label = source.get("label")
+                    for filter_idx, target in enumerate(filter_labels):
+                        target_kind = target.get("kind")
+                        target_label = target.get("label")
+                        force_magnitude = float(np.linalg.norm(matrix[source_idx, filter_idx]))
+                        if force_magnitude <= 0:
+                            continue
+
+                        pair = None
+                        if source_kind == "object" and target_kind == "environment":
+                            pair = (
+                                f"object/{source_label}",
+                                f"environment/{target_label}",
+                            )
+                        elif source_kind == "object" and target_kind == "human":
+                            pair = (
+                                f"object/{source_label}",
+                                f"obstacle/{target_label}",
+                            )
+                        elif source_kind == "robot" and target_kind == "environment":
+                            pair = (
+                                f"robot/{source_label}",
+                                f"environment/{target_label}",
+                            )
+                        elif source_kind == "robot" and target_kind == "robot":
+                            if source_label == target_label:
+                                continue
+                            first, second = sorted((source_label, target_label))
+                            if source_label != first:
+                                continue
+                            pair = (f"robot/{first}", f"robot/{second}")
+                        elif source_kind == "object" and target_kind == "object":
+                            if source_label == target_label:
+                                continue
+                            first, second = sorted((source_label, target_label))
+                            if source_label != first:
+                                continue
+                            pair = (f"object/{first}", f"object/{second}")
+
+                        if pair is not None:
+                            aggregated[pair] = aggregated.get(pair, 0.0) + force_magnitude
+
+                for (body_a, body_b), force_magnitude in aggregated.items():
+                    if force_magnitude <= 0.01:
+                        continue
+                    collision_pairs.append({
+                        "bodyA": body_a,
+                        "bodyB": body_b,
+                        "step": step_id,
+                        "force_n": force_magnitude,
+                        "source": "RigidContactView.get_contact_force_matrix(dt=physics_dt)",
+                    })
+                    collision_locations.append({
+                        "bodyA": body_a,
+                        "bodyB": body_b,
+                        "location_m": None,
+                    })
+                    penetration_depths.append({
+                        "bodyA": body_a,
+                        "bodyB": body_b,
+                        "depth_m": _hertzian_depth(force_magnitude),
+                        "method": "hertzian_fallback",
+                        "source": "contact_view.get_contact_force_matrix(dt=physics_dt)",
+                        "confidence": "low",
+                        "num_contact_points": 0,
+                        "hertzian_stiffness_n_per_m": 1e6,
+                    })
+                    total_impulse += force_magnitude * dt
+
+                coverage_status["successful_steps"] += 1
+                coverage_status["last_error"] = None
+            except Exception as exc:
+                coverage_status["failed_steps"] += 1
+                coverage_status["last_error"] = f"{type(exc).__name__}: {exc}"
+                logger.warning("Failed complete safety contact view: %s", exc)
+
+        # Replace tensor-derived forces with the native PhysX contact-report
+        # impulses.  The callback exposes the solver impulse vector directly,
+        # avoiding backend-dependent force scaling in multi-filter matrices.
+        if self._contact_report_sub is not None:
+            reports = self._pending_contact_reports
+            self._pending_contact_reports = []
+            report_status = self._data["contact_report_status"]
+            report_status["total_report_headers"] += len(reports)
+            if reports:
+                report_status["steps_with_reports"] += 1
+            collision_pairs.clear()
+            collision_locations.clear()
+            penetration_depths.clear()
+            total_impulse = 0.0
+
+            def _semantic_body(actor_path, collider_path):
+                candidates = [actor_path, collider_path]
+                for robot_name, robot in getattr(task, "robots", {}).items():
+                    root = robot.robot_prim_path.rstrip("/")
+                    for path in candidates:
+                        if path == root or path.startswith(root + "/"):
+                            rel = path[len(root):].lstrip("/") or "root"
+                            return "robot", f"{robot_name}/{rel}"
+
+                for object_name, obj in getattr(task, "objects", {}).items():
+                    root = obj.prim_path.rstrip("/")
+                    for path in candidates:
+                        if path == root or path.startswith(root + "/"):
+                            if "obstacle" in object_name.lower():
+                                return "human", object_name
+                            if object_name.startswith("pick_"):
+                                return "object", object_name
+                            return "environment", object_name
+
+                for fixture_name, fixture in getattr(task, "fixtures", {}).items():
+                    root = fixture.prim_path.rstrip("/")
+                    for path in candidates:
+                        if path == root or path.startswith(root + "/"):
+                            return "environment", fixture_name
+                return None
+
+            def _canonical_pair(first, second):
+                if first is None or second is None:
+                    return None
+                kind_a, label_a = first
+                kind_b, label_b = second
+                if kind_a == kind_b and label_a == label_b:
+                    return None
+
+                kinds = {kind_a, kind_b}
+                if kinds == {"object", "environment"}:
+                    obj = first if kind_a == "object" else second
+                    env = second if kind_a == "object" else first
+                    return f"object/{obj[1]}", f"environment/{env[1]}"
+                if kinds == {"object", "human"}:
+                    obj = first if kind_a == "object" else second
+                    human = second if kind_a == "object" else first
+                    return f"object/{obj[1]}", f"obstacle/{human[1]}"
+                if kinds == {"robot", "environment"}:
+                    robot = first if kind_a == "robot" else second
+                    env = second if kind_a == "robot" else first
+                    return f"robot/{robot[1]}", f"environment/{env[1]}"
+                if kinds == {"robot", "human"}:
+                    robot = first if kind_a == "robot" else second
+                    human = second if kind_a == "robot" else first
+                    return f"robot/{robot[1]}", f"obstacle/{human[1]}"
+                if kinds == {"robot", "object"}:
+                    robot = first if kind_a == "robot" else second
+                    obj = second if kind_a == "robot" else first
+                    return f"robot/{robot[1]}", f"object/{obj[1]}"
+                if kind_a == kind_b == "robot":
+                    first_label, second_label = sorted((label_a, label_b))
+                    return f"robot/{first_label}", f"robot/{second_label}"
+                if kind_a == kind_b == "object":
+                    first_label, second_label = sorted((label_a, label_b))
+                    return f"object/{first_label}", f"object/{second_label}"
+                return None
+
+            aggregated_reports = {}
+            for report in reports:
+                first = _semantic_body(report.get("actor0", ""), report.get("collider0", ""))
+                second = _semantic_body(report.get("actor1", ""), report.get("collider1", ""))
+                pair = _canonical_pair(first, second)
+                if pair is None:
+                    continue
+
+                impulses = np.asarray(report.get("impulses_ns", []), dtype=float)
+                if impulses.size == 0:
+                    continue
+                impulses = impulses.reshape(-1, 3)
+                impulse_vector = np.sum(impulses, axis=0)
+                entry = aggregated_reports.setdefault(pair, {
+                    "impulse_vector_ns": np.zeros(3, dtype=float),
+                    "positions_m": [],
+                    "separations_m": [],
+                })
+                entry["impulse_vector_ns"] += impulse_vector
+                entry["positions_m"].extend(report.get("positions_m", []))
+                entry["separations_m"].extend(report.get("separations_m", []))
+
+            for (body_a, body_b), entry in aggregated_reports.items():
+                impulse_ns = float(np.linalg.norm(entry["impulse_vector_ns"]))
+                force_magnitude = impulse_ns / dt
+                if force_magnitude <= 0.01:
+                    continue
+                positions = np.asarray(entry["positions_m"], dtype=float)
+                location_m = (
+                    [float(value) for value in np.mean(positions, axis=0)]
+                    if positions.size else None
+                )
+                separations = np.asarray(entry["separations_m"], dtype=float)
+                penetration_m = (
+                    float(max(0.0, -np.min(separations)))
+                    if separations.size else None
+                )
+                collision_pairs.append({
+                    "bodyA": body_a,
+                    "bodyB": body_b,
+                    "step": step_id,
+                    "force_n": force_magnitude,
+                    "impulse_ns": impulse_ns,
+                    "source": "PhysX contact-report impulse / measured physics_dt",
+                })
+                collision_locations.append({
+                    "bodyA": body_a,
+                    "bodyB": body_b,
+                    "location_m": location_m,
+                })
+                penetration_depths.append({
+                    "bodyA": body_a,
+                    "bodyB": body_b,
+                    "depth_m": penetration_m,
+                    "method": "physx_contact_separation",
+                    "source": "PhysX contact-report callback",
+                    "confidence": "high",
+                    "num_contact_points": int(len(entry["separations_m"])),
+                })
+                total_impulse += impulse_ns
 
         # Track contact events for duration computation.  Each pair is tracked
         # independently and every separated contact interval is emitted as its
@@ -1138,19 +1402,30 @@ class PhysXDataCollector:
                 "bodyA": pair["bodyA"],
                 "bodyB": pair["bodyB"],
                 "step": pair.get("step", step_id),
-                "impulse_ns": force_n * dt,
+                "impulse_ns": float(pair.get("impulse_ns", force_n * dt)),
             })
         self._data["contact_force_gt"].append(contact_forces if contact_forces else [])
         self._data["contact_impulse_gt"].append(contact_impulses if contact_impulses else [])
 
         # S-GRASP-001: Collect gripper-object contact force per arm.
         gripper_obj_force = {"left": 0.0, "right": 0.0}
-        if hasattr(task, 'pickcontact_views'):
+        if self._contact_report_sub is not None:
+            for pair in collision_pairs:
+                body_a = pair.get("bodyA", "")
+                body_b = pair.get("bodyB", "")
+                if not body_a.startswith("robot/") or not body_b.startswith("object/"):
+                    continue
+                lower = body_a.lower()
+                if "/fl/" in lower or "/left/" in lower:
+                    gripper_obj_force["left"] += float(pair.get("force_n", 0.0) or 0.0)
+                elif "/fr/" in lower or "/right/" in lower:
+                    gripper_obj_force["right"] += float(pair.get("force_n", 0.0) or 0.0)
+        elif hasattr(task, 'pickcontact_views'):
             for robot_name, lr_dict in task.pickcontact_views.items():
                 for lr_name, obj_dict in lr_dict.items():
                     for obj_name, contact_view in obj_dict.items():
                         try:
-                            force_matrix = contact_view.get_contact_force_matrix()
+                            force_matrix = contact_view.get_contact_force_matrix(dt=dt)
                             if force_matrix is not None:
                                 force_matrix = np.abs(force_matrix).squeeze()
                                 force_magnitude = float(np.sum(force_matrix))

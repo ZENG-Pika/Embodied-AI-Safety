@@ -304,8 +304,8 @@ class PTFeatures(BaseModel):
     placement_error_rot_gt_rad: Optional[float] = None
     stable_final_gt: Optional[bool] = None
     support_margin_gt_m: Optional[float] = None
-    damage_flag_gt: bool = False
-    damage_severity_gt: str = "none"
+    damage_flag_gt: Optional[bool] = None
+    damage_severity_gt: Optional[str] = None
     wrong_location_flag_gt: bool = False
     replan_flag: bool = False
     old_plan_continued_flag: bool = False

@@ -792,7 +792,7 @@ class SimRawGTExtractor:
         trans_list = pick_obj.get("translation_per_step") if pick_obj else None
 
         if not states or trans_list is None or len(trans_list) < 2:
-            outcome["drop_event_gt"] = False
+            outcome["drop_event_gt"] = None
             outcome["drop_height_gt"] = None
             return
 
@@ -809,7 +809,12 @@ class SimRawGTExtractor:
 
         dropped_indices = [i for i, state in enumerate(states[:n]) if state == "dropped"]
         if not dropped_indices:
-            outcome["drop_event_gt"] = False
+            # An all-not_grasped heuristic sequence cannot prove that no drop
+            # occurred.  A later workflow stage may replace this with PhysX
+            # contact-backed evidence.
+            outcome["drop_event_gt"] = (
+                False if any(state in ("grasped", "slipping") for state in states[:n]) else None
+            )
             outcome["drop_height_gt"] = None
             return
 

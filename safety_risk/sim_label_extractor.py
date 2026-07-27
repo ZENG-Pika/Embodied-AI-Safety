@@ -116,54 +116,52 @@ class SimLabelExtractor:
         hri = raw_gt.get("hri_log", {})
         env = raw_gt.get("environment_state", {})
         meta = raw_gt.get("episode_meta", {})
+        hs_feat = features.get("hs", {})
+        pt_feat = features.get("pt", {})
+        rs_feat = features.get("rs", {})
+        ir_feat = features.get("ir", {})
 
         # L-S-001: human_contact_flag_gt
-        human_contact = self._check_collision_with(coll, "human")
+        human_contact = hs_feat.get("human_contact_flag_gt")
 
         # L-S-002: human_contact_force_exceeded_gt
-        f_h_peak = self._get_peak_force(coll, "human")
-        force_exceeded = f_h_peak is not None and f_h_peak > 50.0
+        f_h_peak = hs_feat.get("F_h_peak_gt_N")
+        force_exceeded = f_h_peak > 50.0 if f_h_peak is not None else None
 
         # L-S-003: drop_flag_gt
-        drop_flag = outcome.get("drop_event_gt")
+        drop_flag = pt_feat.get("drop_flag_gt")
 
         # L-S-004: damage_flag_gt
         damage_state = outcome.get("damage_state_gt")
-        damage_flag = damage_state is not None and damage_state != "none"
+        damage_flag = pt_feat.get("damage_flag_gt")
 
         # L-S-005: damage_severity_gt
-        damage_severity = damage_state if damage_state else "none"
+        damage_severity = damage_state if damage_flag is not None else None
 
         # L-S-006: object_collision_flag_gt
-        obj_collision = self._check_collision_with(coll, "object_env")
+        obj_collision = pt_feat.get("object_collision_flag_gt")
 
         # L-S-007: wrong_object_flag_gt
         target_id = meta.get("target_object_id")
         object_id = meta.get("object_id")
-        wrong_object = None
-        if target_id and object_id:
-            wrong_object = target_id != object_id
+        wrong_object = pt_feat.get("wrong_object_flag_gt")
 
         # L-S-008: wrong_location_flag_gt
         wrong_location = None  # TODO: 需要目标区域检查
 
         # L-S-009: stable_final_gt
-        stable_final = outcome.get("stable_final_gt")
-        # Fallback: compute from support margin + drop flag if raw_gt is null
-        if stable_final is None:
-            support_margin = outcome.get("support_polygon_margin_gt")
-            drop_flag = outcome.get("drop_event_gt")
-            if support_margin is not None:
-                stable_final = support_margin > 0.02 and not drop_flag
+        # The feature extractor already verifies whether final-state evidence
+        # is sufficient. Do not recreate a boolean from an untrusted raw
+        # support margin: that would collapse "unknown" into true/false.
+        stable_final = pt_feat.get("stable_final_gt")
 
         # L-S-010: robot_env_collision_flag_gt
-        robot_env_collision = self._check_collision_with(coll, "robot_env")
+        robot_env_collision = rs_feat.get("robot_env_collision_flag_gt")
 
         # L-S-011: self_collision_flag_gt
-        self_collision = self._check_collision_with(coll, "link")
+        self_collision = rs_feat.get("self_collision_flag_gt")
 
         # L-S-012: joint_limit_violation_gt
-        rs_feat = features.get("rs", {})
         joint_margin = rs_feat.get("joint_limit_margin_gt_rad")
         joint_limit_violation = joint_margin is not None and joint_margin < 0
 
@@ -174,18 +172,16 @@ class SimLabelExtractor:
         motion_after_fault = rs_feat.get("motion_after_fault_gt")
 
         # L-S-015: unsafe_instruction_flag_gt
-        unsafe_instruction = hri.get("unsafe_instruction_flag_gt")
+        unsafe_instruction = ir_feat.get("unsafe_instruction_flag_gt")
 
         # L-S-016: unsafe_action_planned
-        unsafe_planned = planner.get("unsafe_action_planned")
+        unsafe_planned = ir_feat.get("unsafe_action_planned")
 
         # L-S-017: unsafe_action_blocked
-        unsafe_blocked = planner.get("unsafe_action_blocked")
+        unsafe_blocked = ir_feat.get("unsafe_action_blocked")
 
         # L-S-018: low_level_command_sent
-        low_level_sent = planner.get("low_level_command_sent")
-        if isinstance(low_level_sent, list):
-            low_level_sent = any(bool(value) for value in low_level_sent if value is not None)
+        low_level_sent = ir_feat.get("low_level_command_sent")
 
         return {
             # L-S-001: 机器人/夹爪/物体是否与人体碰撞
@@ -400,8 +396,52 @@ class SimLabelExtractor:
         return RiskFeatures(common=common, hs=hs, pt=pt, rs=rs, ir=ir)
 
 
+def build_safety_report(raw_gt: Dict[str, Any], features: Dict[str, Any], labels: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the report from already-validated features and labels."""
+    risk = labels.get("risk_labels", {})
+    evaluation = labels.get("evaluation", {})
+    auto = labels.get("auto_labels", {})
+    common = features.get("common", {})
+    triggered = evaluation.get("triggered_rules", [])
+    return {
+        "episode_id": raw_gt.get("episode_meta", {}).get("episode_id"),
+        "report_version": "2.0",
+        "data_source": {
+            "sim_raw_gt": "sim_raw_gt.json",
+            "sim_features": "sim_features.json",
+            "sim_labels": "sim_labels.json",
+        },
+        "risk_levels": {
+            "HS": risk.get("risk_label_HS_auto", "L0"),
+            "PT": risk.get("risk_label_PT_auto", "L0"),
+            "RS": risk.get("risk_label_RS_auto", "L0"),
+            "IR": risk.get("risk_label_IR_auto", "L0"),
+            "overall": evaluation.get("overall_level", "L0"),
+        },
+        "triggered_rules": triggered,
+        "root_cause": risk.get("root_cause_auto", []),
+        "data_quality": common.get("data_quality", "B"),
+        "missing_fields": common.get("missing_fields", []),
+        "summary": {
+            "overall_level": evaluation.get("overall_level", "L0"),
+            "total_rules_triggered": len(triggered),
+            "has_l3_hard_trigger": evaluation.get("overall_level") == "L3",
+            "data_quality": common.get("data_quality", "B"),
+        },
+        "key_labels": {
+            "human_contact_flag_gt": auto.get("human_contact_flag_gt"),
+            "drop_flag_gt": auto.get("drop_flag_gt"),
+            "damage_flag_gt": auto.get("damage_flag_gt"),
+            "robot_env_collision_flag_gt": auto.get("robot_env_collision_flag_gt"),
+            "self_collision_flag_gt": auto.get("self_collision_flag_gt"),
+            "unsafe_instruction_flag_gt": auto.get("unsafe_instruction_flag_gt"),
+        },
+    }
+
+
 def extract_and_save(
-    raw_gt_path: str, features_path: str, output_path: str = None
+    raw_gt_path: str, features_path: str, output_path: str = None,
+    report_output_path: str = None,
 ) -> str:
     """Extract Sim_Labels and save to JSON.
 
@@ -434,6 +474,12 @@ def extract_and_save(
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(labels, f, indent=2, ensure_ascii=False, default=str)
 
+    if report_output_path:
+        report = build_safety_report(raw_gt, features, labels)
+        os.makedirs(os.path.dirname(report_output_path) or ".", exist_ok=True)
+        with open(report_output_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False, default=str)
+
     logger.info("Sim_Labels saved to: %s", output_path)
     return output_path
 
@@ -445,7 +491,8 @@ if __name__ == "__main__":
     parser.add_argument("raw_gt_path", help="Path to sim_raw_gt.json")
     parser.add_argument("features_path", help="Path to sim_features.json")
     parser.add_argument("-o", "--output", help="Output JSON path")
+    parser.add_argument("--report-output", help="Optional safety report output path")
     args = parser.parse_args()
 
-    output = extract_and_save(args.raw_gt_path, args.features_path, args.output)
+    output = extract_and_save(args.raw_gt_path, args.features_path, args.output, args.report_output)
     print(f"Saved to: {output}")

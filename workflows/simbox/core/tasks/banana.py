@@ -105,7 +105,7 @@ class BananaBaseTask(BaseTask):
         self.pickcontact_views = self._set_pickcontact_view(self.cfg)
         self.artcontact_views = self._set_artcontact_view(self.cfg)
         self.obstaclecontact_views = self._set_obstaclecontact_view(self.cfg)
-        self.robotselfcontact_views = self._set_robotselfcontact_view()
+        self.safetycontact_view = self._set_safetycontact_view(self.cfg)
 
         # Set up visual distrator (if exists)
         if self.cfg.get("distractors", None):
@@ -150,7 +150,7 @@ class BananaBaseTask(BaseTask):
         self.pickcontact_views = self._set_pickcontact_view(self.cfg)
         self.artcontact_views = self._set_artcontact_view(self.cfg)
         self.obstaclecontact_views = self._set_obstaclecontact_view(self.cfg)
-        self.robotselfcontact_views = self._set_robotselfcontact_view()
+        self.safetycontact_view = self._set_safetycontact_view(self.cfg)
 
     def individual_reset_from_mem(self):
         for cfg in self.cfg["arena"]["fixtures"]:
@@ -170,7 +170,7 @@ class BananaBaseTask(BaseTask):
         self.pickcontact_views = self._set_pickcontact_view(self.cfg)
         self.artcontact_views = self._set_artcontact_view(self.cfg)
         self.obstaclecontact_views = self._set_obstaclecontact_view(self.cfg)
-        self.robotselfcontact_views = self._set_robotselfcontact_view()
+        self.safetycontact_view = self._set_safetycontact_view(self.cfg)
 
     def individual_randomize(self):
         # Randomize objects in regions
@@ -238,9 +238,9 @@ class BananaBaseTask(BaseTask):
 
         for view in all_views:
             view.initialize()
-        for robot_views in getattr(self, "robotselfcontact_views", {}).values():
-            for spec in robot_views.values():
-                spec["view"].initialize()
+        safetycontact_spec = getattr(self, "safetycontact_view", None)
+        if safetycontact_spec:
+            safetycontact_spec["view"].initialize()
 
     def apply_action(self, action: Dict[str, Dict[str, np.ndarray]]):
         for name in action.keys():
@@ -391,6 +391,7 @@ class BananaBaseTask(BaseTask):
                                     ] = RigidContactView(
                                         prim_paths_expr=self._task_objects[object_name].object_link_path,
                                         filter_paths_expr=filter_paths_expr,
+                                        disable_stablization=False,
                                         max_contact_count=1000,
                                     )
                                 if (object_name + "_fingers_base") not in artcontact_views[robot_name][lr_name]:
@@ -399,6 +400,7 @@ class BananaBaseTask(BaseTask):
                                     ] = RigidContactView(
                                         prim_paths_expr=self._task_objects[object_name].object_base_path,
                                         filter_paths_expr=filter_paths_expr,
+                                        disable_stablization=False,
                                         max_contact_count=1000,
                                     )
 
@@ -409,6 +411,7 @@ class BananaBaseTask(BaseTask):
                                         prim_paths_expr=self._task_objects[object_name].object_prim_path
                                         + "/instance/*",
                                         filter_paths_expr=forbid_collision_paths,
+                                        disable_stablization=False,
                                         max_contact_count=1000,
                                     )
 
@@ -435,6 +438,7 @@ class BananaBaseTask(BaseTask):
                                 if object_name not in pickcontact_views[robot_name][lr_name]:
                                     pickcontact_views[robot_name][lr_name][object_name] = RigidContactView(
                                         prim_paths_expr=prim_paths_expr, filter_paths_expr=filter_paths_expr,
+                                        disable_stablization=False,
                                         max_contact_count=1000,  # Enable contact point data
                                     )
         return pickcontact_views
@@ -475,16 +479,233 @@ class BananaBaseTask(BaseTask):
                     obstaclecontact_views[robot_name][link_label][obstacle_name] = RigidContactView(
                         prim_paths_expr=source_expr,
                         filter_paths_expr=[link_path],
+                        disable_stablization=False,
                         max_contact_count=1000,  # Enable contact point data
                     )
         return obstaclecontact_views
 
-    def _set_robotselfcontact_view(self):
-        """Create targeted left-arm/right-arm contact views.
+    @staticmethod
+    def _collision_paths_under(prim):
+        """Return every enabled USD collision shape under a prim."""
+        from pxr import UsdPhysics
 
-        This avoids the previous scene-wide contact matrix while still
-        recording the robot self-collisions that matter for split_aloha.
+        paths = []
+        if not prim or not prim.IsValid():
+            return paths
+        for child in Usd.PrimRange(prim):
+            if child.HasAPI(UsdPhysics.CollisionAPI):
+                paths.append(str(child.GetPath()))
+        return paths
+
+    @staticmethod
+    def _rigid_body_paths_under(prim):
+        """Return exact rigid-body paths; contact-view filters cannot fan out."""
+        from pxr import UsdPhysics
+
+        paths = []
+        if not prim or not prim.IsValid():
+            return paths
+        for child in Usd.PrimRange(prim):
+            if child.HasAPI(UsdPhysics.RigidBodyAPI):
+                paths.append(str(child.GetPath()))
+        return paths
+
+    def _static_environment_collision_paths(self):
+        """Enumerate task fixtures and static placement-target collision shapes."""
+        paths = []
+        labels = []
+        roots = list(self.fixtures.items())
+        for cfg in self.cfg.get("objects", []):
+            name = cfg.get("name", "")
+            if name in self.objects and not name.startswith("pick_") and "obstacle" not in name.lower():
+                roots.append((name, self.objects[name]))
+
+        seen = set()
+        for name, obj in roots:
+            prim = get_prim_at_path(obj.prim_path)
+            for path in self._collision_paths_under(prim):
+                if path in seen:
+                    continue
+                seen.add(path)
+                paths.append(path)
+                labels.append(name)
+        return paths, labels
+
+    def _set_safetycontact_view(self, cfg):
+        """Create one complete, low-overhead safety contact matrix.
+
+        Exact source and filter paths are supplied in deterministic order.  A
+        single PhysX tensor view covers intended objects, every robot rigid
+        body, configured environment colliders, and every human-obstacle rigid
+        body.  Downstream collection classifies matrix cells by the semantic
+        labels stored alongside the paths.
         """
+        from pxr import UsdPhysics
+
+        source_paths = []
+        source_labels = []
+        filter_paths = []
+        filter_labels = []
+
+        def add_source(path, kind, label):
+            if path in source_paths:
+                return
+            source_paths.append(path)
+            source_labels.append({"kind": kind, "label": label})
+
+        def add_filter(path, kind, label):
+            if path in filter_paths:
+                return
+            filter_paths.append(path)
+            filter_labels.append({"kind": kind, "label": label})
+
+        for robot_name, robot in self.robots.items():
+            robot_prim = get_prim_at_path(robot.robot_prim_path)
+            root = robot.robot_prim_path.rstrip("/") + "/"
+            for prim in Usd.PrimRange(robot_prim):
+                if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                    continue
+                path = str(prim.GetPath())
+                rel = path.replace(root, "")
+                label = f"{robot_name}/{rel}"
+                add_source(path, "robot", label)
+                add_filter(path, "robot", label)
+
+        for item in cfg.get("objects", []):
+            name = item.get("name", "")
+            if not name.startswith("pick_") or name not in self.objects:
+                continue
+            path = self.objects[name].prim_path
+            add_source(path, "object", name)
+            add_filter(path, "object", name)
+
+        env_paths, env_labels = self._static_environment_collision_paths()
+        for path, label in zip(env_paths, env_labels):
+            add_filter(path, "environment", label)
+
+        for item in cfg.get("objects", []):
+            name = item.get("name", "")
+            if "obstacle" not in name.lower() or name not in self.objects:
+                continue
+            obstacle_prim = get_prim_at_path(self.objects[name].prim_path)
+            for path in self._rigid_body_paths_under(obstacle_prim):
+                add_filter(path, "human", name)
+
+        if not source_paths or not filter_paths:
+            return None
+
+        return {
+            "view": RigidContactView(
+                prim_paths_expr=source_paths,
+                filter_paths_expr=[list(filter_paths) for _ in source_paths],
+                disable_stablization=False,
+                max_contact_count=10000,
+            ),
+            "source_labels": source_labels,
+            "filter_labels": filter_labels,
+            "coverage": {
+                "object_human": True,
+                "object_env": True,
+                "robot_env": True,
+                "self": True,
+            },
+        }
+
+    def _set_objectenvcontact_view(self, cfg):
+        """Create complete pick-object contacts against configured environment.
+
+        The filter set includes all fixture/static-target collision shapes and
+        every other intended pick object.  Human obstacles are covered by a
+        separate view so their contacts remain semantically distinct.
+        """
+        env_paths, env_labels = self._static_environment_collision_paths()
+        pick_names = [
+            item.get("name", "")
+            for item in cfg.get("objects", [])
+            if item.get("name", "").startswith("pick_") and item.get("name", "") in self.objects
+        ]
+        result = {}
+        for source_name in pick_names:
+            filter_paths = list(env_paths)
+            filter_labels = list(env_labels)
+            for other_name in pick_names:
+                if other_name == source_name:
+                    continue
+                filter_paths.append(self.objects[other_name].prim_path)
+                filter_labels.append(other_name)
+            if not filter_paths:
+                continue
+            result.setdefault(source_name, {})["environment"] = {
+                "view": RigidContactView(
+                    prim_paths_expr=self.objects[source_name].prim_path,
+                    filter_paths_expr=filter_paths,
+                    max_contact_count=2000,
+                ),
+                "filter_labels": filter_labels,
+            }
+        return result
+
+    def _set_robotenvcontact_view(self):
+        """Create per-rigid-link robot contacts against all configured fixtures."""
+        from pxr import UsdPhysics
+
+        env_paths, env_labels = self._static_environment_collision_paths()
+        result = {}
+        if not env_paths:
+            return result
+        for robot_name, robot in self.robots.items():
+            root_prim = get_prim_at_path(robot.robot_prim_path)
+            root_path = robot.robot_prim_path.rstrip("/") + "/"
+            result[robot_name] = {}
+            for prim in Usd.PrimRange(root_prim):
+                if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                    continue
+                path = str(prim.GetPath())
+                label = path.replace(root_path, "")
+                result[robot_name][label] = {
+                    "view": RigidContactView(
+                        prim_paths_expr=path,
+                        filter_paths_expr=env_paths,
+                        max_contact_count=2000,
+                    ),
+                    "filter_labels": list(env_labels),
+                }
+        return result
+
+    def _set_objecthumancontact_view(self, cfg):
+        """Create pick-object contacts against every configured human obstacle."""
+        obstacle_names = [
+            item.get("name", "")
+            for item in cfg.get("objects", [])
+            if "obstacle" in item.get("name", "").lower()
+            and item.get("name", "") in self.objects
+        ]
+        pick_names = [
+            item.get("name", "")
+            for item in cfg.get("objects", [])
+            if item.get("name", "").startswith("pick_")
+            and item.get("name", "") in self.objects
+        ]
+        result = {}
+        for pick_name in pick_names:
+            result[pick_name] = {}
+            for obstacle_name in obstacle_names:
+                obstacle_prim = get_prim_at_path(self.objects[obstacle_name].prim_path)
+                obstacle_paths = self._rigid_body_paths_under(obstacle_prim)
+                if not obstacle_paths:
+                    continue
+                result[pick_name][obstacle_name] = {
+                    "view": RigidContactView(
+                        prim_paths_expr=self.objects[pick_name].prim_path,
+                        filter_paths_expr=obstacle_paths,
+                        max_contact_count=1000,
+                    ),
+                    "filter_labels": [obstacle_name] * len(obstacle_paths),
+                }
+        return result
+
+    def _set_robotselfcontact_view(self):
+        """Create one directed view for every unordered robot rigid-body pair."""
         from pxr import UsdPhysics
 
         robotselfcontact_views = {}
@@ -494,32 +715,27 @@ class BananaBaseTask(BaseTask):
                 continue
 
             root = robot.robot_prim_path.rstrip("/") + "/"
-            fl_paths = []
-            fr_paths = []
+            rigid_paths = []
             for prim in Usd.PrimRange(robot_prim):
                 if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
                     continue
                 path = str(prim.GetPath())
                 rel = path.replace(root, "")
-                if rel.startswith("fl/"):
-                    fl_paths.append((rel, path))
-                elif rel.startswith("fr/"):
-                    fr_paths.append((rel, path))
+                rigid_paths.append((rel, path))
 
-            if not fl_paths or not fr_paths:
+            if len(rigid_paths) < 2:
                 continue
 
-            fr_labels = [label for label, _ in fr_paths]
-            fr_filter_paths = [path for _, path in fr_paths]
             robotselfcontact_views[robot_name] = {}
-            for fl_label, fl_path in fl_paths:
-                robotselfcontact_views[robot_name][fl_label] = {
+            for index, (source_label, source_path) in enumerate(rigid_paths[:-1]):
+                filters = rigid_paths[index + 1:]
+                robotselfcontact_views[robot_name][source_label] = {
                     "view": RigidContactView(
-                        prim_paths_expr=fl_path,
-                        filter_paths_expr=fr_filter_paths,
-                        max_contact_count=1000,
+                        prim_paths_expr=source_path,
+                        filter_paths_expr=[path for _, path in filters],
+                        max_contact_count=2000,
                     ),
-                    "filter_labels": fr_labels,
+                    "filter_labels": [label for label, _ in filters],
                 }
         return robotselfcontact_views
 

@@ -9,13 +9,13 @@ load_stage:
         physics_dt: 1/30
         rendering_dt: 1/30
         stage_units_in_meters: 1.0
-        headless: false
+        headless: true
         anti_aliasing: 0
   layout_random_generator:
     type: env_randomizer
     args:
-      random_num: 6
-      strict_mode: false
+      random_num: 1
+      strict_mode: true
 plan_with_render_stage:
   plan_with_render:
     type: plan_with_render

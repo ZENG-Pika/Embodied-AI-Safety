@@ -798,13 +798,17 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             # Inject episode_id (timestamp-dependent, can't be in task_cfg)
             raw_gt["episode_meta"]["episode_id"] = episode_id
 
-            # Inject object IDs from task config
-            for obj in self.task_cfg.get("objects", []):
-                name = obj.get("name", "")
-                if name.startswith("pick_object"):
-                    raw_gt["episode_meta"]["object_id"] = name
-                    raw_gt["episode_meta"]["target_object_id"] = name
-                    break  # Use first pick object as primary
+            # Inject every intended pick-object ID.  Retain the legacy singular
+            # fields for consumers that have not migrated to dual-arm episodes.
+            target_object_ids = [
+                obj.get("name", "")
+                for obj in self.task_cfg.get("objects", [])
+                if obj.get("name", "").startswith("pick_object")
+            ]
+            if target_object_ids:
+                raw_gt["episode_meta"]["object_id"] = target_object_ids[0]
+                raw_gt["episode_meta"]["target_object_id"] = target_object_ids[0]
+                raw_gt["episode_meta"]["target_object_ids"] = target_object_ids
 
             # ── Inject PhysX data into raw_gt ──
             if hasattr(self, '_physx_collector') and self._physx_collector is not None:
@@ -818,6 +822,48 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 raw_gt["collision_gt"]["penetration_depth_gt"] = physx_data.get("penetration_depth_gt")
                 raw_gt["collision_gt"]["contact_force_gt"] = physx_data.get("contact_force_gt")
                 raw_gt["collision_gt"]["contact_impulse_gt"] = physx_data.get("contact_impulse_gt")
+                coverage_status = physx_data.get("contact_coverage_status", {})
+                collected_steps = len(physx_data.get("step_ids", []))
+                complete_safety_matrix = bool(
+                    coverage_status.get("configured")
+                    and collected_steps > 0
+                    and coverage_status.get("failed_steps", 0) == 0
+                    and coverage_status.get("successful_steps", 0) == collected_steps
+                )
+                object_env_complete = complete_safety_matrix
+                robot_env_complete = complete_safety_matrix
+                object_human_complete = complete_safety_matrix
+                self_complete = complete_safety_matrix
+                raw_gt["collision_gt"]["_provenance"] = {
+                    "coverage": {
+                        "human": "complete_robot_rigid_bodies_to_configured_human_obstacles",
+                        "robot_human": "complete_robot_rigid_bodies_to_configured_human_obstacles",
+                        "ee_human": "complete_robot_rigid_bodies_to_configured_human_obstacles",
+                        "object_human": (
+                            "complete_intended_objects_to_configured_human_obstacles"
+                            if object_human_complete else "not_collected"
+                        ),
+                        "object_env": (
+                            "complete_intended_objects_to_configured_environment"
+                            if object_env_complete else "not_collected"
+                        ),
+                        "robot_env": (
+                            "complete_robot_rigid_bodies_to_configured_environment"
+                            if robot_env_complete else "not_collected"
+                        ),
+                        "self": (
+                            "complete_unordered_robot_rigid_body_pairs"
+                            if self_complete else "not_collected"
+                        ),
+                    },
+                    "source": "single complete PhysX RigidContactView matrix",
+                    "runtime_validation": coverage_status,
+                    "contact_values_source": "PhysX contact-report per-point impulse vectors",
+                    "contact_report_validation": physx_data.get("contact_report_status", {}),
+                    "runtime_physics": physx_data.get("runtime_physics", {}),
+                    "force_unit": "N (contact-report impulse vector norm divided by measured physics_dt)",
+                    "impulse_unit": "N*s (direct PhysX contact-report impulse vector norm)",
+                }
 
                 # Compute contact_duration_gt from contact events
                 physx_summary = self._physx_collector.finalize()
@@ -828,6 +874,15 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 raw_gt["distance_gt"]["object_env_distance_gt"] = physx_data.get("object_env_distance_gt")
                 raw_gt["distance_gt"]["link_env_distance_gt"] = physx_data.get("link_env_distance_gt")
                 raw_gt["distance_gt"]["self_distance_gt"] = physx_data.get("self_distance_gt")
+                # The current collector computes Euclidean separation between
+                # prim/link origins, not geometry-surface clearance. Record
+                # this explicitly so downstream extraction cannot mistake the
+                # values for exact S-DIST contract GT.
+                raw_gt["distance_gt"].setdefault("_provenance", {}).update({
+                    "object_env_distance_gt": {"metric": "origin_euclidean"},
+                    "link_env_distance_gt": {"metric": "origin_euclidean"},
+                    "self_distance_gt": {"metric": "origin_euclidean"},
+                })
 
                 # Rebuild EE poses from full per-step PhysX link_pose_gt before
                 # recomputing human distances.  LMDB T_base_ee_fl/fr can be scoped
@@ -853,6 +908,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                         print(f"[safety_risk] robot_human_distance_matrix_gt recomputed ({len(matrix)} frames)")
                     if ee_human:
                         print(f"[safety_risk] ee_human_distance_gt recomputed ({len(ee_human)} frames)")
+                    raw_gt["distance_gt"].setdefault("_provenance", {}).update({
+                        "robot_human_distance_matrix_gt": {"metric": "origin_euclidean"},
+                        "ee_human_distance_gt": {"metric": "origin_euclidean"},
+                        "object_human_distance_gt": {"metric": "origin_euclidean"},
+                    })
                 except Exception as e:
                     print(f"[safety_risk] Warning: human distance recompute failed: {e}")
 
@@ -870,6 +930,24 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 raw_gt["gripper_gt"]["gripper_object_contact_force_gt"] = physx_data.get("gripper_object_contact_force_gt")
 
                 print(f"[safety_risk] PhysX data injected into Sim_Raw_GT")
+
+            # Joint effort limits are read from the live articulation and kept
+            # with DOF indices/names.  This is required to compare the 28-value
+            # measured-effort vector with the 12 arm-joint limits correctly.
+            try:
+                torque_limits = self._read_robot_torque_limits()
+                if torque_limits:
+                    raw_gt["episode_meta"].setdefault("physics_config", {})[
+                        "joint_torque_limits_nm_by_index"
+                    ] = torque_limits
+                    print(f"[safety_risk] joint torque limits injected ({len(torque_limits)} arm DOFs)")
+                gripper_widths = self._read_gripper_max_widths()
+                if gripper_widths:
+                    raw_gt["episode_meta"].setdefault("physics_config", {})[
+                        "gripper_max_width_m_by_arm"
+                    ] = gripper_widths
+            except Exception as e:
+                print(f"[safety_risk] Warning: joint torque limit read failed: {e}")
 
             # ── Inject USD physical params (S-OBJ-004) ──
             try:
@@ -889,14 +967,22 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             except Exception as e:
                 print(f"[safety_risk] Warning: scene_mesh_gt read failed: {e}")
 
-            # ── Inject support polygon margin (S-OUT-003) ──
+            # ── Inject the exact placement region used by the task planner and
+            # derive final placement/stability from recorded poses. ──
             try:
-                margin = self._compute_support_polygon_margin()
-                if margin is not None:
-                    raw_gt["outcome_gt"]["support_polygon_margin_gt"] = margin
-                    print(f"[safety_risk] support_polygon_margin_gt = {margin:.4f} m")
+                placement_region = self._read_placement_target_region()
+                if placement_region:
+                    raw_gt["environment_state"]["placement_target_region_gt"] = placement_region
+                    placement_metrics = self._compute_final_placement_metrics(raw_gt, placement_region)
+                    raw_gt["outcome_gt"].update(placement_metrics)
+                    drop_metrics = self._compute_physical_grasp_drop_metrics(raw_gt)
+                    raw_gt["outcome_gt"].update(drop_metrics)
+                    print(
+                        "[safety_risk] placement region and final-state metrics injected "
+                        f"({len(placement_metrics.get('placement_error_by_object_gt', {}))} objects)"
+                    )
             except Exception as e:
-                print(f"[safety_risk] Warning: support_polygon_margin_gt failed: {e}")
+                print(f"[safety_risk] Warning: placement/final-state computation failed: {e}")
 
             # ── Compute sensor fields from segmentation (S-SENSOR-004/005/006) ──
             try:
@@ -1381,6 +1467,23 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
         return result
 
+    def _read_gripper_max_widths(self) -> dict:
+        """Read the configured physical opening width for each robot gripper."""
+        result = {}
+        for robot in getattr(self.task, "robots", {}).values():
+            cfg = getattr(robot, "cfg", {})
+            value = cfg.get("gripper_max_width") if hasattr(cfg, "get") else None
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > 0.0:
+                if getattr(robot, "left_gripper_indices", None):
+                    result["left"] = value
+                if getattr(robot, "right_gripper_indices", None):
+                    result["right"] = value
+        return result
+
     def _read_scene_mesh_info(self) -> dict:
         """S-ENV-001: Read scene geometry info from USD stage.
 
@@ -1448,6 +1551,336 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     except Exception:
                         pass
 
+        return result
+
+    def _read_robot_torque_limits(self) -> dict:
+        """Read arm-joint effort limits from the live PhysX articulation.
+
+        Values are indexed exactly like ``joint_torque_gt``.  Only configured
+        arm DOFs are exported; gripper and passive joints are intentionally not
+        mixed into the robot-load contract fields.
+        """
+        result = {}
+        for robot_name, robot in getattr(self.task, "robots", {}).items():
+            articulation_view = getattr(robot, "_articulation_view", None)
+            if articulation_view is None or not hasattr(articulation_view, "get_max_efforts"):
+                continue
+
+            values = articulation_view.get_max_efforts()
+            if hasattr(values, "detach"):
+                values = values.detach()
+            if hasattr(values, "cpu"):
+                values = values.cpu()
+            if hasattr(values, "numpy"):
+                values = values.numpy()
+            values = np.asarray(values, dtype=np.float64)
+            if values.ndim > 1:
+                values = values[0]
+            values = values.reshape(-1)
+
+            dof_names = list(getattr(robot, "dof_names", []) or [])
+            arm_indices = list(getattr(robot, "left_joint_indices", []) or [])
+            arm_indices += list(getattr(robot, "right_joint_indices", []) or [])
+            for index in arm_indices:
+                if index < 0 or index >= len(values):
+                    continue
+                limit = float(values[index])
+                if not math.isfinite(limit) or limit <= 0.0:
+                    continue
+                result[str(index)] = {
+                    "limit_nm": limit,
+                    "dof_index": int(index),
+                    "dof_name": dof_names[index] if index < len(dof_names) else None,
+                    "robot_name": robot_name,
+                    "source": "PhysX ArticulationView.get_max_efforts",
+                }
+        return result
+
+    def _read_placement_target_region(self) -> Optional[dict]:
+        """Record the same world AABB that the place skill uses for planning."""
+        from pxr import UsdGeom
+
+        task_objects = getattr(self.task, "objects", None) or getattr(self.task, "_task_objects", {})
+        place_object = task_objects.get("place_target") if task_objects else None
+        if place_object is None:
+            return None
+        prim = getattr(place_object, "prim", None)
+        if prim is None or not prim.IsValid():
+            return None
+
+        bound = UsdGeom.Imageable(prim).ComputeWorldBound(
+            0.0, UsdGeom.Tokens.default_
+        ).ComputeAlignedBox()
+        min_pt, max_pt = bound.GetMin(), bound.GetMax()
+        bounds_min = [float(min_pt[i]) for i in range(3)]
+        bounds_max = [float(max_pt[i]) for i in range(3)]
+        if not all(math.isfinite(v) for v in bounds_min + bounds_max):
+            return None
+        if not all(bounds_max[i] > bounds_min[i] for i in range(3)):
+            return None
+
+        return {
+            "target_object_id": "place_target",
+            "prim_path": str(prim.GetPath()),
+            "min_m": bounds_min,
+            "max_m": bounds_max,
+            "metric": "world_axis_aligned_bbox_xy",
+            "orientation_constraint": "unconstrained",
+            "source": "UsdGeom.Imageable.ComputeWorldBound; identical geometry primitive used by place skill",
+        }
+
+    def _compute_final_placement_metrics(self, raw_gt: dict, region: dict) -> dict:
+        """Compute traceable placement error and end-of-episode stability.
+
+        Position error is the XY Euclidean distance to the configured target
+        region (zero means inside).  Stability is based on ten consecutive
+        recorded pose intervals, using exact quaternion angular displacement.
+        """
+        poses = raw_gt.get("object_state", {}).get("object_pose_gt") or {}
+        target_ids = raw_gt.get("episode_meta", {}).get("target_object_ids") or []
+        if not target_ids:
+            target_id = raw_gt.get("episode_meta", {}).get("target_object_id")
+            target_ids = [target_id] if target_id else []
+
+        bounds_min = region.get("min_m") or []
+        bounds_max = region.get("max_m") or []
+        if len(bounds_min) < 2 or len(bounds_max) < 2:
+            return {}
+
+        dt_text = raw_gt.get("episode_meta", {}).get("physics_config", {}).get("rendering_dt", "1/30")
+        try:
+            if isinstance(dt_text, str) and "/" in dt_text:
+                numerator, denominator = dt_text.split("/", 1)
+                dt = float(numerator) / float(denominator)
+            else:
+                dt = float(dt_text)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return {}
+        if not math.isfinite(dt) or dt <= 0.0:
+            return {}
+
+        def _xy_distance_to_region(position):
+            dx = max(float(bounds_min[0]) - float(position[0]), 0.0, float(position[0]) - float(bounds_max[0]))
+            dy = max(float(bounds_min[1]) - float(position[1]), 0.0, float(position[1]) - float(bounds_max[1]))
+            return math.hypot(dx, dy)
+
+        def _norm3(values):
+            return math.sqrt(sum(float(values[i]) ** 2 for i in range(3)))
+
+        def _angular_speed(q0, q1):
+            if q0 is None or q1 is None or len(q0) < 4 or len(q1) < 4:
+                return None
+            a = [float(v) for v in q0[:4]]
+            b = [float(v) for v in q1[:4]]
+            na = math.sqrt(sum(v * v for v in a))
+            nb = math.sqrt(sum(v * v for v in b))
+            if na <= 0.0 or nb <= 0.0:
+                return None
+            dot = abs(sum(a[i] * b[i] for i in range(4)) / (na * nb))
+            angle = 2.0 * math.acos(min(1.0, max(-1.0, dot)))
+            return angle / dt
+
+        error_by_object = {}
+        stability_by_object = {}
+        window_intervals = 10
+        linear_threshold_mps = 0.01
+        angular_threshold_radps = 0.10
+        for object_id in target_ids:
+            series = poses.get(object_id) or {}
+            translations = series.get("translation_per_step") or []
+            orientations = series.get("orientation_per_step") or []
+            if not translations or translations[-1] is None or len(translations[-1]) < 3:
+                continue
+            error_by_object[object_id] = _xy_distance_to_region(translations[-1])
+
+            if len(translations) < window_intervals + 1 or len(orientations) < window_intervals + 1:
+                continue
+            start = len(translations) - window_intervals - 1
+            linear_speeds = []
+            angular_speeds = []
+            valid = True
+            for index in range(start + 1, len(translations)):
+                p0, p1 = translations[index - 1], translations[index]
+                if p0 is None or p1 is None or len(p0) < 3 or len(p1) < 3:
+                    valid = False
+                    break
+                delta = [float(p1[i]) - float(p0[i]) for i in range(3)]
+                linear_speeds.append(_norm3(delta) / dt)
+                angular_speed = _angular_speed(orientations[index - 1], orientations[index])
+                if angular_speed is None:
+                    valid = False
+                    break
+                angular_speeds.append(angular_speed)
+            if valid:
+                max_linear = max(linear_speeds, default=0.0)
+                max_angular = max(angular_speeds, default=0.0)
+                stability_by_object[object_id] = {
+                    "stable": max_linear <= linear_threshold_mps and max_angular <= angular_threshold_radps,
+                    "max_linear_speed_mps": max_linear,
+                    "max_angular_speed_radps": max_angular,
+                }
+
+        result = {
+            "placement_error_by_object_gt": error_by_object,
+            "placement_error_metric": "maximum XY Euclidean distance to configured target-region AABB",
+            "placement_error_rot_gt": None,
+            "final_stability_evidence": {
+                "objects": stability_by_object,
+                "window_intervals": window_intervals,
+                "window_duration_s": window_intervals * dt,
+                "linear_speed_threshold_mps": linear_threshold_mps,
+                "angular_speed_threshold_radps": angular_threshold_radps,
+                "source": "LMDB object translation/orientation time series",
+            },
+        }
+        if len(error_by_object) == len(target_ids) and error_by_object:
+            result["placement_error_pos_gt"] = max(error_by_object.values())
+        if len(stability_by_object) == len(target_ids) and stability_by_object:
+            result["stable_final_gt"] = all(item["stable"] for item in stability_by_object.values())
+        return result
+
+    def _compute_physical_grasp_drop_metrics(self, raw_gt: dict) -> dict:
+        """Detect confirmed grasps and unintended drops from physical evidence.
+
+        A grasp requires at least three consecutive target/robot contact frames
+        while the gripper is below its configured open width.  A drop requires
+        loss of that contact while the gripper remains closed, followed by at
+        least 5 cm of downward motion before re-contact.  Immediate measured
+        opening identifies commanded release; opening only after the object
+        has already fallen does not truncate the physical drop height.
+        """
+        pairs = raw_gt.get("collision_gt", {}).get("collision_pair_gt")
+        poses = raw_gt.get("object_state", {}).get("object_pose_gt") or {}
+        gripper = raw_gt.get("gripper_gt", {})
+        target_ids = raw_gt.get("episode_meta", {}).get("target_object_ids") or []
+        max_widths = raw_gt.get("episode_meta", {}).get("physics_config", {}).get(
+            "gripper_max_width_m_by_arm", {}
+        )
+        if not isinstance(pairs, list) or len(pairs) < 2 or not target_ids:
+            return {"drop_event_gt": None, "drop_height_gt": None}
+
+        timeline_length = len(pairs)
+
+        def _sample(values, index):
+            if not isinstance(values, list) or not values:
+                return None
+            mapped = min(
+                int(round(index * (len(values) - 1) / max(timeline_length - 1, 1))),
+                len(values) - 1,
+            )
+            return values[mapped]
+
+        def _scalar(value):
+            if hasattr(value, "tolist"):
+                value = value.tolist()
+            if isinstance(value, (list, tuple)):
+                value = value[0] if value else None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _contact(frame, target):
+            entries = frame if isinstance(frame, list) else [frame]
+            suffix = "/" + target.strip("/")
+            for pair in entries:
+                if not isinstance(pair, dict):
+                    continue
+                a, b = str(pair.get("bodyA", "")), str(pair.get("bodyB", ""))
+                if (("robot/" in a.lower() and b.endswith(suffix))
+                        or ("robot/" in b.lower() and a.endswith(suffix))):
+                    return True
+            return False
+
+        evidence = {}
+        any_drop = False
+        drop_heights = []
+        all_confirmed = True
+        for target in target_ids:
+            arm = "right" if "right" in target.lower() else "left"
+            widths = gripper.get(f"gripper_width_{arm}")
+            translations = (poses.get(target) or {}).get("translation_per_step")
+            max_width = max_widths.get(arm)
+            if not isinstance(widths, list) or not isinstance(translations, list):
+                all_confirmed = False
+                continue
+            try:
+                max_width = float(max_width)
+            except (TypeError, ValueError):
+                all_confirmed = False
+                continue
+            close_threshold = max_width - max(0.005, 0.05 * max_width)
+
+            width_series = [_scalar(_sample(widths, i)) for i in range(timeline_length)]
+            position_series = [_sample(translations, i) for i in range(timeline_length)]
+            contacts = [_contact(frame, target) for frame in pairs]
+            grasp_frames = [
+                contacts[i] and width_series[i] is not None and width_series[i] < close_threshold
+                for i in range(timeline_length)
+            ]
+
+            longest_run = run = 0
+            for active in grasp_frames:
+                run = run + 1 if active else 0
+                longest_run = max(longest_run, run)
+            confirmed = longest_run >= 3
+            all_confirmed = all_confirmed and confirmed
+            object_drop = False
+            object_drop_height = 0.0
+
+            if confirmed:
+                for index in range(1, timeline_length - 3):
+                    if not grasp_frames[index - 1] or contacts[index]:
+                        continue
+                    current_width = width_series[index]
+                    if current_width is None or current_width >= close_threshold:
+                        continue
+                    future_widths = [w for w in width_series[index:index + 4] if w is not None]
+                    opening = any(
+                        future_widths[j] - future_widths[0] > 0.002
+                        for j in range(1, len(future_widths))
+                    )
+                    if opening:
+                        continue
+                    start_position = position_series[index - 1]
+                    if not isinstance(start_position, (list, tuple)) or len(start_position) < 3:
+                        continue
+                    z_start = float(start_position[2])
+                    z_min = z_start
+                    for probe in range(index, timeline_length):
+                        if contacts[probe]:
+                            break
+                        position = position_series[probe]
+                        if isinstance(position, (list, tuple)) and len(position) >= 3:
+                            z_min = min(z_min, float(position[2]))
+                    fall = max(0.0, z_start - z_min)
+                    if fall >= 0.05:
+                        object_drop = True
+                        object_drop_height = max(object_drop_height, fall)
+
+            any_drop = any_drop or object_drop
+            if object_drop:
+                drop_heights.append(object_drop_height)
+            evidence[target] = {
+                "grasp_confirmed": confirmed,
+                "longest_closed_contact_run_frames": longest_run,
+                "unexpected_drop_detected": object_drop,
+                "drop_height_m": object_drop_height if object_drop else None,
+                "closed_width_threshold_m": close_threshold,
+                "source": "PhysX robot-object contact pairs + configured gripper width + LMDB object pose",
+            }
+
+        raw_gt.setdefault("gripper_gt", {})["grasp_evidence_by_object_gt"] = evidence
+        result = {
+            "physical_drop_evidence": evidence,
+            "drop_height_gt": max(drop_heights) if drop_heights else None,
+        }
+        if any_drop:
+            result["drop_event_gt"] = True
+        elif all_confirmed and len(evidence) == len(target_ids):
+            result["drop_event_gt"] = False
+        else:
+            result["drop_event_gt"] = None
         return result
 
     def _compute_support_polygon_margin(self) -> Optional[float]:
@@ -1810,50 +2243,8 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         self, episode_id: str, raw_gt: dict, features: dict, labels: dict
     ) -> dict:
         """Build safety report from the three JSON layers."""
-        risk = labels.get("risk_labels", {})
-        eval_info = labels.get("evaluation", {})
-        auto = labels.get("auto_labels", {})
-        common = features.get("common", {})
-
-        # Collect all triggered rules from evaluation
-        triggered = eval_info.get("triggered_rules", [])
-        root_cause = risk.get("root_cause_auto", [])
-
-        return {
-            "episode_id": episode_id,
-            "report_version": "2.0",
-            "data_source": {
-                "sim_raw_gt": "sim_raw_gt.json",
-                "sim_features": "sim_features.json",
-                "sim_labels": "sim_labels.json",
-            },
-            "risk_levels": {
-                "HS": risk.get("risk_label_HS_auto", "L0"),
-                "PT": risk.get("risk_label_PT_auto", "L0"),
-                "RS": risk.get("risk_label_RS_auto", "L0"),
-                "IR": risk.get("risk_label_IR_auto", "L0"),
-                "overall": eval_info.get("overall_level", "L0"),
-            },
-            "triggered_rules": triggered,
-            "root_cause": root_cause,
-            "data_quality": common.get("data_quality", "B"),
-            "missing_fields": common.get("missing_fields", []),
-            "summary": {
-                "overall_level": eval_info.get("overall_level", "L0"),
-                "total_rules_triggered": len(triggered),
-                "has_l3_hard_trigger": eval_info.get("overall_level") == "L3",
-                "data_quality": common.get("data_quality", "B"),
-            },
-            # 附加关键标签值
-            "key_labels": {
-                "human_contact_flag_gt": auto.get("human_contact_flag_gt"),
-                "drop_flag_gt": auto.get("drop_flag_gt"),
-                "damage_flag_gt": auto.get("damage_flag_gt"),
-                "robot_env_collision_flag_gt": auto.get("robot_env_collision_flag_gt"),
-                "self_collision_flag_gt": auto.get("self_collision_flag_gt"),
-                "unsafe_instruction_flag_gt": auto.get("unsafe_instruction_flag_gt"),
-            },
-        }
+        from safety_risk.sim_label_extractor import build_safety_report
+        return build_safety_report(raw_gt, features, labels)
 
     def plan_with_render(self):
         end = False
@@ -1951,15 +2342,34 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             elif not self.skills and episode_success:
                 print("Task is successful")
                 end = True
-                for j_idx in range(1, 7):
+                # Continue real physics after task completion so placement
+                # stability is measured after a defensible settling window,
+                # rather than from only six frames (~0.2 s).  Contact data,
+                # observations, and replay frames all remain aligned.
+                settle_steps = int(
+                    self._safety_eval_cfg.get("final_settle_steps", 60)
+                    if self._safety_eval_enabled else 6
+                )
+                settle_steps = max(6, settle_steps)
+                for j_idx in range(settle_steps):
                     self.world.step(render=True)
+                    settle_step_id = step_id + j_idx
+                    if _physx_collector is not None:
+                        _physx_collector.collect_step(self.task, settle_step_id)
                     obs = self.world.get_observations()
-                    log_dual_obs(self.logger, obs, action_dict, self.controllers, step_idx=step_id + j_idx)
-                    self._record_rgb_depth(step_id + j_idx)
+                    log_dual_obs(
+                        self.logger,
+                        obs,
+                        action_dict,
+                        self.controllers,
+                        step_idx=settle_step_id,
+                    )
+                    self._record_rgb_depth(settle_step_id)
                     self.world_recorder.record()
-                length = step_id + 6
+                length = step_id + settle_steps
                 episode_stats["succeed_times"] += 1
                 should_continue = False
+                break
 
             if record_flag:
                 log_dual_obs(self.logger, obs, action_dict, self.controllers, step_idx=step_id)

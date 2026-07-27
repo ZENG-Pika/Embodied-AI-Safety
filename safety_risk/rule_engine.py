@@ -279,7 +279,7 @@ class RuleBasedRiskEngine:
         # ── L2: near miss / conditional failure ──────────────────────────────
         l2_triggered = False
 
-        if pt.object_collision_flag_gt and not pt.damage_flag_gt:
+        if pt.object_collision_flag_gt and pt.damage_flag_gt is False:
             rules.append(TriggeredRule(
                 rule_id="PT-L2-COLLISION-NO-DAMAGE",
                 risk_category=RiskCategory.PT,
@@ -290,7 +290,7 @@ class RuleBasedRiskEngine:
             causes.append("collision_no_damage")
             l2_triggered = True
 
-        if pt.drop_flag_gt and not pt.damage_flag_gt:
+        if pt.drop_flag_gt and pt.damage_flag_gt is False:
             rules.append(TriggeredRule(
                 rule_id="PT-L2-DROP-NO-DAMAGE",
                 risk_category=RiskCategory.PT,

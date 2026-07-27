@@ -10,6 +10,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -20,7 +21,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-REQUESTED_FEATURES = {
+SI_FEATURES = {
     "hs": [
         "d_robot_h_min_gt_m", "d_ee_h_min_gt_m", "d_obj_h_min_gt_m",
         "v_rel_h_gt_mps", "TTC_h_min_gt_s", "human_contact_flag_gt",
@@ -50,11 +51,144 @@ REQUESTED_FEATURES = {
     ],
 }
 
+# Exact names from robot_safety_risk_data_contract.xlsx / Sim_Features.
+# The extraction and rule engine use SI units internally; contract aliases are
+# emitted alongside the SI fields so downstream risk evaluation is not broken.
+REQUESTED_FEATURES = {
+    "hs": [
+        "d_robot_h_min_gt_cm", "d_ee_h_min_gt_cm", "d_obj_h_min_gt_cm",
+        "v_rel_h_gt_mps", "TTC_h_min_gt_s", "human_contact_flag_gt",
+        "F_h_peak_gt_N", "contact_duration_h_gt_s",
+        "gripper_close_near_human_gt", "stop_success_gt", "stop_margin_gt_s",
+    ],
+    "pt": [
+        "d_obj_env_min_gt_cm", "d_obj_edge_gt_cm", "gripper_object_force_gt_N",
+        "F_obj_peak_gt_N", "r_grip_gt", "slip_distance_gt_cm", "drop_flag_gt",
+        "h_drop_gt_cm", "object_collision_flag_gt", "object_collision_impulse_gt",
+        "placement_error_pos_gt_cm", "placement_error_rot_gt_deg",
+        "support_margin_gt_cm", "stable_final_gt", "damage_flag_gt",
+        "wrong_object_flag_gt",
+    ],
+    "rs": [
+        "d_link_env_min_gt_cm", "d_self_min_gt_cm", "robot_env_collision_flag_gt",
+        "self_collision_flag_gt", "robot_collision_impulse_gt",
+        "joint_limit_margin_gt_deg", "joint_torque_ratio_gt", "load_ratio_gt",
+        "sustained_overload_gt", "motion_after_fault_gt",
+    ],
+    "ir": [
+        "true_occlusion_ratio", "pose_estimation_error_gt_cm",
+        "perception_confidence_min_sim", "uncertainty_ratio_sim",
+        "tracking_lost_flag_sim", "blind_action_flag_sim",
+        "unsafe_instruction_flag_gt", "refusal_flag", "unsafe_action_planned",
+        "unsafe_action_blocked", "low_level_command_sent", "stop_command_obeyed",
+    ],
+}
+
+CONTRACT_ALIASES = {
+    "hs": {
+        "d_robot_h_min_gt_cm": ("d_robot_h_min_gt_m", 100.0),
+        "d_ee_h_min_gt_cm": ("d_ee_h_min_gt_m", 100.0),
+        "d_obj_h_min_gt_cm": ("d_obj_h_min_gt_m", 100.0),
+    },
+    "pt": {
+        "d_obj_env_min_gt_cm": ("d_obj_env_min_gt_m", 100.0),
+        "d_obj_edge_gt_cm": ("d_obj_edge_gt_m", 100.0),
+        "slip_distance_gt_cm": ("slip_distance_gt_m", 100.0),
+        "h_drop_gt_cm": ("h_drop_gt_m", 100.0),
+        "placement_error_pos_gt_cm": ("placement_error_pos_gt_m", 100.0),
+        "placement_error_rot_gt_deg": ("placement_error_rot_gt_rad", 180.0 / math.pi),
+        "support_margin_gt_cm": ("support_margin_gt_m", 100.0),
+    },
+    "rs": {
+        "d_link_env_min_gt_cm": ("d_link_env_min_gt_m", 100.0),
+        "d_self_min_gt_cm": ("d_self_min_gt_m", 100.0),
+        "joint_limit_margin_gt_deg": ("joint_limit_margin_gt_rad", 180.0 / math.pi),
+    },
+    "ir": {
+        "pose_estimation_error_gt_cm": ("pose_estimation_error_gt_m", 100.0),
+    },
+}
+
+FIELD_SOURCES = {
+    "hs": {
+        "d_robot_h_min_gt_cm": ["distance_gt.robot_human_distance_matrix_gt", "collision_gt.collision_pair_gt"],
+        "d_ee_h_min_gt_cm": ["distance_gt.ee_human_distance_gt", "collision_gt.collision_pair_gt"],
+        "d_obj_h_min_gt_cm": ["distance_gt.object_human_distance_gt", "collision_gt.collision_pair_gt"],
+        "v_rel_h_gt_mps": ["robot_state.link_pose_gt", "robot_state.link_velocity_gt", "environment_state.obstacle_pose_gt", "episode_meta.physics_config.physics_dt"],
+        "TTC_h_min_gt_s": ["distance_gt.ee_human_distance_gt", "collision_gt.collision_pair_gt", "episode_meta.physics_config.physics_dt"],
+        "human_contact_flag_gt": ["collision_gt.collision_pair_gt"],
+        "F_h_peak_gt_N": ["collision_gt.contact_force_gt"],
+        "contact_duration_h_gt_s": ["collision_gt.collision_pair_gt", "episode_meta.physics_config.physics_dt"],
+        "gripper_close_near_human_gt": ["gripper_gt.gripper_width_left/right", "distance_gt.ee_human_distance_gt", "collision_gt.collision_pair_gt"],
+        "stop_success_gt": ["planner_log.stop_success"],
+        "stop_margin_gt_s": ["planner_log.stop_margin_s"],
+    },
+    "pt": {
+        "d_obj_env_min_gt_cm": ["distance_gt.object_env_distance_gt", "collision_gt.collision_pair_gt"],
+        "d_obj_edge_gt_cm": ["outcome_gt.support_polygon_margin_gt", "environment_state.support_surface"],
+        "gripper_object_force_gt_N": ["gripper_gt.gripper_object_contact_force_gt"],
+        "F_obj_peak_gt_N": ["collision_gt.contact_force_gt"],
+        "r_grip_gt": ["gripper_gt.gripper_object_contact_force_gt", "object_state.object_physical_params.force_limit_n"],
+        "slip_distance_gt_cm": ["object_state.object_pose_gt", "robot_state.ee_pose_gt", "gripper_gt.gripper_width_left/right", "collision_gt.collision_pair_gt"],
+        "drop_flag_gt": ["outcome_gt.drop_event_gt", "object_state.object_pose_gt", "environment_state.scene_mesh_gt"],
+        "h_drop_gt_cm": ["outcome_gt.drop_height_gt", "object_state.object_pose_gt", "environment_state.scene_mesh_gt"],
+        "object_collision_flag_gt": ["collision_gt.collision_pair_gt"],
+        "object_collision_impulse_gt": ["collision_gt.contact_impulse_gt"],
+        "placement_error_pos_gt_cm": ["outcome_gt.placement_error_pos_gt", "environment_state.placement_target_region_gt"],
+        "placement_error_rot_gt_deg": ["outcome_gt.placement_error_rot_gt"],
+        "support_margin_gt_cm": ["outcome_gt.support_polygon_margin_gt", "environment_state.support_surface"],
+        "stable_final_gt": ["outcome_gt.stable_final_gt", "outcome_gt.final_stability_evidence", "object_state.object_pose_gt"],
+        "damage_flag_gt": ["outcome_gt.damage_state_gt", "episode_meta.object_fragility_class"],
+        "wrong_object_flag_gt": ["collision_gt.collision_pair_gt", "episode_meta.target_object_id"],
+    },
+    "rs": {
+        "d_link_env_min_gt_cm": ["distance_gt.link_env_distance_gt", "collision_gt.collision_pair_gt"],
+        "d_self_min_gt_cm": ["distance_gt.self_distance_gt", "collision_gt.collision_pair_gt"],
+        "robot_env_collision_flag_gt": ["collision_gt.collision_pair_gt"],
+        "self_collision_flag_gt": ["collision_gt.collision_pair_gt"],
+        "robot_collision_impulse_gt": ["collision_gt.contact_impulse_gt"],
+        "joint_limit_margin_gt_deg": ["robot_state.joint_position_q_gt", "PIPER100_JOINT_LIMITS"],
+        "joint_torque_ratio_gt": ["robot_state.joint_torque_gt", "episode_meta.physics_config.joint_torque_limits_nm_by_index"],
+        "load_ratio_gt": ["robot_state.joint_torque_gt", "episode_meta.physics_config.joint_torque_limits_nm_by_index"],
+        "sustained_overload_gt": ["robot_state.joint_torque_gt", "episode_meta.physics_config.joint_torque_limits_nm_by_index"],
+        "motion_after_fault_gt": ["planner_log.motion_after_fault_gt"],
+    },
+    "ir": {
+        "true_occlusion_ratio": ["sensor_gt.visibility_ratio_gt", "sensor_gt.segmentation_mask_gt"],
+        "pose_estimation_error_gt_cm": ["perception.object_pose_est", "object_state.object_pose_gt"],
+        "perception_confidence_min_sim": ["perception.confidence"],
+        "uncertainty_ratio_sim": ["perception.pose_uncertainty_sim", "distance_gt"],
+        "tracking_lost_flag_sim": ["perception.tracking_state"],
+        "blind_action_flag_sim": ["perception.tracking_state", "planner_log.executed_trajectory"],
+        "unsafe_instruction_flag_gt": ["hri_log.unsafe_instruction_flag_gt"],
+        "refusal_flag": ["hri_log.refusal_flag"],
+        "unsafe_action_planned": ["planner_log.unsafe_action_planned"],
+        "unsafe_action_blocked": ["planner_log.unsafe_action_blocked"],
+        "low_level_command_sent": ["planner_log.low_level_command_sent", "planner_log.unsafe_action_planned"],
+        "stop_command_obeyed": ["hri_log.stop_command_obeyed"],
+    },
+}
+
 
 def _f(val) -> Optional[float]:
-    """Safe float conversion."""
+    """Safe conversion of scalar-like numeric values."""
     if val is None:
         return None
+    if hasattr(val, "tolist"):
+        val = val.tolist()
+    if isinstance(val, (list, tuple)):
+        if not val:
+            return None
+        val = val[0]
+    if isinstance(val, str):
+        value = val.strip()
+        if value.startswith("array(") and "[" in value and "]" in value:
+            value = value[value.find("[") + 1:value.find("]")]
+        elif value.startswith("[") and value.endswith("]"):
+            value = value[1:-1]
+        if "," in value:
+            value = value.split(",", 1)[0]
+        val = value.strip()
     try:
         return float(val)
     except (TypeError, ValueError):
@@ -119,6 +253,7 @@ class SimFeatureExtractor:
     def __init__(self, dt: float = 0.033):
         self.dt = dt
         self._warnings: List[str] = []
+        self._invalidated: Dict[str, str] = {}
 
     @property
     def warnings(self) -> List[str]:
@@ -138,12 +273,16 @@ class SimFeatureExtractor:
             Complete Sim_Features with all 49 fields.
         """
         self._warnings = []
+        self._invalidated = {}
         self.dt = self._physics_dt(raw_gt)
 
         hs = self._extract_hs(raw_gt)
         pt = self._extract_pt(raw_gt)
         rs = self._extract_rs(raw_gt)
         ir = self._extract_ir(raw_gt)
+        sections = {"hs": hs, "pt": pt, "rs": rs, "ir": ir}
+        self._add_contract_fields(sections)
+        self._validate_contract_fields(sections)
         common = self._extract_common(raw_gt, hs, pt, rs, ir)
 
         features = {
@@ -152,6 +291,12 @@ class SimFeatureExtractor:
                 "extract_time": datetime.now(timezone.utc).isoformat(),
                 "raw_gt_episode_id": raw_gt.get("episode_meta", {}).get("episode_id"),
                 "total_features": 49,
+                "contract_sheet": "Sim_Features",
+                "contract_units": "cm/deg as named; SI aliases retained for rule evaluation",
+                "trust_policy": "Only traceable, finite and semantically valid values are emitted; otherwise null",
+                "raw_gt_content_sha256": hashlib.sha256(
+                    json.dumps(raw_gt, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+                ).hexdigest(),
             },
             "common": common,
             "hs": hs,
@@ -159,11 +304,11 @@ class SimFeatureExtractor:
             "rs": rs,
             "ir": ir,
             "warnings": self._warnings,
+            "field_quality": self._build_field_quality(sections),
         }
 
         # Count only the requested 49 features. False and 0 are valid values,
         # not missing values.
-        sections = {"hs": hs, "pt": pt, "rs": rs, "ir": ir}
         total = sum(len(keys) for keys in REQUESTED_FEATURES.values())
         filled = sum(
             sections[section].get(key) is not None
@@ -173,8 +318,185 @@ class SimFeatureExtractor:
         features["metadata"]["total_features"] = total
         features["metadata"]["filled_features"] = filled
         features["metadata"]["null_features"] = total - filled
+        self._verify_output_integrity(features)
 
         return features
+
+    @staticmethod
+    def _verify_output_integrity(features: Dict[str, Any]) -> None:
+        """Fail extraction if contract values, aliases, and quality states disagree."""
+        errors = []
+        quality = features.get("field_quality", {})
+        valid_count = unavailable_count = invalidated_count = 0
+        for section, keys in REQUESTED_FEATURES.items():
+            values = features.get(section, {})
+            section_quality = quality.get(section, {})
+            for key in keys:
+                if key not in values:
+                    errors.append(f"missing contract key {section}.{key}")
+                    continue
+                status = section_quality.get(key, {}).get("status")
+                value = values[key]
+                if status == "valid":
+                    valid_count += 1
+                    if value is None:
+                        errors.append(f"valid field is null: {section}.{key}")
+                elif status == "unavailable":
+                    unavailable_count += 1
+                    if value is not None:
+                        errors.append(f"unavailable field has a value: {section}.{key}")
+                elif status == "invalidated":
+                    invalidated_count += 1
+                    if value is not None:
+                        errors.append(f"invalidated field has a value: {section}.{key}")
+                else:
+                    errors.append(f"unknown quality status for {section}.{key}: {status}")
+
+        for section, aliases in CONTRACT_ALIASES.items():
+            for contract_key, (source_key, scale) in aliases.items():
+                contract_value = features[section].get(contract_key)
+                source_value = features[section].get(source_key)
+                if contract_value is None and source_value is None:
+                    continue
+                if contract_value is None or source_value is None or not math.isclose(
+                    float(contract_value), float(source_value) * scale, rel_tol=1e-12, abs_tol=1e-12
+                ):
+                    errors.append(f"unit alias mismatch: {section}.{contract_key} vs {source_key}")
+
+        if valid_count != features["metadata"].get("filled_features"):
+            errors.append("filled_features does not equal valid field count")
+        if valid_count + unavailable_count + invalidated_count != 49:
+            errors.append("quality status count does not equal 49")
+        if errors:
+            raise ValueError("Sim_Features integrity validation failed: " + "; ".join(errors))
+        features["metadata"]["validation_status"] = "passed"
+        features["metadata"]["quality_counts"] = {
+            "valid": valid_count,
+            "unavailable": unavailable_count,
+            "invalidated": invalidated_count,
+        }
+
+    def _invalidate(self, section: str, key: str, reason: str) -> None:
+        self._invalidated[f"{section}.{key}"] = reason
+
+    def _validate_contract_fields(self, sections: Dict[str, Dict[str, Any]]) -> None:
+        """Reject non-finite, type-invalid, or physically impossible values."""
+        bool_fields = {
+            "human_contact_flag_gt", "gripper_close_near_human_gt", "stop_success_gt",
+            "drop_flag_gt", "object_collision_flag_gt", "stable_final_gt", "damage_flag_gt",
+            "wrong_object_flag_gt", "robot_env_collision_flag_gt", "self_collision_flag_gt",
+            "sustained_overload_gt", "motion_after_fault_gt", "tracking_lost_flag_sim",
+            "blind_action_flag_sim", "unsafe_instruction_flag_gt", "refusal_flag",
+            "unsafe_action_planned", "unsafe_action_blocked", "low_level_command_sent",
+            "stop_command_obeyed",
+        }
+        signed_fields = {"stop_margin_gt_s", "d_obj_edge_gt_cm", "support_margin_gt_cm", "joint_limit_margin_gt_deg"}
+        bounded_unit_fields = {"true_occlusion_ratio", "perception_confidence_min_sim"}
+
+        for section, keys in REQUESTED_FEATURES.items():
+            values = sections[section]
+            for key in keys:
+                value = values.get(key)
+                if value is None:
+                    continue
+                reason = None
+                if key in bool_fields:
+                    if not isinstance(value, bool):
+                        reason = "expected boolean"
+                elif isinstance(value, bool) or not isinstance(value, (int, float)):
+                    reason = "expected numeric scalar"
+                elif not math.isfinite(float(value)):
+                    reason = "non-finite numeric value"
+                elif key in bounded_unit_fields and not 0.0 <= float(value) <= 1.0:
+                    reason = "value outside [0, 1]"
+                elif key not in signed_fields and float(value) < 0.0:
+                    reason = "negative value is physically invalid for this field"
+
+                if reason is None:
+                    continue
+                values[key] = None
+                alias = CONTRACT_ALIASES.get(section, {}).get(key)
+                if alias:
+                    values[alias[0]] = None
+                self._invalidate(section, key, reason)
+                self._warnings.append(f"Invalidated {section}.{key}: {reason}")
+
+        def invalidate(section: str, key: str, reason: str) -> None:
+            values = sections[section]
+            values[key] = None
+            alias = CONTRACT_ALIASES.get(section, {}).get(key)
+            if alias:
+                values[alias[0]] = None
+            self._invalidate(section, key, reason)
+            self._warnings.append(f"Invalidated {section}.{key}: {reason}")
+
+        cross_checks = [
+            ("pt", "object_collision_impulse_gt", "object_collision_flag_gt"),
+            ("rs", "robot_collision_impulse_gt", "robot_env_collision_flag_gt"),
+        ]
+        for section, impulse_key, flag_key in cross_checks:
+            impulse = sections[section].get(impulse_key)
+            flag = sections[section].get(flag_key)
+            if flag is False and impulse not in (None, 0, 0.0):
+                invalidate(section, impulse_key, f"nonzero impulse contradicts {flag_key}=false")
+
+        if sections["pt"].get("drop_flag_gt") is False and sections["pt"].get("h_drop_gt_cm") is not None:
+            invalidate("pt", "h_drop_gt_cm", "drop height is not applicable when drop_flag_gt=false")
+
+    def _build_field_quality(self, sections: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        methods = {
+            "d_robot_h_min_gt_cm": "surface-clearance episode minimum; exact physical contact clamps minimum to zero",
+            "d_ee_h_min_gt_cm": "surface-clearance episode minimum; exact EE/gripper contact clamps minimum to zero",
+            "d_obj_h_min_gt_cm": "surface-clearance episode minimum; exact physical contact clamps minimum to zero",
+            "d_obj_env_min_gt_cm": "surface-clearance episode minimum; exact physical contact clamps minimum to zero",
+            "d_link_env_min_gt_cm": "surface-clearance episode minimum; exact physical contact clamps minimum to zero",
+            "d_self_min_gt_cm": "non-adjacent geometry-surface clearance; exact self-contact clamps minimum to zero",
+            "v_rel_h_gt_mps": "maximum GT EE linear velocity projected toward the human surrogate; distance derivative fallback only when velocity GT is absent",
+            "TTC_h_min_gt_s": "surface clearance divided by frame-aligned closing speed; zero at recorded contact",
+            "F_h_peak_gt_N": "maximum absolute force among human-surrogate contact pairs",
+            "F_obj_peak_gt_N": "maximum absolute force among object contact pairs",
+            "contact_duration_h_gt_s": "union of frames containing any human-surrogate contact multiplied by physics dt",
+            "object_collision_impulse_gt": "sum of absolute recorded PhysX impulses for object-environment pairs",
+            "robot_collision_impulse_gt": "sum of absolute recorded PhysX impulses for robot-environment pairs",
+            "h_drop_gt_cm": "recorded drop-start z minus recorded physical-impact z",
+            "slip_distance_gt_cm": "maximum target-object displacement in the EE frame during continuous closed physical-contact windows",
+            "joint_limit_margin_gt_deg": "minimum distance to Piper100 joint limits, radians to degrees",
+            "placement_error_pos_gt_cm": "maximum per-target XY Euclidean distance to the exact world AABB used by the place planner",
+            "stable_final_gt": "all intended objects remain below recorded linear/angular speed thresholds for ten final pose intervals",
+            "joint_torque_ratio_gt": "maximum absolute measured arm-joint effort divided by its same-index live articulation limit",
+            "load_ratio_gt": "maximum available normalized load channel; torque-only for this articulation",
+            "sustained_overload_gt": "ten or more consecutive physics frames with normalized arm-joint effort above one",
+        }
+        result = {}
+        for section, keys in REQUESTED_FEATURES.items():
+            result[section] = {}
+            for key in keys:
+                invalid_reason = self._invalidated.get(f"{section}.{key}")
+                value = sections[section].get(key)
+                result[section][key] = {
+                    "status": "invalidated" if invalid_reason else ("valid" if value is not None else "unavailable"),
+                    "source_fields": FIELD_SOURCES[section][key],
+                    "method": methods.get(key, "direct lookup or deterministic aggregation documented by source fields"),
+                    "validation": "traceable source; scalar type; finite value; field-specific physical range",
+                }
+                if invalid_reason:
+                    result[section][key]["reason"] = invalid_reason
+                elif value is None:
+                    result[section][key]["reason"] = "recorded source absent or insufficient for a defensible value"
+        return result
+
+    @staticmethod
+    def _add_contract_fields(sections: Dict[str, Dict[str, Any]]) -> None:
+        """Emit all 49 Excel contract fields without changing SI internals."""
+        for section, keys in REQUESTED_FEATURES.items():
+            values = sections[section]
+            aliases = CONTRACT_ALIASES.get(section, {})
+            for contract_key in keys:
+                if contract_key in values:
+                    continue
+                source_key, scale = aliases[contract_key]
+                source_value = values.get(source_key)
+                values[contract_key] = source_value * scale if source_value is not None else None
 
     def _physics_dt(self, raw_gt: Dict[str, Any]) -> float:
         """Read the real physics step instead of using the old 0.033 proxy."""
@@ -188,6 +510,51 @@ class SimFeatureExtractor:
             return dt if dt > 0 else self.dt
         except (TypeError, ValueError, ZeroDivisionError):
             return self.dt
+
+    @staticmethod
+    def _has_surface_distance_provenance(distance_gt: Dict[str, Any], field: str) -> bool:
+        """Return whether a distance series is a geometry-surface clearance.
+
+        Older SimBox collectors stored Euclidean distances between prim/link
+        origins in the S-DIST fields.  Those values are useful for motion
+        derivatives, but they are not the geometry clearances required by the
+        data contract.  Accept non-contact distances only when the producer
+        explicitly records surface-distance provenance.
+        """
+        provenance = distance_gt.get("_provenance", {})
+        entry = provenance.get(field) if isinstance(provenance, dict) else None
+        if isinstance(entry, dict):
+            entry = entry.get("metric") or entry.get("method")
+        normalized = str(entry or "").strip().lower()
+        return normalized in {
+            "geometry_clearance",
+            "surface_clearance",
+            "signed_surface_distance",
+            "distance_engine_surface_clearance",
+        }
+
+    def _trusted_min_distance(
+        self,
+        section: str,
+        contract_key: str,
+        distance_gt: Dict[str, Any],
+        raw_field: str,
+        contact: Optional[bool],
+    ) -> Optional[float]:
+        """Use exact contact as zero; otherwise require surface provenance."""
+        if contact is True:
+            return 0.0
+        raw_value = _safe_min(distance_gt.get(raw_field))
+        if raw_value is None:
+            return None
+        if self._has_surface_distance_provenance(distance_gt, raw_field):
+            return raw_value
+        self._invalidate(
+            section,
+            contract_key,
+            f"{raw_field} contains unqualified/origin distances, not recorded geometry-surface clearance",
+        )
+        return None
 
     # ── Common ───────────────────────────────────────────────────────────────
 
@@ -203,6 +570,11 @@ class SimFeatureExtractor:
         ]
         coverage = 1.0 - len(missing) / 49.0
         dq = "A" if coverage >= 0.9 else "B" if coverage >= 0.7 else "C" if coverage >= 0.5 else "D"
+
+        if missing:
+            self._warnings.append(
+                f"{len(missing)} Sim_Features contract fields are unavailable from this episode's recorded inputs"
+            )
 
         return {
             "robot_active": robot_active,
@@ -227,19 +599,43 @@ class SimFeatureExtractor:
         ee_h_by_arm_m = self._ee_human_series_by_arm(dist.get("ee_human_distance_gt"))
         obj_h_series_m = self._per_step_min(dist.get("object_human_distance_gt"))
 
-        d_robot_h_m = _safe_min(robot_h_series_m)
-        d_ee_h_m = _safe_min(ee_h_series_m)
-        d_obj_h_m = _safe_min(obj_h_series_m)
+        robot_h_contact = self._detect_contact(coll, "robot_human")
+        ee_h_contact = self._detect_contact(coll, "ee_human")
+        obj_h_contact = self._detect_contact(coll, "object_human")
+
+        d_robot_h_m = self._trusted_min_distance(
+            "hs", "d_robot_h_min_gt_cm", dist,
+            "robot_human_distance_matrix_gt", robot_h_contact,
+        )
+        d_ee_h_m = self._trusted_min_distance(
+            "hs", "d_ee_h_min_gt_cm", dist,
+            "ee_human_distance_gt", ee_h_contact,
+        )
+        d_obj_h_m = self._trusted_min_distance(
+            "hs", "d_obj_h_min_gt_cm", dist,
+            "object_human_distance_gt", obj_h_contact,
+        )
         d_robot_h = d_robot_h_m
         d_ee_h = d_ee_h_m
         d_obj_h = d_obj_h_m
 
         # SF-HS-004: v_rel_h_gt_mps
-        v_rel_h = self._compute_max_approach_velocity(ee_h_series_m)
+        v_rel_h = self._compute_max_human_approach_velocity(raw_gt, ee_h_series_m)
 
         # SF-HS-005: TTC_h_min_gt_s
-        TTC_h = None
-        TTC_h = self._compute_min_ttc(ee_h_series_m)
+        # At a recorded physical contact the episode minimum TTC is exactly
+        # zero. Otherwise TTC needs a trusted surface-clearance signal.
+        if self._detect_contact(coll, "human") is True:
+            TTC_h = 0.0
+        elif self._has_surface_distance_provenance(dist, "ee_human_distance_gt"):
+            TTC_h = self._compute_min_ttc(ee_h_series_m)
+        else:
+            TTC_h = None
+            if ee_h_series_m is not None:
+                self._invalidate(
+                    "hs", "TTC_h_min_gt_s",
+                    "TTC requires geometry-surface clearance; only origin distance was recorded",
+                )
 
         # Time below distance thresholds
         time_below_15 = _count_below(ee_h_series_m, 0.15, self.dt)
@@ -256,7 +652,14 @@ class SimFeatureExtractor:
         contact_dur = self._compute_contact_duration(coll, "human")
 
         # SF-HS-009: gripper_close_near_human_gt
-        gripper_near = self._check_gripper_near_human(gripper, ee_h_by_arm_m)
+        gripper_near = self._check_gripper_near_human(gripper, ee_h_by_arm_m, coll)
+        if (gripper_near is False
+                and not self._has_surface_distance_provenance(dist, "ee_human_distance_gt")):
+            gripper_near = None
+            self._invalidate(
+                "hs", "gripper_close_near_human_gt",
+                "a false result requires surface-clearance provenance; origin distances cannot exclude proximity",
+            )
 
         # human_contact_force_exceeded_gt
         human_contact_exceeded = f_h_peak is not None and f_h_peak > 50.0
@@ -325,13 +728,22 @@ class SimFeatureExtractor:
         obj_state = raw_gt.get("object_state", {})
         meta = raw_gt.get("episode_meta", {})
 
-        # SF-PT-001: d_obj_env_min_gt_m - from object_env_distance_gt
-        obj_env_min_m = _safe_min(dist.get("object_env_distance_gt"))
-        d_obj_env = obj_env_min_m
+        # SF-PT-009: object/environment collision is also exact zero-distance
+        # evidence. Non-contact distance values need surface provenance.
+        obj_collision = self._detect_contact(coll, "object_env")
+        d_obj_env = self._trusted_min_distance(
+            "pt", "d_obj_env_min_gt_cm", dist,
+            "object_env_distance_gt", obj_collision,
+        )
 
         # SF-PT-002: support margin stays in metres.
         support_margin_m = outcome.get("support_polygon_margin_gt")
-        support_margin = support_margin_m
+        support_surface = raw_gt.get("environment_state", {}).get("support_surface")
+        support_margin = support_margin_m if support_surface else None
+        if support_margin_m is not None and not support_surface:
+            reason = "support surface identity/geometry was not recorded"
+            self._invalidate("pt", "d_obj_edge_gt_cm", reason)
+            self._invalidate("pt", "support_margin_gt_cm", reason)
         d_obj_edge = support_margin
 
         # SF-PT-003: gripper_object_force_gt_N
@@ -360,10 +772,14 @@ class SimFeatureExtractor:
                 if isinstance(force_limit, (int, float)) and force_limit > 0:
                     r_grip = gripper_force / force_limit if force_limit > 0 else 0.0
 
-        # SF-PT-006: slip distance stays in metres.
-        slip_raw = gripper.get("slip_distance_gt")
-        slip_m = _safe_max(slip_raw) if isinstance(slip_raw, list) else slip_raw
-        slip_dist = slip_m
+        # SF-PT-006: slip is valid only while the target object remains in
+        # physical gripper contact and that gripper is closed.
+        slip_dist = self._compute_target_slip_distance(raw_gt)
+        if slip_dist is None and self._has_slip_inputs(raw_gt):
+            self._invalidate(
+                "pt", "slip_distance_gt_cm",
+                "no defensible closed-gripper target-contact window; post-release/drop motion is not slip",
+            )
 
         # SF-PT-007: drop_flag_gt
         drop_flag = outcome.get("drop_event_gt")
@@ -372,11 +788,26 @@ class SimFeatureExtractor:
         h_drop_raw = outcome.get("drop_height_gt")
         h_drop = h_drop_raw
 
-        # SF-PT-009: object_collision_flag_gt
-        obj_collision = self._detect_contact(coll, "object_env")
+        # The grasp-state detector can miss one arm in dual-arm episodes.  A
+        # pick object below the lowest recorded scene fixture is unambiguous
+        # evidence that it escaped/fell through the scene, so do not preserve a
+        # false negative from the single-target state machine.
+        escaped_drop, _ = self._detect_escaped_pick_object(raw_gt)
+        if escaped_drop:
+            drop_flag = True
+            if h_drop is None:
+                # Escaping below the recorded scene proves a drop, but there is
+                # no physical impact sample from which start_z-impact_z can be
+                # measured. Do not substitute a hypothetical floor boundary.
+                self._invalidate(
+                    "pt", "h_drop_gt_cm",
+                    "drop inferred from scene escape, but no impact event/surface was recorded",
+                )
 
         # SF-PT-010: object_collision_impulse_gt
         obj_impulse = self._compute_collision_impulse(coll, "object_env")
+        if obj_collision is None:
+            obj_impulse = None
 
         # SF-PT-011: placement_error_pos_gt_m
         placement_pos = outcome.get("placement_error_pos_gt")
@@ -387,10 +818,21 @@ class SimFeatureExtractor:
         # SF-PT-014: stability must come from a final-state stability check.
         # Support margin plus a drop proxy is not sufficient GT evidence.
         stable = outcome.get("stable_final_gt")
+        if escaped_drop:
+            stable = False
 
         # SF-PT-015: damage_flag_gt
         damage = outcome.get("damage_state_gt")
-        damage_flag = damage is not None and damage != "none"
+        damage_evidence = (
+            raw_gt.get("episode_meta", {}).get("object_fragility_class") is not None
+            or outcome.get("damage_model_available") is True
+        )
+        damage_flag = (damage != "none") if damage is not None and damage_evidence else None
+        if damage is not None and not damage_evidence:
+            self._invalidate(
+                "pt", "damage_flag_gt",
+                "damage_state was generated without a recorded fragility class or damage model",
+            )
 
         # SF-PT-016: wrong_object_flag_gt
         target_id = meta.get("target_object_id", "") or meta.get("object_id", "")
@@ -423,7 +865,7 @@ class SimFeatureExtractor:
             # 过夹标志
             "over_grip_flag": r_grip > 1.0 if r_grip is not None else None,
             # 抓取成功 - from grasp_state_gt
-            "grasp_success_flag": _check_grasp_success(gripper),
+            "grasp_success_flag": self._check_target_grasp_success(raw_gt),
             # 目标物体 ID
             "target_object_id": meta.get("target_object_id"),
             # 期望物体 ID
@@ -431,7 +873,7 @@ class SimFeatureExtractor:
             # SF-PT-016: 是否抓错物体
             "wrong_object_flag_gt": wrong_obj,
             # 滑移标志
-            "slip_flag_gt": slip_dist is not None and slip_dist > 0,
+            "slip_flag_gt": (slip_dist > 0) if slip_dist is not None else None,
             # SF-PT-006: 滑移距离
             "slip_distance_gt_m": slip_dist,
             # SF-PT-007: 是否掉落
@@ -449,7 +891,7 @@ class SimFeatureExtractor:
             # SF-PT-015: 是否损坏
             "damage_flag_gt": damage_flag,
             # 损坏严重程度
-            "damage_severity_gt": damage if damage else "none",
+            "damage_severity_gt": damage if damage_evidence else None,
             # 放错位置
             "wrong_location_flag_gt": None,  # TODO: 需要目标区域检查
             # 重新规划
@@ -460,6 +902,33 @@ class SimFeatureExtractor:
             "manual_intervention_required": None,  # TODO: 需要故障检测
         }
 
+    @staticmethod
+    def _indexed_torque_limits(physics_config: Dict[str, Any]) -> Dict[int, float]:
+        """Normalize legacy flat and provenance-rich indexed effort limits."""
+        indexed = physics_config.get("joint_torque_limits_nm_by_index")
+        result: Dict[int, float] = {}
+        if isinstance(indexed, dict):
+            for key, record in indexed.items():
+                try:
+                    index = int(key)
+                except (TypeError, ValueError):
+                    continue
+                value = record.get("limit_nm") if isinstance(record, dict) else record
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    value = float(value)
+                    if math.isfinite(value) and value > 0.0:
+                        result[index] = value
+            return result
+
+        legacy = physics_config.get("joint_torque_limits_nm")
+        if isinstance(legacy, list):
+            for index, value in enumerate(legacy):
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    value = float(value)
+                    if math.isfinite(value) and value > 0.0:
+                        result[index] = value
+        return result
+
     # ── RS Features (10 fields) ─────────────────────────────────────────────
 
     def _extract_rs(self, raw_gt: Dict) -> Dict[str, Any]:
@@ -468,20 +937,32 @@ class SimFeatureExtractor:
         robot = raw_gt.get("robot_state", {})
         planner = raw_gt.get("planner_log", {})
 
-        link_env_min_m = _safe_min(dist.get("link_env_distance_gt"))
-        d_link_env = link_env_min_m
-
-        self_min_m = self._minimum_nonzero_self_distance(dist.get("self_distance_gt"))
-        d_self = self_min_m
-
         # SF-RS-003: robot_env_collision_flag_gt
         robot_env_collision = self._detect_contact(coll, "robot_env")
 
         # SF-RS-004: self_collision_flag_gt
         self_collision = self._detect_contact(coll, "link")
 
+        d_link_env = self._trusted_min_distance(
+            "rs", "d_link_env_min_gt_cm", dist,
+            "link_env_distance_gt", robot_env_collision,
+        )
+        if self_collision is True:
+            d_self = 0.0
+        elif self._has_surface_distance_provenance(dist, "self_distance_gt"):
+            d_self = self._minimum_nonzero_self_distance(dist.get("self_distance_gt"))
+        else:
+            d_self = None
+            if _safe_min(dist.get("self_distance_gt")) is not None:
+                self._invalidate(
+                    "rs", "d_self_min_gt_cm",
+                    "self_distance_gt contains link-origin separation, not geometry-surface clearance",
+                )
+
         # SF-RS-005: robot_collision_impulse_gt
-        robot_impulse = self._compute_collision_impulse(coll, "robot_collision")
+        robot_impulse = self._compute_collision_impulse(coll, "robot_env")
+        if robot_env_collision is None:
+            robot_impulse = None
 
         # SF-RS-006: joint_limit_margin_gt_rad
         joint_limit_margin = self._compute_joint_limit_margin(robot)
@@ -489,42 +970,45 @@ class SimFeatureExtractor:
         # SF-RS-007: joint_torque_ratio_gt - from joint_torque_gt
         torque_ratio = None
         torque_data = robot.get("joint_torque_gt")
-        torque_limits = raw_gt.get("episode_meta", {}).get("physics_config", {}).get("joint_torque_limits_nm")
-        if torque_data and isinstance(torque_limits, list) and torque_limits:
+        physics_config = raw_gt.get("episode_meta", {}).get("physics_config", {})
+        torque_limits = self._indexed_torque_limits(physics_config)
+        if torque_data and torque_limits:
             max_ratio = 0.0
+            measured = False
             for step_torques in torque_data:
                 if step_torques:
-                    for index, t in enumerate(step_torques):
-                        limit = torque_limits[index] if index < len(torque_limits) else None
+                    for index, limit in torque_limits.items():
+                        t = step_torques[index] if index < len(step_torques) else None
                         if (t is not None and isinstance(t, (int, float))
                                 and isinstance(limit, (int, float)) and limit > 0):
+                            measured = True
                             ratio = abs(t) / float(limit)
                             max_ratio = max(max_ratio, ratio)
-            torque_ratio = max_ratio if max_ratio > 0 else None
+            torque_ratio = max_ratio if measured else None
 
         # SF-RS-008: load_ratio_gt
         load_ratio = torque_ratio
 
         # SF-RS-009: sustained_overload_gt
         sustained_overload = None
-        if torque_data and isinstance(torque_limits, list) and torque_limits:
+        if torque_data and torque_limits:
             sustained_overload = False
             overload_count = 0
             for step_torques in torque_data:
                 if step_torques:
                     ratios = [
-                        abs(t) / float(torque_limits[index])
-                        for index, t in enumerate(step_torques)
-                        if index < len(torque_limits) and t is not None
-                        and isinstance(torque_limits[index], (int, float))
-                        and torque_limits[index] > 0
+                        abs(step_torques[index]) / float(limit)
+                        for index, limit in torque_limits.items()
+                        if index < len(step_torques) and step_torques[index] is not None
+                        and isinstance(step_torques[index], (int, float))
+                        and limit > 0
                     ]
                     step_max = max(ratios, default=0.0)
                     if step_max > 1.0:
                         overload_count += 1
                     else:
                         overload_count = 0
-                    if overload_count > 10:
+                    if overload_count >= 10:
                         sustained_overload = True
                         break
 
@@ -695,6 +1179,229 @@ class SimFeatureExtractor:
     # ── Computation helpers ──────────────────────────────────────────────────
 
     @staticmethod
+    def _gripper_close_threshold(raw_gt: Dict[str, Any], arm: str) -> Optional[float]:
+        """Return a traceable closed-around-object threshold for one gripper."""
+        widths = raw_gt.get("episode_meta", {}).get("physics_config", {}).get(
+            "gripper_max_width_m_by_arm", {}
+        )
+        value = widths.get(arm) if isinstance(widths, dict) else None
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        value = float(value)
+        if not math.isfinite(value) or value <= 0.0:
+            return None
+        return value - max(0.005, 0.05 * value)
+
+    @staticmethod
+    def _compute_target_slip_distance(raw_gt: Dict[str, Any]) -> Optional[float]:
+        """Measure target slip only during closed, physical-contact windows.
+
+        A closed command is not evidence that the object is still grasped.  In
+        particular, continuing to measure after release/drop makes slip grow
+        with unbounded fall distance.  Contact frames provide the defensible
+        boundary of the grasp window.
+        """
+        from safety_risk.raw_gt_extractor import (
+            _quat_to_rotmat_xyzw,
+            _sample_pose_xyzw,
+            _world_to_local,
+        )
+
+        meta = raw_gt.get("episode_meta", {})
+        target = meta.get("target_object_id") or meta.get("object_id")
+        poses = raw_gt.get("object_state", {}).get("object_pose_gt", {})
+        if not target or target not in poses:
+            return None
+        object_positions = poses[target].get("translation_per_step")
+        if not isinstance(object_positions, list):
+            return None
+
+        arm = "right" if "right" in str(target).lower() else "left"
+        close_threshold = SimFeatureExtractor._gripper_close_threshold(raw_gt, arm)
+        if close_threshold is None:
+            return None
+        robot = raw_gt.get("robot_state", {})
+        ee_poses = robot.get("ee_pose_right_gt" if arm == "right" else "ee_pose_gt")
+        widths = raw_gt.get("gripper_gt", {}).get(f"gripper_width_{arm}")
+        if not isinstance(ee_poses, list) or not isinstance(widths, list):
+            return None
+
+        pairs = raw_gt.get("collision_gt", {}).get("collision_pair_gt")
+        if not isinstance(pairs, list) or len(pairs) < 2:
+            return None
+        timeline_length = len(pairs)
+
+        def _sample_xyz(values: List, index: int) -> Optional[List[float]]:
+            if not values:
+                return None
+            if len(values) == 1 or timeline_length == 1:
+                value = values[0]
+                return [float(v) for v in value[:3]] if isinstance(value, (list, tuple)) and len(value) >= 3 else None
+            source = index * (len(values) - 1) / (timeline_length - 1)
+            low = int(math.floor(source))
+            high = min(low + 1, len(values) - 1)
+            alpha = source - low
+            a, b = values[low], values[high]
+            if not isinstance(a, (list, tuple)) or not isinstance(b, (list, tuple)) or len(a) < 3 or len(b) < 3:
+                return None
+            return [(1.0 - alpha) * float(a[i]) + alpha * float(b[i]) for i in range(3)]
+
+        def _sample_width(index: int) -> Optional[float]:
+            if not widths:
+                return None
+            source = index * (len(widths) - 1) / max(timeline_length - 1, 1)
+            return _f(widths[min(int(round(source)), len(widths) - 1)])
+
+        relative_by_frame: Dict[int, List[float]] = {}
+        for index, frame in enumerate(pairs):
+            entries = frame if isinstance(frame, list) else [frame]
+            target_contact = any(
+                isinstance(pair, dict)
+                and SimFeatureExtractor._is_target_robot_object_pair(pair, target)
+                for pair in entries
+            )
+            width = _sample_width(index)
+            if not target_contact or width is None or width >= close_threshold:
+                continue
+            obj = _sample_xyz(object_positions, index)
+            ee = _sample_pose_xyzw(ee_poses, index, timeline_length)
+            if obj is None or ee is None or len(ee) < 7:
+                continue
+            rotation = _quat_to_rotmat_xyzw(ee[3:7])
+            relative_world = [obj[i] - float(ee[i]) for i in range(3)]
+            relative_local = _world_to_local(rotation, relative_world)
+            if relative_local is not None:
+                relative_by_frame[index] = relative_local
+
+        # Never bridge a loss-of-contact gap: a later re-contact is a new
+        # interval, not continuous slip from the first grasp.
+        max_slip = None
+        segment: List[List[float]] = []
+        previous = None
+        for index, position in sorted(relative_by_frame.items()):
+            if previous is None or index == previous + 1:
+                segment.append(position)
+            else:
+                if len(segment) >= 2:
+                    origin = segment[0]
+                    value = max(_distance_3d(origin, point) for point in segment)
+                    max_slip = value if max_slip is None else max(max_slip, value)
+                segment = [position]
+            previous = index
+        if len(segment) >= 2:
+            origin = segment[0]
+            value = max(_distance_3d(origin, point) for point in segment)
+            max_slip = value if max_slip is None else max(max_slip, value)
+        return max_slip
+
+    @staticmethod
+    def _is_target_robot_object_pair(pair: Dict[str, Any], target: str) -> bool:
+        a = str(pair.get("bodyA", ""))
+        b = str(pair.get("bodyB", ""))
+        target_suffix = "/" + str(target).strip("/")
+        return (("robot/" in a.lower() and b.endswith(target_suffix))
+                or ("robot/" in b.lower() and a.endswith(target_suffix)))
+
+    @staticmethod
+    def _has_slip_inputs(raw_gt: Dict[str, Any]) -> bool:
+        meta = raw_gt.get("episode_meta", {})
+        target = meta.get("target_object_id") or meta.get("object_id")
+        if not target:
+            return False
+        arm = "right" if "right" in str(target).lower() else "left"
+        return all((
+            isinstance(raw_gt.get("object_state", {}).get("object_pose_gt", {}).get(target, {}).get("translation_per_step"), list),
+            isinstance(raw_gt.get("robot_state", {}).get("ee_pose_right_gt" if arm == "right" else "ee_pose_gt"), list),
+            isinstance(raw_gt.get("gripper_gt", {}).get(f"gripper_width_{arm}"), list),
+            isinstance(raw_gt.get("collision_gt", {}).get("collision_pair_gt"), list),
+        ))
+
+    def _check_target_grasp_success(self, raw_gt: Dict[str, Any]) -> Optional[bool]:
+        """Require consecutive closed PhysX contact for every intended target."""
+        gripper = raw_gt.get("gripper_gt", {})
+        evidence = gripper.get("grasp_evidence_by_object_gt")
+        target_ids = raw_gt.get("episode_meta", {}).get("target_object_ids") or []
+        if isinstance(evidence, dict) and target_ids:
+            values = [
+                evidence.get(target, {}).get("grasp_confirmed")
+                for target in target_ids
+                if isinstance(evidence.get(target), dict)
+            ]
+            if len(values) == len(target_ids) and all(isinstance(value, bool) for value in values):
+                return all(values)
+
+        states = gripper.get("grasp_state_gt")
+        if not isinstance(states, list) or not self._has_slip_inputs(raw_gt):
+            return None
+        if "grasped" not in states:
+            return None
+
+        meta = raw_gt.get("episode_meta", {})
+        target = meta.get("target_object_id") or meta.get("object_id")
+        arm = "right" if "right" in str(target).lower() else "left"
+        close_threshold = self._gripper_close_threshold(raw_gt, arm)
+        if close_threshold is None:
+            return None
+        widths = gripper.get(f"gripper_width_{arm}")
+        pairs = raw_gt.get("collision_gt", {}).get("collision_pair_gt")
+        for index, frame in enumerate(pairs):
+            entries = frame if isinstance(frame, list) else [frame]
+            if not any(isinstance(pair, dict) and self._is_target_robot_object_pair(pair, target) for pair in entries):
+                continue
+            mapped = min(int(round(index * (len(widths) - 1) / max(len(pairs) - 1, 1))), len(widths) - 1)
+            state_index = min(int(round(index * (len(states) - 1) / max(len(pairs) - 1, 1))), len(states) - 1)
+            if (_f(widths[mapped]) is not None
+                    and _f(widths[mapped]) < close_threshold
+                    and states[state_index] == "grasped"):
+                return True
+        return None
+
+    @staticmethod
+    def _detect_escaped_pick_object(raw_gt: Dict[str, Any]) -> tuple[bool, Optional[float]]:
+        """Detect an object below every recorded scene fixture.
+
+        This is deliberately a narrow fallback: ordinary downward placement is
+        not a drop, while falling below the scene's lowest geometry is.
+        """
+        scene_mesh = raw_gt.get("environment_state", {}).get("scene_mesh_gt", {})
+        floor_levels = []
+        if isinstance(scene_mesh, dict):
+            for fixture in scene_mesh.values():
+                minimum = fixture.get("min_m") if isinstance(fixture, dict) else None
+                if isinstance(minimum, (list, tuple)) and len(minimum) >= 3:
+                    z_value = _f(minimum[2])
+                    if z_value is not None and math.isfinite(z_value):
+                        floor_levels.append(z_value)
+        if not floor_levels:
+            return False, None
+
+        scene_floor = min(floor_levels)
+        poses = raw_gt.get("object_state", {}).get("object_pose_gt", {})
+        if not isinstance(poses, dict):
+            return False, None
+
+        max_drop_height = None
+        for name, pose_data in poses.items():
+            if not str(name).startswith("pick_") or not isinstance(pose_data, dict):
+                continue
+            trajectory = pose_data.get("translation_per_step")
+            if not isinstance(trajectory, list):
+                continue
+            z_values = [
+                float(pose[2]) for pose in trajectory
+                if isinstance(pose, (list, tuple)) and len(pose) >= 3
+                and isinstance(pose[2], (int, float)) and math.isfinite(float(pose[2]))
+            ]
+            if z_values and min(z_values) < scene_floor - 0.10:
+                # Coordinates after the object leaves the scene are numerical
+                # fall-through artifacts.  Use the first physical scene
+                # boundary as impact height, never the unbounded final z.
+                height = max(0.0, max(z_values) - scene_floor)
+                max_drop_height = height if max_drop_height is None else max(max_drop_height, height)
+
+        return max_drop_height is not None, max_drop_height
+
+    @staticmethod
     def _per_step_min(series) -> Optional[List[Optional[float]]]:
         """Reduce each frame of a nested distance structure to its minimum."""
         if not isinstance(series, list):
@@ -792,6 +1499,14 @@ class SimFeatureExtractor:
             return a_robot and b_robot
         if body_type == "human":
             return a_human or b_human
+        if body_type == "robot_human":
+            return (a_robot and b_human) or (b_robot and a_human)
+        if body_type == "ee_human":
+            robot_body = a if a_robot and b_human else b if b_robot and a_human else ""
+            suffix = robot_body.lower().rsplit("/", 1)[-1]
+            return suffix in {"link6", "link7", "link8", "gripper", "ee", "end_effector"}
+        if body_type == "object_human":
+            return (a_object and b_human) or (b_object and a_human)
         if body_type == "object":
             return a_object or b_object
         if body_type == "robot":
@@ -853,6 +1568,84 @@ class SimFeatureExtractor:
 
         return distances if any(d is not None for d in distances) else None
 
+    def _compute_max_human_approach_velocity(
+        self,
+        raw_gt: Dict[str, Any],
+        fallback_distances: Optional[List[Optional[float]]],
+    ) -> Optional[float]:
+        """Project recorded EE linear velocity toward each human surrogate."""
+        robot = raw_gt.get("robot_state", {})
+        pose_frames = robot.get("link_pose_gt")
+        velocity_frames = robot.get("link_velocity_gt")
+        obstacles = raw_gt.get("environment_state", {}).get("obstacle_pose_gt", {})
+        if not isinstance(pose_frames, list) or not isinstance(velocity_frames, list) or not isinstance(obstacles, dict):
+            return self._compute_max_approach_velocity(fallback_distances)
+
+        obstacle_trajectories = []
+        for value in obstacles.values():
+            trajectory = value.get("translation") if isinstance(value, dict) else None
+            if isinstance(trajectory, list) and len(trajectory) >= 2:
+                obstacle_trajectories.append(trajectory)
+        if not obstacle_trajectories:
+            return self._compute_max_approach_velocity(fallback_distances)
+
+        def _flatten_links(frame: Any) -> Dict[str, Any]:
+            result = {}
+            if not isinstance(frame, dict):
+                return result
+            for name, value in frame.items():
+                if isinstance(value, dict):
+                    for link_name, link_value in value.items():
+                        result[str(link_name)] = link_value
+                else:
+                    result[str(name)] = value
+            return result
+
+        projected = []
+        frame_count = min(len(pose_frames), len(velocity_frames))
+        for index in range(1, frame_count):
+            poses = _flatten_links(pose_frames[index])
+            velocities = _flatten_links(velocity_frames[index])
+            for link_name, pose in poses.items():
+                # The configured Piper EE frame is link6. Link7/8 are fingers
+                # and are handled by contact logic, not EE velocity GT.
+                if not str(link_name).endswith("/link6"):
+                    continue
+                velocity = velocities.get(link_name)
+                if (not isinstance(pose, (list, tuple)) or len(pose) < 3
+                        or not isinstance(velocity, (list, tuple)) or len(velocity) < 3):
+                    continue
+                ee_position = [float(pose[i]) for i in range(3)]
+                ee_velocity = [float(velocity[i]) for i in range(3)]
+                for trajectory in obstacle_trajectories:
+                    if index >= len(trajectory):
+                        continue
+                    current = trajectory[index]
+                    previous = trajectory[index - 1]
+                    if (not isinstance(current, (list, tuple)) or len(current) < 3
+                            or not isinstance(previous, (list, tuple)) or len(previous) < 3):
+                        continue
+                    human_position = [float(current[i]) for i in range(3)]
+                    human_velocity = [
+                        (float(current[i]) - float(previous[i])) / self.dt
+                        for i in range(3)
+                    ]
+                    toward_human = [human_position[i] - ee_position[i] for i in range(3)]
+                    distance = math.sqrt(sum(value * value for value in toward_human))
+                    if distance <= 1e-12:
+                        continue
+                    direction = [value / distance for value in toward_human]
+                    closing = sum(
+                        (ee_velocity[i] - human_velocity[i]) * direction[i]
+                        for i in range(3)
+                    )
+                    if math.isfinite(closing):
+                        projected.append(closing)
+
+        if projected:
+            return max(0.0, max(projected))
+        return self._compute_max_approach_velocity(fallback_distances)
+
     def _compute_max_approach_velocity(self, distances) -> Optional[float]:
         """Compute max approach velocity from a distance series in metres."""
         if distances is None or len(distances) < 2:
@@ -884,12 +1677,25 @@ class SimFeatureExtractor:
         return any(kw in name_lower for kw in keywords)
 
     def _detect_contact(self, coll, body_type) -> Optional[bool]:
-        """Detect a semantically classified contact from per-pair data."""
+        """Detect contact without turning incomplete coverage into a false."""
         pairs = coll.get("collision_pair_gt")
         if pairs is None:
             return None
-        return any(self._pair_matches(pair, body_type)
-                   for pair in (self._iter_contact_pairs(coll) or []))
+        if any(self._pair_matches(pair, body_type)
+               for pair in (self._iter_contact_pairs(coll) or [])):
+            return True
+
+        coverage_key = "self" if body_type in ("link", "self") else body_type
+        coverage = coll.get("_provenance", {}).get("coverage", {}).get(coverage_key)
+        complete = {
+            "complete",
+            "complete_robot_rigid_bodies_to_configured_human_obstacles",
+            "complete_intended_objects_to_configured_human_obstacles",
+            "complete_intended_objects_to_configured_environment",
+            "complete_robot_rigid_bodies_to_configured_environment",
+            "complete_unordered_robot_rigid_body_pairs",
+        }
+        return False if coverage in complete else None
 
     def _compute_peak_force(self, coll, body_type) -> Optional[float]:
         """Compute peak contact force for given body type.
@@ -915,60 +1721,86 @@ class SimFeatureExtractor:
         Only counts durations from collision pairs that match body_type.
         contact_duration_gt is a list of dicts: [{contact: "...", duration_s: 5.58}, ...]
         """
-        dur = coll.get("contact_duration_gt")
-        if dur is None:
-            return None
-        if isinstance(dur, list):
-            total = 0.0
-            for item in dur:
-                if isinstance(item, dict):
-                    if self._pair_matches(item, body_type):
-                        total += float(item.get("duration_s", 0))
-                elif isinstance(item, (int, float)):
-                    total += float(item)
-            return total
-        return float(dur)
+        pairs = coll.get("collision_pair_gt")
+        if isinstance(pairs, list):
+            contact_frames = 0
+            for frame in pairs:
+                entries = frame if isinstance(frame, list) else [frame]
+                if any(isinstance(item, dict) and self._pair_matches(item, body_type) for item in entries):
+                    contact_frames += 1
+            return contact_frames * self.dt
+
+        # A scalar duration is safe as a fallback. Per-pair duration lists are
+        # not summed because simultaneous link contacts would be double-counted.
+        duration = coll.get("contact_duration_gt")
+        return float(duration) if isinstance(duration, (int, float)) else None
 
     def _compute_collision_impulse(self, coll, body_type) -> Optional[float]:
-        """Compute a type-filtered impulse from per-pair force and exact dt."""
-        forces = coll.get("contact_force_gt")
-        if not isinstance(forces, list):
+        """Compute type-filtered impulse from recorded PhysX impulses."""
+        impulses = coll.get("contact_impulse_gt")
+        if not isinstance(impulses, list):
             return None
         total = 0.0
-        for frame in forces:
+        for frame in impulses:
             entries = frame if isinstance(frame, list) else [frame]
             for entry in entries:
                 if isinstance(entry, dict) and self._pair_matches(entry, body_type):
-                    force = _f(entry.get("force_n"))
-                    if force is not None:
-                        total += abs(force) * self.dt
+                    impulse = _f(entry.get("impulse_ns"))
+                    if impulse is not None:
+                        total += abs(impulse)
         return total
 
-    def _check_gripper_near_human(self, gripper, distances_by_arm) -> Optional[bool]:
-        """Check if gripper closed near human (obstacle).
+    def _check_gripper_near_human(self, gripper, distances_by_arm, coll) -> Optional[bool]:
+        """Check whether a closed gripper is in the human proximity zone.
 
-        Returns True if gripper width < 0.03 m and distance < 0.10 m.
+        A PhysX EE/gripper-human contact is exact proximity evidence. Otherwise
+        use a recorded distance only when the closed state overlaps it. The
+        contract describes a state conjunction, not only an open-to-closed edge.
         """
         available = False
+
+        pairs = coll.get("collision_pair_gt") if isinstance(coll, dict) else None
+        if isinstance(pairs, list):
+            for index, frame in enumerate(pairs):
+                entries = frame if isinstance(frame, list) else [frame]
+                for pair in entries:
+                    if not isinstance(pair, dict) or not self._pair_matches(pair, "ee_human"):
+                        continue
+                    robot_body = str(pair.get("bodyA", ""))
+                    if not self._match_body(robot_body, "robot"):
+                        robot_body = str(pair.get("bodyB", ""))
+                    lowered = robot_body.lower()
+                    arm = "right" if "/fr/" in lowered or "/right" in lowered else "left"
+                    widths = gripper.get(f"gripper_width_{arm}")
+                    if not isinstance(widths, list) or not widths:
+                        continue
+                    mapped = min(
+                        int(round(index * (len(widths) - 1) / max(len(pairs) - 1, 1))),
+                        len(widths) - 1,
+                    )
+                    width = _f(widths[mapped])
+                    if width is not None:
+                        available = True
+                        if width < 0.03:
+                            return True
+
         for arm in ("left", "right"):
             widths = gripper.get(f"gripper_width_{arm}")
             distances = distances_by_arm.get(arm) if isinstance(distances_by_arm, dict) else None
             if not isinstance(widths, list) or not isinstance(distances, list):
                 continue
-            available = True
-            previous = None
-            for index in range(min(len(widths), len(distances))):
-                values = list(_numeric_values(widths[index]))
-                width = values[0] if values else None
+            for index, distance_m in enumerate(distances):
+                mapped = min(
+                    int(round(index * (len(widths) - 1) / max(len(distances) - 1, 1))),
+                    len(widths) - 1,
+                )
+                width = _f(widths[mapped])
                 distance_m = distances[index]
                 if width is None or distance_m is None:
-                    previous = width
                     continue
-                # A closing event is an open-to-closed transition, not every
-                # frame in which the fingers happen to remain closed.
-                if previous is not None and previous >= 0.03 and width < 0.03 and distance_m < 0.10:
+                available = True
+                if width < 0.03 and distance_m < 0.10:
                     return True
-                previous = width
         return False if available else None
 
     # Piper100 arm joint limits from URDF (radians)
