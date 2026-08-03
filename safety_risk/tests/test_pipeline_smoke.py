@@ -122,8 +122,8 @@ class TestEndToEnd:
         features = extractor.extract(episode)
         result = engine.evaluate(features, episode_id="contact_test")
 
-        assert result.hs_level == RiskLevel.L3
-        assert result.overall_level == RiskLevel.L3
+        assert result.hs_level == RiskLevel.L2
+        assert result.overall_level == RiskLevel.L2
 
     def test_batch_summary(self):
         """Test batch summary generation."""
@@ -180,8 +180,8 @@ class TestConfig:
     def test_threshold_ranges(self):
         config = SafetyRiskConfig.load()
         hs = config.thresholds.hs
-        # L0 should be >= 0.15 m
-        assert hs.d_h_min_gt["L0"].min == 0.15
+        assert hs.v_rel_h_low == 0.10
+        assert hs.v_rel_h_medium == 0.25
 
 
 class TestSimRawExtractor:

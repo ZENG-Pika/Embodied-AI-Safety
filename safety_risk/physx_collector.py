@@ -42,6 +42,8 @@ class PhysXDataCollector:
             "link_pose_gt": [],
             # S-ROBOT-006: link velocities
             "link_velocity_gt": [],
+            # S-HUM-001: per-step world poses for every human-surrogate body
+            "human_body_pose_gt": [],
             # S-COLL-001: collision pairs
             "collision_pair_gt": [],
             # S-COLL-002: collision locations
@@ -56,6 +58,10 @@ class PhysXDataCollector:
             "contact_events": [],  # raw events for duration computation
             # S-GRASP-001: gripper-object contact force
             "gripper_object_contact_force_gt": [],
+            # S-DIST-001..003: collider-surface human distances
+            "robot_human_distance_matrix_gt": [],
+            "ee_human_distance_gt": [],
+            "object_human_distance_gt": [],
             # S-DIST-004: object-env distances
             "object_env_distance_gt": [],
             # S-DIST-005: link-env distances
@@ -97,6 +103,14 @@ class PhysXDataCollector:
             "gravity_direction": None,
             "gravity_magnitude_mps2": None,
         }
+        self._data["distance_coverage_status"] = {
+            "method": "collider_world_aabb_surface_clearance",
+            "robot_body_count": 0,
+            "human_body_count": 0,
+            "object_count": 0,
+            "environment_body_count": 0,
+            "mano_proxy_body_count": 0,
+        }
         try:
             from omni.physx import get_physx_simulation_interface
             from omni.physx.scripts import physicsUtils
@@ -117,11 +131,13 @@ class PhysXDataCollector:
                     impulses = []
                     positions = []
                     separations = []
+                    normals = []
                     for index in range(start, start + count):
                         datum = contact_data[index]
                         impulses.append([float(value) for value in datum.impulse])
                         positions.append([float(value) for value in datum.position])
                         separations.append(float(datum.separation))
+                        normals.append([float(value) for value in datum.normal])
                     pending.append({
                         "actor0": _decode_path(header.actor0),
                         "actor1": _decode_path(header.actor1),
@@ -130,6 +146,7 @@ class PhysXDataCollector:
                         "impulses_ns": impulses,
                         "positions_m": positions,
                         "separations_m": separations,
+                        "normals": normals,
                         "source": "PhysX contact-report callback",
                     })
                 self._pending_contact_reports.extend(pending)
@@ -177,6 +194,12 @@ class PhysXDataCollector:
             self._data["link_pose_gt"].append(None)
 
         try:
+            self._collect_human_body_poses(task)
+        except Exception as e:
+            logger.warning("Failed to collect human body poses: %s", e)
+            self._data["human_body_pose_gt"].append(None)
+
+        try:
             self._collect_contact_data(task, step_id)
         except Exception as e:
             self._data["collision_pair_gt"].append(None)
@@ -186,6 +209,10 @@ class PhysXDataCollector:
         try:
             self._collect_distances(task)
         except Exception as e:
+            logger.warning("Failed to collect collider surface distances: %s", e)
+            self._data["robot_human_distance_matrix_gt"].append(None)
+            self._data["ee_human_distance_gt"].append(None)
+            self._data["object_human_distance_gt"].append(None)
             self._data["object_env_distance_gt"].append(None)
             self._data["link_env_distance_gt"].append(None)
             self._data["self_distance_gt"].append(None)
@@ -607,6 +634,156 @@ class PhysXDataCollector:
 
         _traverse(robot_prim)
         return link_map
+
+    def _collect_human_body_poses(self, task) -> None:
+        """Collect world poses for every rigid link in configured human obstacles.
+
+        MANO is an articulated obstacle.  Recording only its root transform
+        loses palm/finger motion, so each rigid body is discovered from the USD
+        hierarchy and sampled every physics step.
+
+        Per-step output:
+            {
+              "obstacle_1": {
+                "palm": {
+                  "prim_path": ".../mano/palm",
+                  "pose": [x,y,z,qx,qy,qz,qw]
+                },
+                ...
+              }
+            }
+        """
+        from omni.isaac.core.utils.prims import get_prim_at_path
+        from omni.isaac.core.utils.xforms import get_world_pose
+        from pxr import Usd, UsdPhysics
+
+        if not hasattr(self, "_human_body_link_cache"):
+            self._human_body_link_cache = {}
+
+        objects = getattr(task, "objects", {}) or {}
+        frame = {}
+        for obstacle_name, obstacle in objects.items():
+            if "obstacle" not in str(obstacle_name).lower():
+                continue
+
+            if obstacle_name not in self._human_body_link_cache:
+                root_path = (
+                    getattr(obstacle, "prim_path", None)
+                    or getattr(obstacle, "object_prim_path", None)
+                )
+                link_map = {}
+                if root_path:
+                    root_prim = get_prim_at_path(root_path)
+                    if root_prim and root_prim.IsValid():
+                        root_prefix = str(root_prim.GetPath()).rstrip("/") + "/"
+                        for prim in Usd.PrimRange(root_prim):
+                            if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                                continue
+                            prim_path = str(prim.GetPath())
+                            relative_path = prim_path.replace(root_prefix, "", 1)
+                            link_name = prim.GetName()
+                            if link_name in link_map:
+                                link_name = relative_path
+                            link_map[link_name] = prim_path
+                self._human_body_link_cache[obstacle_name] = {
+                    "root_prim_path": root_path,
+                    "links": link_map,
+                }
+
+            cached = self._human_body_link_cache[obstacle_name]
+            body_parts = {}
+            for link_name, prim_path in cached["links"].items():
+                pose = None
+                try:
+                    prim = get_prim_at_path(prim_path)
+                    if prim and prim.IsValid():
+                        position, orientation_wxyz = get_world_pose(prim_path)
+                        # Isaac Sim get_world_pose returns scalar-first WXYZ.
+                        # Sim_Raw_GT consistently declares quaternion order XYZW.
+                        pose = [
+                            float(position[0]),
+                            float(position[1]),
+                            float(position[2]),
+                            float(orientation_wxyz[1]),
+                            float(orientation_wxyz[2]),
+                            float(orientation_wxyz[3]),
+                            float(orientation_wxyz[0]),
+                        ]
+                except Exception:
+                    pose = None
+                body_parts[link_name] = {
+                    "prim_path": prim_path,
+                    "pose": pose,
+                }
+
+            frame[obstacle_name] = {
+                "root_prim_path": cached["root_prim_path"],
+                "body_parts": body_parts,
+            }
+
+        self._data["human_body_pose_gt"].append(frame)
+
+    def build_human_body_pose_gt(self) -> Optional[Dict[str, Any]]:
+        """Convert per-step MANO samples into body-part pose time series."""
+        frames = self._data.get("human_body_pose_gt", [])
+        if not frames or not any(isinstance(frame, dict) and frame for frame in frames):
+            return None
+
+        obstacles: Dict[str, Any] = {}
+        obstacle_names = sorted({
+            obstacle_name
+            for frame in frames if isinstance(frame, dict)
+            for obstacle_name in frame
+        })
+        for obstacle_name in obstacle_names:
+            root_path = None
+            link_records: Dict[str, Dict[str, Any]] = {}
+            link_names = sorted({
+                link_name
+                for frame in frames if isinstance(frame, dict)
+                for link_name in (
+                    frame.get(obstacle_name, {}).get("body_parts", {})
+                    if isinstance(frame.get(obstacle_name), dict) else {}
+                )
+            })
+            for link_name in link_names:
+                prim_path = None
+                poses = []
+                for frame in frames:
+                    obstacle_frame = (
+                        frame.get(obstacle_name, {})
+                        if isinstance(frame, dict) else {}
+                    )
+                    if root_path is None and isinstance(obstacle_frame, dict):
+                        root_path = obstacle_frame.get("root_prim_path")
+                    record = (
+                        obstacle_frame.get("body_parts", {}).get(link_name)
+                        if isinstance(obstacle_frame, dict) else None
+                    )
+                    if isinstance(record, dict):
+                        prim_path = prim_path or record.get("prim_path")
+                        poses.append(record.get("pose"))
+                    else:
+                        poses.append(None)
+                link_records[link_name] = {
+                    "prim_path": prim_path,
+                    "pose_per_step": poses,
+                }
+            obstacles[obstacle_name] = {
+                "root_prim_path": root_path,
+                "body_parts": link_records,
+            }
+
+        return {
+            "surrogate_type": "articulated_mano_hand",
+            "coordinate_frame": "world",
+            "pose_format": "[x,y,z,qx,qy,qz,qw]",
+            "quaternion_order": "xyzw",
+            "position_unit": "m",
+            "num_steps": len(frames),
+            "obstacles": obstacles,
+            "source": "runtime USD rigid-body world poses sampled after each physics step",
+        }
 
     def _compute_angular_velocity(self, q_prev, q_curr, dt):
         """Compute angular velocity from two quaternions.
@@ -1214,6 +1391,7 @@ class PhysXDataCollector:
         # Replace tensor-derived forces with the native PhysX contact-report
         # impulses.  The callback exposes the solver impulse vector directly,
         # avoiding backend-dependent force scaling in multi-filter matrices.
+        aggregated_reports = {}
         if self._contact_report_sub is not None:
             reports = self._pending_contact_reports
             self._pending_contact_reports = []
@@ -1264,64 +1442,114 @@ class PhysXDataCollector:
                 if kinds == {"object", "environment"}:
                     obj = first if kind_a == "object" else second
                     env = second if kind_a == "object" else first
-                    return f"object/{obj[1]}", f"environment/{env[1]}"
+                    return (
+                        f"object/{obj[1]}", f"environment/{env[1]}",
+                        1.0 if kind_a == "object" else -1.0,
+                    )
                 if kinds == {"object", "human"}:
                     obj = first if kind_a == "object" else second
                     human = second if kind_a == "object" else first
-                    return f"object/{obj[1]}", f"obstacle/{human[1]}"
+                    return (
+                        f"object/{obj[1]}", f"obstacle/{human[1]}",
+                        1.0 if kind_a == "object" else -1.0,
+                    )
                 if kinds == {"robot", "environment"}:
                     robot = first if kind_a == "robot" else second
                     env = second if kind_a == "robot" else first
-                    return f"robot/{robot[1]}", f"environment/{env[1]}"
+                    return (
+                        f"robot/{robot[1]}", f"environment/{env[1]}",
+                        1.0 if kind_a == "robot" else -1.0,
+                    )
                 if kinds == {"robot", "human"}:
                     robot = first if kind_a == "robot" else second
                     human = second if kind_a == "robot" else first
-                    return f"robot/{robot[1]}", f"obstacle/{human[1]}"
+                    return (
+                        f"robot/{robot[1]}", f"obstacle/{human[1]}",
+                        1.0 if kind_a == "robot" else -1.0,
+                    )
                 if kinds == {"robot", "object"}:
                     robot = first if kind_a == "robot" else second
                     obj = second if kind_a == "robot" else first
-                    return f"robot/{robot[1]}", f"object/{obj[1]}"
+                    return (
+                        f"robot/{robot[1]}", f"object/{obj[1]}",
+                        1.0 if kind_a == "robot" else -1.0,
+                    )
                 if kind_a == kind_b == "robot":
                     first_label, second_label = sorted((label_a, label_b))
-                    return f"robot/{first_label}", f"robot/{second_label}"
+                    return (
+                        f"robot/{first_label}", f"robot/{second_label}",
+                        1.0 if label_a == first_label else -1.0,
+                    )
                 if kind_a == kind_b == "object":
                     first_label, second_label = sorted((label_a, label_b))
-                    return f"object/{first_label}", f"object/{second_label}"
+                    return (
+                        f"object/{first_label}", f"object/{second_label}",
+                        1.0 if label_a == first_label else -1.0,
+                    )
                 return None
 
-            aggregated_reports = {}
             for report in reports:
                 first = _semantic_body(report.get("actor0", ""), report.get("collider0", ""))
                 second = _semantic_body(report.get("actor1", ""), report.get("collider1", ""))
-                pair = _canonical_pair(first, second)
-                if pair is None:
+                canonical = _canonical_pair(first, second)
+                if canonical is None:
                     continue
+                body_a, body_b, direction_sign = canonical
 
                 impulses = np.asarray(report.get("impulses_ns", []), dtype=float)
                 if impulses.size == 0:
                     continue
                 impulses = impulses.reshape(-1, 3)
+                impulses *= direction_sign
                 impulse_vector = np.sum(impulses, axis=0)
-                entry = aggregated_reports.setdefault(pair, {
+                entry = aggregated_reports.setdefault((body_a, body_b), {
                     "impulse_vector_ns": np.zeros(3, dtype=float),
-                    "positions_m": [],
-                    "separations_m": [],
+                    "contact_points": [],
                 })
                 entry["impulse_vector_ns"] += impulse_vector
-                entry["positions_m"].extend(report.get("positions_m", []))
-                entry["separations_m"].extend(report.get("separations_m", []))
+                positions = report.get("positions_m", [])
+                separations = report.get("separations_m", [])
+                normals = report.get("normals", [])
+                point_count = min(
+                    len(impulses), len(positions), len(separations), len(normals)
+                )
+                for point_index in range(point_count):
+                    point_impulse = impulses[point_index]
+                    point_normal = np.asarray(normals[point_index], dtype=float) * direction_sign
+                    entry["contact_points"].append({
+                        "position_m": [float(value) for value in positions[point_index]],
+                        "normal_from_bodyB_to_bodyA": [
+                            float(value) for value in point_normal
+                        ],
+                        "separation_m": float(separations[point_index]),
+                        "penetration_depth_m": max(0.0, -float(separations[point_index])),
+                        "impulse_vector_ns": [float(value) for value in point_impulse],
+                        "impulse_magnitude_ns": float(np.linalg.norm(point_impulse)),
+                        "force_vector_n": [float(value / dt) for value in point_impulse],
+                        "force_magnitude_n": float(np.linalg.norm(point_impulse) / dt),
+                        "source_actor0": report.get("actor0"),
+                        "source_actor1": report.get("actor1"),
+                        "source_collider0": report.get("collider0"),
+                        "source_collider1": report.get("collider1"),
+                    })
 
             for (body_a, body_b), entry in aggregated_reports.items():
                 impulse_ns = float(np.linalg.norm(entry["impulse_vector_ns"]))
+                force_vector = entry["impulse_vector_ns"] / dt
                 force_magnitude = impulse_ns / dt
                 if force_magnitude <= 0.01:
                     continue
-                positions = np.asarray(entry["positions_m"], dtype=float)
+                contact_points = entry["contact_points"]
+                positions = np.asarray(
+                    [point["position_m"] for point in contact_points], dtype=float
+                )
                 location_m = (
                     [float(value) for value in np.mean(positions, axis=0)]
                     if positions.size else None
                 )
-                separations = np.asarray(entry["separations_m"], dtype=float)
+                separations = np.asarray(
+                    [point["separation_m"] for point in contact_points], dtype=float
+                )
                 penetration_m = (
                     float(max(0.0, -np.min(separations)))
                     if separations.size else None
@@ -1331,13 +1559,21 @@ class PhysXDataCollector:
                     "bodyB": body_b,
                     "step": step_id,
                     "force_n": force_magnitude,
+                    "force_vector_n": [float(value) for value in force_vector],
                     "impulse_ns": impulse_ns,
+                    "impulse_vector_ns": [
+                        float(value) for value in entry["impulse_vector_ns"]
+                    ],
                     "source": "PhysX contact-report impulse / measured physics_dt",
                 })
                 collision_locations.append({
                     "bodyA": body_a,
                     "bodyB": body_b,
                     "location_m": location_m,
+                    "contact_points_m": [
+                        point["position_m"] for point in contact_points
+                    ],
+                    "num_contact_points": len(contact_points),
                 })
                 penetration_depths.append({
                     "bodyA": body_a,
@@ -1346,7 +1582,7 @@ class PhysXDataCollector:
                     "method": "physx_contact_separation",
                     "source": "PhysX contact-report callback",
                     "confidence": "high",
-                    "num_contact_points": int(len(entry["separations_m"])),
+                    "num_contact_points": len(contact_points),
                 })
                 total_impulse += impulse_ns
 
@@ -1397,12 +1633,40 @@ class PhysXDataCollector:
                 "bodyB": pair["bodyB"],
                 "step": pair.get("step", step_id),
                 "force_n": force_n,
+                "force_vector_n": pair.get("force_vector_n"),
+                "contact_points": [
+                    {
+                        "position_m": point["position_m"],
+                        "normal_from_bodyB_to_bodyA": point[
+                            "normal_from_bodyB_to_bodyA"
+                        ],
+                        "force_vector_n": point["force_vector_n"],
+                        "force_magnitude_n": point["force_magnitude_n"],
+                    }
+                    for point in aggregated_reports.get(
+                        (pair["bodyA"], pair["bodyB"]), {}
+                    ).get("contact_points", [])
+                ],
             })
             contact_impulses.append({
                 "bodyA": pair["bodyA"],
                 "bodyB": pair["bodyB"],
                 "step": pair.get("step", step_id),
                 "impulse_ns": float(pair.get("impulse_ns", force_n * dt)),
+                "impulse_vector_ns": pair.get("impulse_vector_ns"),
+                "contact_points": [
+                    {
+                        "position_m": point["position_m"],
+                        "normal_from_bodyB_to_bodyA": point[
+                            "normal_from_bodyB_to_bodyA"
+                        ],
+                        "impulse_vector_ns": point["impulse_vector_ns"],
+                        "impulse_magnitude_ns": point["impulse_magnitude_ns"],
+                    }
+                    for point in aggregated_reports.get(
+                        (pair["bodyA"], pair["bodyB"]), {}
+                    ).get("contact_points", [])
+                ],
             })
         self._data["contact_force_gt"].append(contact_forces if contact_forces else [])
         self._data["contact_impulse_gt"].append(contact_impulses if contact_impulses else [])
@@ -1510,143 +1774,284 @@ class PhysXDataCollector:
     # ── Distances (S-DIST-004, 005, 006) ───────────────────────────────────
 
     def _collect_distances(self, task) -> None:
-        """Compute distances between objects, links, and environment.
+        """Collect six distance fields from live collider world bounds.
 
-        Uses robot.get_world_pose() and known EE paths for reliable position access.
+        Distances are between collider *surfaces*, not prim origins.  Isaac Sim
+        4.5 does not expose a general separated-shape distance query, so this
+        uses the Euclidean clearance between each collider's world AABB.  It is
+        exact for axis-aligned box colliders and a conservative lower bound for
+        rotated/curved/mesh colliders.  The method is recorded in provenance.
         """
-        # Object-env distances: each object to ALL other objects
-        obj_env_dists = {}
-        if hasattr(task, 'objects'):
-            for obj_name, obj in task.objects.items():
-                try:
-                    obj_pos, _ = obj.get_world_pose()
-                    obj_dists = {}
-                    for other_name, other_obj in task.objects.items():
-                        if other_name != obj_name:
-                            other_pos, _ = other_obj.get_world_pose()
-                            d = float(np.linalg.norm(np.array(obj_pos) - np.array(other_pos)))
-                            obj_dists[other_name] = d
-                    obj_env_dists[obj_name] = obj_dists if obj_dists else None
-                except Exception:
-                    obj_env_dists[obj_name] = None
+        from pxr import Gf, Usd, UsdGeom, UsdPhysics
+        import omni.usd
 
-        # Link-env distances: every discovered robot link to every task object.
-        # Earlier versions only reported base/fl_ee_path/fr_ee_path nearest-object
-        # distances.  Use link_pose_gt collected in this same step so the output is
-        # complete for all robot links and still stays easy for downstream code to
-        # reduce via min(value).
-        link_env_dists = {}
-        latest_link_poses = self._data.get("link_pose_gt")[-1] if self._data.get("link_pose_gt") else None
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            raise RuntimeError("USD stage is unavailable")
 
-        for robot_name, robot in task.robots.items():
+        def _root_path(value):
+            for attr in ("prim_path", "_prim_path"):
+                path = getattr(value, attr, None)
+                if path:
+                    return str(path).rstrip("/")
+            return None
+
+        robot_roots = {
+            name: _root_path(robot)
+            for name, robot in getattr(task, "robots", {}).items()
+            if _root_path(robot)
+        }
+        object_roots = {
+            name: _root_path(obj)
+            for name, obj in getattr(task, "objects", {}).items()
+            if _root_path(obj)
+        }
+        target_roots = {
+            name: path for name, path in object_roots.items()
+            if str(name).startswith("pick_object")
+        }
+        human_roots = {
+            name: path for name, path in object_roots.items()
+            if str(name).startswith("obstacle")
+        }
+
+        def _under(path, root):
+            return path == root or path.startswith(root + "/")
+
+        def _rigid_owner(prim):
+            current = prim
+            while current and current.IsValid():
+                if current.HasAPI(UsdPhysics.RigidBodyAPI):
+                    return str(current.GetPath())
+                current = current.GetParent()
+            return str(prim.GetPath())
+
+        bbox_cache = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(),
+            [UsdGeom.Tokens.default_, UsdGeom.Tokens.proxy, UsdGeom.Tokens.render],
+            useExtentsHint=True,
+        )
+        xform_cache = UsdGeom.XformCache(Usd.TimeCode.Default())
+        groups = {"robot": {}, "human": {}, "object": {}, "environment": {}}
+        group_roots = {}
+        if not hasattr(self, "_collider_local_bounds"):
+            self._collider_local_bounds = {}
+
+        def _finite_bounds(minimum, maximum):
+            size = maximum - minimum
+            return bool(
+                minimum.shape == (3,)
+                and maximum.shape == (3,)
+                and np.all(np.isfinite(minimum))
+                and np.all(np.isfinite(maximum))
+                and np.all(size >= 0.0)
+                and np.all(size < 100.0)
+                and np.all(np.abs(minimum) < 1e6)
+                and np.all(np.abs(maximum) < 1e6)
+            )
+
+        def _world_bounds(prim):
             try:
-                link_positions = {}
-
-                if isinstance(latest_link_poses, dict):
-                    robot_links = latest_link_poses.get(robot_name, {})
-                    if isinstance(robot_links, dict):
-                        for link_name, link_pose in robot_links.items():
-                            if (isinstance(link_pose, (list, tuple)) and len(link_pose) >= 3
-                                    and link_pose[0] is not None):
-                                link_positions[link_name] = [float(link_pose[0]), float(link_pose[1]), float(link_pose[2])]
-
-                # Fallbacks keep the field non-empty even if link discovery fails.
-                if not link_positions:
-                    try:
-                        base_pos, _ = robot.get_world_pose()
-                        link_positions["base"] = list(base_pos)
-                    except Exception:
-                        pass
-
-                    for ee_attr in ['fl_ee_path', 'fr_ee_path']:
-                        if hasattr(robot, ee_attr):
-                            ee_path = getattr(robot, ee_attr)
-                            if ee_path:
-                                try:
-                                    from omni.isaac.core.utils.prims import get_prim_at_path
-                                    from omni.isaac.core.utils.xforms import get_world_pose
-                                    prim = get_prim_at_path(ee_path)
-                                    if prim and prim.IsValid():
-                                        pos, _ = get_world_pose(ee_path)
-                                        link_positions[ee_attr] = list(pos)
-                                except Exception:
-                                    pass
-
-                if hasattr(task, 'objects'):
-                    for link_name, link_pos in link_positions.items():
-                        link_xyz = np.array(link_pos[:3], dtype=float)
-                        for obj_name, obj in task.objects.items():
-                            try:
-                                obj_pos, _ = obj.get_world_pose()
-                                d = float(np.linalg.norm(link_xyz - np.array(obj_pos, dtype=float)))
-                                key = f"{robot_name}/{link_name}→{obj_name}"
-                                link_env_dists[key] = d
-                            except Exception:
-                                pass
-
+                aligned = bbox_cache.ComputeWorldBound(prim).ComputeAlignedRange()
+                minimum = np.asarray(aligned.GetMin(), dtype=float)
+                maximum = np.asarray(aligned.GetMax(), dtype=float)
+                if _finite_bounds(minimum, maximum):
+                    return minimum, maximum
             except Exception:
                 pass
 
-        # Self-distance: pairwise distances between all arm links
-        self_dists = {}
-        for robot_name, robot in task.robots.items():
-            try:
-                # Get link poses from collected data
-                link_poses = self._data.get("link_pose_gt")
-                if not link_poses:
-                    self_dists[robot_name] = None
+            # Some referenced collision meshes have no valid authored extent,
+            # while their points are present. Cache-free local point bounds +
+            # eight transformed corners avoids the invalid FLT_MAX world box.
+            if prim.IsA(UsdGeom.Mesh):
+                try:
+                    prim_path = str(prim.GetPath())
+                    local_bounds = self._collider_local_bounds.get(prim_path)
+                    if local_bounds is None:
+                        points = UsdGeom.Mesh(prim).GetPointsAttr().Get() or []
+                        if points:
+                            local = np.asarray(points, dtype=float)
+                            local_bounds = (local.min(axis=0), local.max(axis=0))
+                            self._collider_local_bounds[prim_path] = local_bounds
+                    if local_bounds is not None:
+                        local_min, local_max = local_bounds
+                        matrix = xform_cache.GetLocalToWorldTransform(prim)
+                        corners = []
+                        for x in (local_min[0], local_max[0]):
+                            for y in (local_min[1], local_max[1]):
+                                for z in (local_min[2], local_max[2]):
+                                    value = matrix.Transform(Gf.Vec3d(float(x), float(y), float(z)))
+                                    corners.append([float(value[0]), float(value[1]), float(value[2])])
+                        corners = np.asarray(corners, dtype=float)
+                        minimum, maximum = corners.min(axis=0), corners.max(axis=0)
+                        if _finite_bounds(minimum, maximum):
+                            return minimum, maximum
+                except Exception:
+                    pass
+            return None
+
+        for prim in stage.Traverse():
+            if not prim.HasAPI(UsdPhysics.CollisionAPI):
+                continue
+            enabled = UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Get()
+            if enabled is False:
+                continue
+            path = str(prim.GetPath())
+            owner = _rigid_owner(prim)
+            category = "environment"
+            root_name = None
+            root_path = None
+
+            for name, candidate in robot_roots.items():
+                if _under(path, candidate):
+                    category, root_name, root_path = "robot", name, candidate
+                    break
+            if category == "environment":
+                for name, candidate in human_roots.items():
+                    if _under(path, candidate):
+                        category, root_name, root_path = "human", name, candidate
+                        break
+            if category == "environment":
+                for name, candidate in target_roots.items():
+                    if _under(path, candidate):
+                        category, root_name, root_path = "object", name, candidate
+                        break
+
+            if category == "robot":
+                label = f"{root_name}/{owner[len(root_path):].strip('/') or prim.GetName()}"
+            elif category == "human":
+                label = f"{root_name}/{owner[len(root_path):].strip('/') or prim.GetName()}"
+            elif category == "object":
+                label = root_name
+            else:
+                label = owner
+
+            bounds = _world_bounds(prim)
+            if bounds is None:
+                continue
+            minimum, maximum = bounds
+            groups[category].setdefault(label, []).append((minimum, maximum, path))
+            group_roots[label] = owner
+
+        # The supplied MANO asset currently authors RigidBodyAPI on its 21 body
+        # parts but does not author CollisionAPI on the empty ``collisions``
+        # Xforms. Use each rigid body's resolved geometry bound so distances are
+        # still per palm/finger link instead of falling back to obstacle_1 root.
+        mano_proxy_count = 0
+        for obstacle_name, obstacle_root in human_roots.items():
+            for prim in stage.Traverse():
+                path = str(prim.GetPath())
+                if not _under(path, obstacle_root) or not prim.HasAPI(UsdPhysics.RigidBodyAPI):
                     continue
-
-                # Get latest step's link poses
-                step_links = link_poses[-1] if link_poses else {}
-                robot_links = step_links.get(robot_name, {}) if isinstance(step_links, dict) else {}
-
-                if not robot_links:
-                    self_dists[robot_name] = None
+                relative = path[len(obstacle_root):].strip("/") or prim.GetName()
+                label = f"{obstacle_name}/{relative}"
+                if label in groups["human"]:
                     continue
+                bounds = _world_bounds(prim)
+                if bounds is None:
+                    # The asset has unresolved visuals for several 1y links.
+                    # Preserve complete 21-link coverage with a documented
+                    # conservative body-centred proxy rather than root distance.
+                    matrix = xform_cache.GetLocalToWorldTransform(prim)
+                    center = np.asarray(matrix.ExtractTranslation(), dtype=float)
+                    radius = 0.035 if prim.GetName() == "palm" else 0.012
+                    bounds = center - radius, center + radius
+                    mano_proxy_count += 1
+                groups["human"][label] = [(bounds[0], bounds[1], path)]
+                group_roots[label] = path
 
-                # Filter to arm links only (fl/*, fr/*)
-                arm_links = {}
-                for link_name, link_pose in robot_links.items():
-                    short = link_name.split("/")[-1] if "/" in link_name else link_name
-                    if (link_name.endswith("/arm_base") or
-                        link_name.endswith("/link1") or
-                        link_name.endswith("/link2") or
-                        link_name.endswith("/link3") or
-                        link_name.endswith("/link4") or
-                        link_name.endswith("/link5") or
-                        link_name.endswith("/link6") or
-                        link_name.endswith("/link7") or
-                        link_name.endswith("/link8")):
-                        if link_pose and len(link_pose) >= 3 and link_pose[0] is not None:
-                            arm_links[link_name] = link_pose
+        self._data["distance_coverage_status"] = {
+            "method": "collider_world_aabb_surface_clearance",
+            "robot_body_count": len(groups["robot"]),
+            "human_body_count": len(groups["human"]),
+            "object_count": len(groups["object"]),
+            "environment_body_count": len(groups["environment"]),
+            "mano_proxy_body_count": mano_proxy_count,
+        }
 
-                # Compute pairwise distances between all arm links
-                link_names = list(arm_links.keys())
-                pairwise_dists = {}
+        def _aabb_clearance(a, b):
+            delta = np.maximum(np.maximum(b[0] - a[1], a[0] - b[1]), 0.0)
+            return float(np.linalg.norm(delta))
 
-                for i in range(len(link_names)):
-                    for j in range(i + 1, len(link_names)):
-                        name_i = link_names[i].split("/")[-1]
-                        name_j = link_names[j].split("/")[-1]
-                        pose_i = arm_links[link_names[i]]
-                        pose_j = arm_links[link_names[j]]
-                        d = float(np.linalg.norm(
-                            np.array(pose_i[:3]) - np.array(pose_j[:3])
-                        ))
-                        # Store with arm prefix for clarity
-                        arm_i = "fl" if "/fl/" in link_names[i] else "fr"
-                        arm_j = "fl" if "/fl/" in link_names[j] else "fr"
-                        key = f"{arm_i}/{name_i}→{arm_j}/{name_j}"
-                        pairwise_dists[key] = d
+        def _group_clearance(a_boxes, b_boxes):
+            return min(
+                _aabb_clearance(a_box, b_box)
+                for a_box in a_boxes for b_box in b_boxes
+            )
 
-                self_dists[robot_name] = pairwise_dists
-            except Exception as e:
-                self_dists[robot_name] = None
+        robot_human = {}
+        for human_name, human_boxes in sorted(groups["human"].items()):
+            robot_human[human_name] = {
+                robot_name: _group_clearance(robot_boxes, human_boxes)
+                for robot_name, robot_boxes in sorted(groups["robot"].items())
+            }
 
-        self._data["object_env_distance_gt"].append(obj_env_dists if obj_env_dists else None)
-        self._data["link_env_distance_gt"].append(link_env_dists if link_env_dists else None)
-        self._data["self_distance_gt"].append(self_dists if self_dists else None)
+        ee_human = {}
+        for robot_name, robot in getattr(task, "robots", {}).items():
+            for arm, attr in (("left", "fl_ee_path"), ("right", "fr_ee_path")):
+                ee_path = str(getattr(robot, attr, "") or "")
+                ee_groups = [
+                    (name, boxes) for name, boxes in groups["robot"].items()
+                    if ee_path and (
+                        _under(ee_path, group_roots.get(name, ""))
+                        or _under(group_roots.get(name, ""), ee_path)
+                    )
+                ]
+                for human_name, human_boxes in sorted(groups["human"].items()):
+                    if ee_groups:
+                        ee_human[f"{arm}→{human_name}"] = min(
+                            _group_clearance(boxes, human_boxes)
+                            for _, boxes in ee_groups
+                        )
+
+        object_human = {}
+        for object_name, object_boxes in sorted(groups["object"].items()):
+            object_human[object_name] = {
+                human_name: _group_clearance(object_boxes, human_boxes)
+                for human_name, human_boxes in sorted(groups["human"].items())
+            }
+
+        object_env = {}
+        for object_name, object_boxes in sorted(groups["object"].items()):
+            object_env[object_name] = {
+                env_name: _group_clearance(object_boxes, env_boxes)
+                for env_name, env_boxes in sorted(groups["environment"].items())
+            }
+
+        link_env = {}
+        for robot_name, robot_boxes in sorted(groups["robot"].items()):
+            link_env[robot_name] = {
+                env_name: _group_clearance(robot_boxes, env_boxes)
+                for env_name, env_boxes in sorted(groups["environment"].items())
+            }
+
+        excluded_pairs = set()
+        for prim in stage.Traverse():
+            if not prim.IsA(UsdPhysics.Joint):
+                continue
+            joint = UsdPhysics.Joint(prim)
+            body0 = joint.GetBody0Rel().GetTargets()
+            body1 = joint.GetBody1Rel().GetTargets()
+            if body0 and body1:
+                excluded_pairs.add(tuple(sorted((str(body0[0]), str(body1[0])))))
+
+        self_dist = {}
+        robot_names = sorted(groups["robot"])
+        for index, name_a in enumerate(robot_names):
+            for name_b in robot_names[index + 1:]:
+                owners = tuple(sorted((group_roots.get(name_a, ""), group_roots.get(name_b, ""))))
+                if owners in excluded_pairs:
+                    continue
+                self_dist[f"{name_a}→{name_b}"] = _group_clearance(
+                    groups["robot"][name_a], groups["robot"][name_b]
+                )
+
+        self._data["robot_human_distance_matrix_gt"].append(robot_human or None)
+        self._data["ee_human_distance_gt"].append(ee_human or None)
+        self._data["object_human_distance_gt"].append(object_human or None)
+        self._data["object_env_distance_gt"].append(object_env or None)
+        self._data["link_env_distance_gt"].append(link_env or None)
+        self._data["self_distance_gt"].append(self_dist or None)
 
     # ── Post-processing ─────────────────────────────────────────────────────
 

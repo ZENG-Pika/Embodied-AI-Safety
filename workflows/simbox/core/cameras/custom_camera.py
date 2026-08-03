@@ -53,6 +53,7 @@ class CustomCamera(Camera):
             self.add_distance_to_image_plane_to_frame()
         if self.with_semantic:
             self.add_semantic_segmentation_to_frame()
+            self.add_instance_segmentation_to_frame()
         if self.with_bbox2d:
             self.add_bounding_box_2d_tight_to_frame()
             self.add_bounding_box_2d_loose_to_frame()
@@ -182,6 +183,11 @@ class CustomCamera(Camera):
         if seg_data is not None:
             obs["semantic_mask"] = seg_data["mask"]
             obs["semantic_mask_id2labels"] = seg_data["id2labels"]
+
+        instance_data = get_src(self, "instance_seg")
+        if instance_data is not None:
+            obs["instance_mask"] = instance_data["mask"]
+            obs["instance_mask_id2labels"] = instance_data["id2labels"]
 
         bbox2d_tight = get_src(self, "bbox2d_tight")
         if bbox2d_tight is not None:

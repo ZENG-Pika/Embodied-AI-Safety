@@ -35,7 +35,7 @@ robot_state:
   joint_limit:            {type: json, unit: rad, required: M0}
   link_pose_gt:           {type: "array[n_links][7]", unit: "m+quat", freq: "50-500Hz", required: M0, id: S-ROBOT-005}
   link_velocity_gt:       {type: "array[n_links][6]", unit: "m/s+rad/s", freq: "50-500Hz", required: M1, id: S-ROBOT-006}
-  ee_pose_gt:             {type: "array[float;7]", unit: "m+quat", freq: "50-500Hz", required: M0, id: S-ROBOT-007}
+  ee_pose_gt:             {type: "time_series[{left:array[7],right:array[7]}]", unit: "m+quat", freq: "50-500Hz", required: M0, id: S-ROBOT-007}
   ee_velocity_gt:         {type: "array[float;6]", unit: "m/s+rad/s", freq: "50-500Hz", required: M1}
   robot_mode:             {type: string, unit: null, required: M2}
   controller_state:       {type: json,   unit: null, required: M2}
@@ -67,10 +67,10 @@ distance_gt:
 # ── Collision / contact GT ──────────────────────────────────────────────────
 collision_gt:
   collision_pair_gt:   {type: "list[(bodyA,bodyB,time)]", required: M0, id: S-COLL-001}
-  collision_location_gt: {type: "array[float;3]", unit: m, required: M1, id: S-COLL-002}
+  collision_location_gt: {type: "time_series[list[{contact_id,position_m,normal}]]", unit: m, required: M1, id: S-COLL-002}
   penetration_depth_gt:  {type: float, unit: m, required: M1, id: S-COLL-003}
-  contact_force_gt:    {type: "array[float;3]/time_series", unit: N, freq: "100-1000Hz", required: M0, id: S-COLL-004}
-  contact_impulse_gt:  {type: "list[(bodyA,bodyB,impulse_ns)]/time_series", unit: "N·s", freq: "100-1000Hz", required: M0, id: S-COLL-005}
+  contact_force_gt:    {type: "time_series[list[{contact_id,force_vector_n,force_magnitude_n}]]", unit: N, freq: "100-1000Hz", required: M0, id: S-COLL-004}
+  contact_impulse_gt:  {type: "time_series[list[{contact_id,impulse_vector_ns,impulse_magnitude_ns}]]", unit: "N·s", freq: "100-1000Hz", required: M0, id: S-COLL-005}
   contact_duration_gt: {type: float, unit: s, required: M0, id: S-COLL-006}
   contact_normal:      {type: "array[float;3]", unit: null, required: M1}
 
@@ -80,14 +80,14 @@ gripper_gt:
   gripper_velocity:                 {type: float, unit: m/s, required: M2}
   gripper_force_gt:                 {type: float, unit: N, required: M1}
   gripper_object_contact_force_gt:  {type: "float/time_series", unit: N, freq: "100-500Hz", required: M0, id: S-GRASP-001}
-  grasp_state_gt:                   {type: "enum[not_grasped,grasped,slipping,dropped]", required: M0, id: S-GRASP-003}
+  grasp_state_gt:                   {type: "time_series[map[arm,enum[not_grasped,grasped,slipping,dropped]]]", required: M0, id: S-GRASP-003}
   object_relative_pose_to_gripper:  {type: "array[float;7]", unit: "m+quat", required: M1}
-  slip_distance_gt:                 {type: "float/time_series", unit: m, freq: "50-500Hz", required: M0, id: S-GRASP-002}
+  slip_distance_gt:                 {type: "map[object,{arm:string,slip_distance_m:float}]", unit: m, required: M0, id: S-GRASP-002}
 
 # ── Drop / placement / damage GT ────────────────────────────────────────────
 outcome_gt:
-  drop_event_gt:             {type: "bool/event", required: M0, id: S-OUT-001}
-  drop_height_gt:            {type: float, unit: m, required: M0, id: S-OUT-002}
+  drop_event_gt:             {type: "map[object,bool]", required: M0, id: S-OUT-001}
+  drop_height_gt:            {type: "map[object,{drop_height_m:float,status:enum[no_drop,impact_detected,escaped_simulation,impact_not_observed]}]", unit: m, required: M0, id: S-OUT-002}
   final_object_pose:         {type: "array[float;7]", unit: "m+quat", required: M0}
   placement_error_pos_gt:    {type: float, unit: m, required: M0}
   placement_error_rot_gt:    {type: float, unit: rad, required: M1}
@@ -97,7 +97,7 @@ outcome_gt:
 
 # ── Planner / safety gate / HRI logs ────────────────────────────────────────
 planner_log:
-  planned_trajectory:    {type: "array/list", required: M0, id: S-PLAN-001}
+  planned_trajectory:    {type: "{plans:list[unique_plan],events:list[{capture_index,plan_id}]}", required: M0, id: S-PLAN-001}
   executed_trajectory:   {type: "array/list", required: M0, id: S-PLAN-002}
   replan_flag:           {type: bool, required: M1}
   t_replan_s:            {type: float, unit: s, required: M1}

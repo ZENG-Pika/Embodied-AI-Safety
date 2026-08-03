@@ -62,6 +62,26 @@ def _get_object_mask(camera: Camera):
     return None
 
 
+def _get_instance_mask(camera: Camera):
+    annotator = _get_annotator(camera, "instance_segmentation")
+    if annotator is None:
+        return None
+    annotation_data = annotator.get_data()
+    if (
+        not isinstance(annotation_data, dict)
+        or "data" not in annotation_data
+        or "info" not in annotation_data
+    ):
+        return None
+    info = annotation_data["info"]
+    if not isinstance(info, dict) or "idToLabels" not in info:
+        return None
+    mask = annotation_data["data"]
+    if isinstance(mask, np.ndarray) and mask.size > 0:
+        return {"mask": mask, "id2labels": info["idToLabels"]}
+    return None
+
+
 def _get_bbox(camera: Camera, bbox_type: str):
     annotator = _get_annotator(camera, bbox_type)
     if annotator is None:
@@ -113,6 +133,8 @@ def get_src(camera: Camera, data_type: str):
         return _get_depth_image(camera)
     if data_type == "seg":
         return _get_object_mask(camera)
+    if data_type == "instance_seg":
+        return _get_instance_mask(camera)
     if data_type == "bbox2d_tight":
         return _get_bbox(camera, "bounding_box_2d_tight")
     if data_type == "bbox2d_loose":

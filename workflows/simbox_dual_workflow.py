@@ -1,4 +1,5 @@
 import glob
+import hashlib
 import json
 import math
 import os
@@ -562,6 +563,19 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                                 "labels.seg." + save_camera_name,
                                 camera_obs["semantic_mask_id2labels"],
                             )
+                    if "instance_mask" in camera_obs:
+                        self.logger.add_seg_image(
+                            robot_name,
+                            "images.instance_seg." + save_camera_name,
+                            camera_obs["instance_mask"],
+                            step_idx=step_idx,
+                        )
+                        if "instance_mask_id2labels" in camera_obs:
+                            self.logger.add_scalar_data(
+                                robot_name,
+                                "labels.instance_seg." + save_camera_name,
+                                camera_obs["instance_mask_id2labels"],
+                            )
                     if "bbox2d_tight" in camera_obs:
                         self.logger.add_scalar_data(
                             robot_name, "labels.bbox2d_tight." + save_camera_name, camera_obs["bbox2d_tight"]
@@ -817,6 +831,18 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 raw_gt["robot_state"]["joint_torque_gt"] = physx_data.get("joint_torque_gt")
                 raw_gt["robot_state"]["link_pose_gt"] = physx_data.get("link_pose_gt")
                 raw_gt["robot_state"]["link_velocity_gt"] = physx_data.get("link_velocity_gt")
+                human_body_pose_gt = self._physx_collector.build_human_body_pose_gt()
+                if human_body_pose_gt:
+                    raw_gt["environment_state"]["human_body_pose_gt"] = human_body_pose_gt
+                    obstacle_count = len(human_body_pose_gt.get("obstacles", {}))
+                    body_count = sum(
+                        len(obstacle.get("body_parts", {}))
+                        for obstacle in human_body_pose_gt.get("obstacles", {}).values()
+                    )
+                    print(
+                        "[safety_risk] human_body_pose_gt injected "
+                        f"({obstacle_count} obstacles, {body_count} body parts)"
+                    )
                 raw_gt["collision_gt"]["collision_pair_gt"] = physx_data.get("collision_pair_gt")
                 raw_gt["collision_gt"]["collision_location_gt"] = physx_data.get("collision_location_gt")
                 raw_gt["collision_gt"]["penetration_depth_gt"] = physx_data.get("penetration_depth_gt")
@@ -871,18 +897,46 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 if contact_events:
                     raw_gt["collision_gt"]["contact_duration_gt"] = contact_events
 
-                raw_gt["distance_gt"]["object_env_distance_gt"] = physx_data.get("object_env_distance_gt")
-                raw_gt["distance_gt"]["link_env_distance_gt"] = physx_data.get("link_env_distance_gt")
-                raw_gt["distance_gt"]["self_distance_gt"] = physx_data.get("self_distance_gt")
-                # The current collector computes Euclidean separation between
-                # prim/link origins, not geometry-surface clearance. Record
-                # this explicitly so downstream extraction cannot mistake the
-                # values for exact S-DIST contract GT.
+                for field_name in (
+                    "robot_human_distance_matrix_gt",
+                    "ee_human_distance_gt",
+                    "object_human_distance_gt",
+                    "object_env_distance_gt",
+                    "link_env_distance_gt",
+                    "self_distance_gt",
+                ):
+                    raw_gt["distance_gt"][field_name] = physx_data.get(field_name)
+
+                # Isaac Sim 4.5 has no public general separated-shape distance
+                # query. These values use actual collider world bounds rather
+                # than prim origins. The method and its limitations are
+                # explicit so it cannot be mistaken for triangle-mesh distance.
+                distance_method = {
+                    "metric": "collider_world_aabb_surface_clearance",
+                    "unit": "m",
+                    "coordinate_frame": "world",
+                    "contact_value": 0.0,
+                    "accuracy": (
+                        "exact for axis-aligned box colliders; conservative "
+                        "lower bound for rotated, curved, and mesh colliders; "
+                        "MANO links without authored CollisionAPI use resolved "
+                        "body bounds or a 0.012 m finger/0.035 m palm proxy"
+                    ),
+                }
                 raw_gt["distance_gt"].setdefault("_provenance", {}).update({
-                    "object_env_distance_gt": {"metric": "origin_euclidean"},
-                    "link_env_distance_gt": {"metric": "origin_euclidean"},
-                    "self_distance_gt": {"metric": "origin_euclidean"},
+                    field_name: dict(distance_method)
+                    for field_name in (
+                        "robot_human_distance_matrix_gt",
+                        "ee_human_distance_gt",
+                        "object_human_distance_gt",
+                        "object_env_distance_gt",
+                        "link_env_distance_gt",
+                        "self_distance_gt",
+                    )
                 })
+                raw_gt["distance_gt"]["_provenance"]["runtime_coverage"] = (
+                    physx_data.get("distance_coverage_status", {})
+                )
 
                 # Rebuild EE poses from full per-step PhysX link_pose_gt before
                 # recomputing human distances.  LMDB T_base_ee_fl/fr can be scoped
@@ -896,25 +950,13 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 except Exception as e:
                     print(f"[safety_risk] Warning: ee_pose_gt rebuild failed: {e}")
 
-                # Recompute S-DIST-001/002/003 after PhysX link_pose_gt and rebuilt
-                # EE pose have been injected. The extractor initially runs before
-                # PhysX data is merged, so these distances may otherwise be stale or
-                # shorter than the simulation timeline.
-                try:
-                    raw_extractor._compute_human_distances_from_obstacles(raw_gt)
-                    matrix = raw_gt.get("distance_gt", {}).get("robot_human_distance_matrix_gt")
-                    ee_human = raw_gt.get("distance_gt", {}).get("ee_human_distance_gt")
-                    if matrix:
-                        print(f"[safety_risk] robot_human_distance_matrix_gt recomputed ({len(matrix)} frames)")
-                    if ee_human:
-                        print(f"[safety_risk] ee_human_distance_gt recomputed ({len(ee_human)} frames)")
-                    raw_gt["distance_gt"].setdefault("_provenance", {}).update({
-                        "robot_human_distance_matrix_gt": {"metric": "origin_euclidean"},
-                        "ee_human_distance_gt": {"metric": "origin_euclidean"},
-                        "object_human_distance_gt": {"metric": "origin_euclidean"},
-                    })
-                except Exception as e:
-                    print(f"[safety_risk] Warning: human distance recompute failed: {e}")
+                distance_frames = len(
+                    physx_data.get("robot_human_distance_matrix_gt") or []
+                )
+                print(
+                    "[safety_risk] six collider-surface distance fields injected "
+                    f"({distance_frames} frames)"
+                )
 
                 # Planner data
                 raw_gt["planner_log"]["planned_trajectory"] = physx_data.get("planned_trajectory")
@@ -934,6 +976,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             # Joint effort limits are read from the live articulation and kept
             # with DOF indices/names.  This is required to compare the 28-value
             # measured-effort vector with the 12 arm-joint limits correctly.
+            torque_limits = {}
             try:
                 torque_limits = self._read_robot_torque_limits()
                 if torque_limits:
@@ -947,7 +990,31 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                         "gripper_max_width_m_by_arm"
                     ] = gripper_widths
             except Exception as e:
-                print(f"[safety_risk] Warning: joint torque limit read failed: {e}")
+                print(f"[safety_risk] Warning: joint metadata read failed: {e}")
+
+            # Joint-channel alignment does not depend on effort limits being
+            # available.  Keep it isolated so a missing optional PhysX limit
+            # API cannot leave position/velocity/acceleration dimensions mixed.
+            try:
+                joint_layout = self._read_arm_joint_layout()
+                if joint_layout:
+                    raw_extractor.normalize_arm_joint_state(
+                        raw_gt,
+                        arm_dof_indices=joint_layout["arm_dof_indices"],
+                        arm_dof_names=joint_layout["arm_dof_names"],
+                        left_dof_count=joint_layout["left_dof_count"],
+                        dt=joint_layout["physics_dt_s"],
+                        effort_limits_by_index=torque_limits,
+                    )
+                    # Rebuild after EE poses and the aligned 12-DOF joint axis
+                    # have both been finalized.
+                    raw_extractor._compute_executed_trajectory(raw_gt)
+                    print(
+                        "[safety_risk] arm joint GT aligned "
+                        f"({len(joint_layout['arm_dof_names'])} DOFs)"
+                    )
+            except Exception as e:
+                print(f"[safety_risk] Warning: arm joint GT normalization failed: {e}")
 
             # ── Inject USD physical params (S-OBJ-004) ──
             try:
@@ -960,16 +1027,28 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
             # ── Inject scene mesh info (S-ENV-001) ──
             try:
-                scene_mesh = self._read_scene_mesh_info()
+                scene_mesh = self._read_scene_mesh_info(
+                    episode_dir / "scene_collision_stage.usda"
+                )
                 if scene_mesh:
                     raw_gt["environment_state"]["scene_mesh_gt"] = scene_mesh
-                    print(f"[safety_risk] scene_mesh_gt injected ({len(scene_mesh)} fixtures)")
+                    collider_count = scene_mesh.get("metadata", {}).get("collider_count", 0)
+                    print(
+                        f"[safety_risk] scene_mesh_gt injected "
+                        f"({collider_count} collider prims)"
+                    )
             except Exception as e:
                 print(f"[safety_risk] Warning: scene_mesh_gt read failed: {e}")
 
             # ── Inject the exact placement region used by the task planner and
             # derive final placement/stability from recorded poses. ──
             try:
+                # The extractor's first pass runs before PhysX contact pairs,
+                # full EE poses, and gripper width metadata are injected.
+                # Recompute these contact-dependent dual-arm fields now that
+                # all of their authoritative inputs are available.
+                raw_extractor._compute_grasp_state(raw_gt)
+                raw_extractor._compute_slip_distance(raw_gt)
                 placement_region = self._read_placement_target_region()
                 if placement_region:
                     raw_gt["environment_state"]["placement_target_region_gt"] = placement_region
@@ -977,6 +1056,10 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     raw_gt["outcome_gt"].update(placement_metrics)
                     drop_metrics = self._compute_physical_grasp_drop_metrics(raw_gt)
                     raw_gt["outcome_gt"].update(drop_metrics)
+                    # Damage depends on the final PhysX impulses and finalized
+                    # drop/impact metrics, which are unavailable during the
+                    # extractor's initial LMDB-only pass.
+                    raw_extractor._compute_damage_state(raw_gt)
                     print(
                         "[safety_risk] placement region and final-state metrics injected "
                         f"({len(placement_metrics.get('placement_error_by_object_gt', {}))} objects)"
@@ -996,9 +1079,9 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             except Exception as e:
                 print(f"[safety_risk] Warning: sensor fields computation failed: {e}")
 
+            self._compact_sim_raw_gt(raw_gt)
             raw_gt_path = episode_dir / "sim_raw_gt.json"
-            with open(raw_gt_path, "w", encoding="utf-8") as f:
-                json.dump(raw_gt, f, indent=2, ensure_ascii=False, default=str)
+            self._atomic_write_json(raw_gt_path, raw_gt)
             print(f"[safety_risk] 1/4 Sim_Raw_GT → {raw_gt_path}")
 
             # ── Step 2: Sim_Features (from Raw_GT) ──
@@ -1008,8 +1091,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             features = feature_extractor.extract(raw_gt)
 
             features_path = episode_dir / "sim_features.json"
-            with open(features_path, "w", encoding="utf-8") as f:
-                json.dump(features, f, indent=2, ensure_ascii=False, default=str)
+            self._atomic_write_json(features_path, features)
             print(f"[safety_risk] 2/4 Sim_Features → {features_path}")
 
             # ── Step 3: Sim_Labels (from Raw_GT + Features) ──
@@ -1019,8 +1101,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             labels = label_extractor.extract(raw_gt, features)
 
             labels_path = episode_dir / "sim_labels.json"
-            with open(labels_path, "w", encoding="utf-8") as f:
-                json.dump(labels, f, indent=2, ensure_ascii=False, default=str)
+            self._atomic_write_json(labels_path, labels)
             print(f"[safety_risk] 3/4 Sim_Labels → {labels_path}")
 
             # ── Step 4: Safety Report (from Labels) ──
@@ -1029,8 +1110,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             report_path = report_dir / f"{episode_id}_risk.json"
 
             report = self._build_report_from_labels(episode_id, raw_gt, features, labels)
-            with open(report_path, "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2, ensure_ascii=False, default=str)
+            self._atomic_write_json(report_path, report)
             print(f"[safety_risk] 4/4 Safety Report → {report_path}")
 
         except Exception as e:
@@ -1154,6 +1234,22 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             if inertia is not None:
                 return inertia, f"usd:{prim_path}:{attr_name}"
             return None, "missing_or_zero_placeholder"
+
+        def _box_inertia_from_mass_size(mass_kg, size_m):
+            mass = _to_float(mass_kg)
+            if mass is None or not size_m or len(size_m) < 3:
+                return None
+            try:
+                x, y, z = [abs(float(v)) for v in size_m[:3]]
+            except Exception:
+                return None
+            if not all(math.isfinite(v) and v > 0.0 for v in (mass, x, y, z)):
+                return None
+            return [
+                mass * (y * y + z * z) / 12.0,
+                mass * (x * x + z * z) / 12.0,
+                mass * (x * x + y * y) / 12.0,
+            ]
 
         def _friction_from_config(obj_cfg, component):
             physical_params = obj_cfg.get("physical_params", {}) or {}
@@ -1411,28 +1507,27 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 continue
 
             if articulation_prim is not None:
-                runtime_articulation = _read_runtime_articulation(articulation_prim, obj_name)
+                runtime_articulation = None
+                approx_inertia = _box_inertia_from_mass_size(authored_mass_kg, size_m)
                 common.update({
                     "physical_role": "articulation",
                     "mass_kg": runtime_articulation.get("mass_kg") if runtime_articulation else authored_mass_kg,
-                    "inertia_kg_m2": None,
-                    "inertia_matrix_kg_m2": None,
-                    "inertia_method": "not_applicable_articulation_use_bodies",
+                    "inertia_kg_m2": approx_inertia,
+                    "inertia_matrix_kg_m2": (
+                        np.diag(approx_inertia).tolist() if approx_inertia is not None else None
+                    ),
+                    "inertia_method": "box_approximation_from_mass_and_bbox" if approx_inertia is not None else "unavailable",
                     "body_count": runtime_articulation.get("body_count") if runtime_articulation else None,
                     "bodies": runtime_articulation.get("bodies") if runtime_articulation else None,
                 })
                 common["sources"].update({
-                    "mass": "physx_runtime_articulation" if runtime_articulation else authored_mass_source,
-                    "inertia": "physx_runtime_articulation_bodies" if runtime_articulation else "unavailable",
+                    "mass": authored_mass_source,
+                    "inertia": "box_approximation_from_mass_and_bbox" if approx_inertia is not None else "unavailable",
                 })
                 result[obj_name] = common
                 continue
 
-            runtime_rigid = (
-                _read_runtime_rigid_body(obj, str(prim.GetPath()), obj_name)
-                if obj is not None
-                else None
-            )
+            runtime_rigid = None
             if runtime_rigid is not None:
                 common.update({
                     "physical_role": "dynamic_rigid_body",
@@ -1446,6 +1541,13 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 })
             else:
                 authored_inertia, authored_inertia_source = _read_authored_inertia(prim)
+                if authored_inertia is None:
+                    authored_inertia = _box_inertia_from_mass_size(authored_mass_kg, size_m)
+                    authored_inertia_source = (
+                        "box_approximation_from_mass_and_bbox"
+                        if authored_inertia is not None
+                        else authored_inertia_source
+                    )
                 common.update({
                     "physical_role": "dynamic_rigid_body",
                     "mass_kg": authored_mass_kg,
@@ -1455,7 +1557,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     ),
                     "center_of_mass_m": None,
                     "principal_axes_quat_wxyz": None,
-                    "inertia_method": "usd_authored" if authored_inertia is not None else "unavailable",
+                    "inertia_method": (
+                        "usd_authored"
+                        if authored_inertia is not None and authored_inertia_source.startswith("usd:")
+                        else authored_inertia_source if authored_inertia is not None else "unavailable"
+                    ),
                 })
                 common["sources"].update({
                     "mass": authored_mass_source,
@@ -1484,74 +1590,186 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     result["right"] = value
         return result
 
-    def _read_scene_mesh_info(self) -> dict:
-        """S-ENV-001: Read scene geometry info from USD stage.
+    @staticmethod
+    def _atomic_write_json(path, payload) -> None:
+        from safety_risk.io_utils import atomic_write_json
 
-        Returns dict with fixture names, bounding boxes, and prim paths
-        for table, walls, floor, and other static scene elements.
+        atomic_write_json(path, payload)
+
+    def _read_scene_mesh_info(self, exported_stage_path=None) -> dict:
+        """S-ENV-001: Export the complete live USD collision scene.
+
+        Every prim carrying ``UsdPhysics.CollisionAPI`` is exported in stable
+        prim-path order. Small meshes may be embedded for convenience; large
+        meshes use a stable exported USD stage reference plus geometry counts,
+        preventing Sim_Raw_GT from growing by hundreds of megabytes.
         """
-        from pxr import UsdGeom
+        from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
-        result = {}
         stage = self.world.stage
         if stage is None:
-            return result
+            return {}
 
-        # Known scene fixture patterns
-        fixture_keywords = ["table", "wall", "floor", "shelf", "ground", "arena"]
+        exported_stage = None
+        if exported_stage_path is not None:
+            try:
+                exported_stage_path = os.fspath(exported_stage_path)
+                # Export the composed stage's anonymous root layer without
+                # flattening referenced asset meshes into one enormous USDA.
+                if stage.GetRootLayer().Export(exported_stage_path):
+                    exported_stage = os.path.basename(exported_stage_path)
+            except Exception as exc:
+                print(f"[safety_risk] Warning: collision stage export failed: {exc}")
+
+        bbox_cache = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(),
+            [UsdGeom.Tokens.default_, UsdGeom.Tokens.proxy, UsdGeom.Tokens.render],
+            useExtentsHint=True,
+        )
+        xform_cache = UsdGeom.XformCache()
 
         def _valid_bbox(size) -> bool:
             try:
                 values = [float(size[0]), float(size[1]), float(size[2])]
             except Exception:
                 return False
-            return all(math.isfinite(v) and 0.0 < abs(v) < 1e6 for v in values)
+            return all(math.isfinite(v) and 0.0 <= abs(v) < 1e6 for v in values)
 
-        for prim in stage.Traverse():
-            prim_path = str(prim.GetPath())
-            prim_name = prim.GetName().lower()
-            prim_type = prim.GetTypeName()
-            if prim_type == "PhysicsScene":
+        def _rigid_body_owner(prim):
+            current = prim
+            while current and current.IsValid():
+                if current.HasAPI(UsdPhysics.RigidBodyAPI):
+                    return str(current.GetPath())
+                current = current.GetParent()
+            return None
+
+        def _world_point(matrix, point):
+            value = matrix.Transform(Gf.Vec3d(float(point[0]), float(point[1]), float(point[2])))
+            return [float(value[0]), float(value[1]), float(value[2])]
+
+        def _triangulate(counts, indices):
+            triangles = []
+            offset = 0
+            for count in counts:
+                count = int(count)
+                face = [int(v) for v in indices[offset:offset + count]]
+                offset += count
+                if count >= 3:
+                    triangles.extend(
+                        [[face[0], face[i], face[i + 1]] for i in range(1, count - 1)]
+                    )
+            return triangles
+
+        def _json_value(value):
+            if value is None or isinstance(value, (str, bool, int, float)):
+                return value
+            if hasattr(value, "__iter__"):
+                return [_json_value(item) for item in value]
+            return str(value)
+
+        colliders = []
+        for prim in sorted(stage.Traverse(), key=lambda item: str(item.GetPath())):
+            if not prim.HasAPI(UsdPhysics.CollisionAPI):
                 continue
 
-            # Skip task objects, robots, cameras
-            if "/task_0/" in prim_path and any(kw in prim_name for kw in fixture_keywords):
-                try:
-                    bbox_cache = UsdGeom.BBoxCache(0.0, [UsdGeom.Tokens.default_])
-                    bbox = bbox_cache.ComputeWorldBound(prim)
-                    rng = bbox.ComputeAlignedRange()
-                    if rng.GetSize() and _valid_bbox(rng.GetSize()):
-                        size = rng.GetSize()
-                        min_pt = rng.GetMin()
-                        max_pt = rng.GetMax()
-                        result[prim.GetName()] = {
-                            "prim_path": prim_path,
-                            "bounding_box_m": [float(size[0]), float(size[1]), float(size[2])],
-                            "min_m": [float(min_pt[0]), float(min_pt[1]), float(min_pt[2])],
-                            "max_m": [float(max_pt[0]), float(max_pt[1]), float(max_pt[2])],
-                            "type": prim.GetTypeName(),
-                        }
-                except Exception:
-                    pass
+            prim_path = str(prim.GetPath())
+            rigid_body_path = _rigid_body_owner(prim)
+            collision_enabled = UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Get()
+            collider = {
+                "prim_path": prim_path,
+                "name": prim.GetName(),
+                "usd_type": prim.GetTypeName(),
+                "enabled": True if collision_enabled is None else bool(collision_enabled),
+                "rigid_body_prim_path": rigid_body_path,
+                "body_type": "dynamic" if rigid_body_path else "static",
+                "usd_reference": {
+                    "stage_file": exported_stage,
+                    "source_layers": sorted({
+                        spec.layer.identifier
+                        for spec in prim.GetPrimStack()
+                        if spec.layer.identifier
+                        and not spec.layer.identifier.startswith("anon:")
+                    }),
+                    "prim_path": prim_path,
+                },
+            }
 
-            # Also capture arena/scene root prims
-            if "arena" in prim_path.lower() or "scene" in prim_path.lower():
-                if prim_path.count("/") <= 4:  # top-level only
-                    try:
-                        bbox_cache = UsdGeom.BBoxCache(0.0, [UsdGeom.Tokens.default_])
-                        bbox = bbox_cache.ComputeWorldBound(prim)
-                        rng = bbox.ComputeAlignedRange()
-                        if rng.GetSize() and _valid_bbox(rng.GetSize()):
-                            size = rng.GetSize()
-                            result[prim.GetName()] = {
-                                "prim_path": prim_path,
-                                "bounding_box_m": [float(size[0]), float(size[1]), float(size[2])],
-                                "type": prim.GetTypeName(),
-                            }
-                    except Exception:
-                        pass
+            try:
+                rng = bbox_cache.ComputeWorldBound(prim).ComputeAlignedRange()
+                size = rng.GetSize()
+                if _valid_bbox(size):
+                    collider["world_aabb_m"] = {
+                        "min": [float(v) for v in rng.GetMin()],
+                        "max": [float(v) for v in rng.GetMax()],
+                        "size": [float(v) for v in size],
+                    }
+                    # Retain the original flat fields for readers of older
+                    # Sim_Raw_GT files while making the coordinate frame clear.
+                    collider["min_m"] = collider["world_aabb_m"]["min"]
+                    collider["max_m"] = collider["world_aabb_m"]["max"]
+                    collider["bounding_box_m"] = collider["world_aabb_m"]["size"]
+            except Exception as exc:
+                collider["aabb_error"] = str(exc)
 
-        return result
+            world_xform = xform_cache.GetLocalToWorldTransform(prim)
+            collider["local_to_world_matrix"] = [
+                [float(world_xform[row][column]) for column in range(4)]
+                for row in range(4)
+            ]
+
+            if prim.IsA(UsdGeom.Mesh):
+                mesh = UsdGeom.Mesh(prim)
+                points = mesh.GetPointsAttr().Get() or []
+                counts = mesh.GetFaceVertexCountsAttr().Get() or []
+                indices = mesh.GetFaceVertexIndicesAttr().Get() or []
+                vertex_count = len(points)
+                face_count = len(counts)
+                triangle_count = sum(max(0, int(count) - 2) for count in counts)
+                embed_geometry = vertex_count <= 2000 and triangle_count <= 4000
+                geometry = {
+                    "kind": "mesh",
+                    "storage": "embedded" if embed_geometry else "usd_reference",
+                    "vertex_count": vertex_count,
+                    "face_count": face_count,
+                    "triangle_count": triangle_count,
+                }
+                if embed_geometry:
+                    geometry.update({
+                        "vertices_world_m": [
+                            _world_point(world_xform, point) for point in points
+                        ],
+                        "triangles": _triangulate(counts, indices),
+                    })
+                collider["geometry"] = geometry
+            else:
+                geometry = {"kind": "analytic", "usd_type": prim.GetTypeName()}
+                for attr_name in ("size", "radius", "height", "axis", "extent"):
+                    attr = prim.GetAttribute(attr_name)
+                    if attr and attr.HasAuthoredValueOpinion():
+                        geometry[attr_name] = _json_value(attr.Get())
+                collider["geometry"] = geometry
+
+            colliders.append(collider)
+
+        return {
+            "metadata": {
+                "coordinate_frame": "world",
+                "position_unit": "m",
+                "geometry_basis": "USD prims with UsdPhysics.CollisionAPI",
+                "ordering": "lexicographic_by_prim_path",
+                "collider_count": len(colliders),
+                "mesh_collider_count": sum(
+                    item["geometry"]["kind"] == "mesh" for item in colliders
+                ),
+                "static_collider_count": sum(item["body_type"] == "static" for item in colliders),
+                "dynamic_collider_count": sum(item["body_type"] == "dynamic" for item in colliders),
+                "embedded_mesh_vertex_limit": 2000,
+                "embedded_mesh_triangle_limit": 4000,
+                "exported_stage_file": exported_stage,
+            },
+            "collider_prim_paths": [item["prim_path"] for item in colliders],
+            "colliders": colliders,
+        }
 
     def _read_robot_torque_limits(self) -> dict:
         """Read arm-joint effort limits from the live PhysX articulation.
@@ -1595,6 +1813,37 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     "source": "PhysX ArticulationView.get_max_efforts",
                 }
         return result
+
+    def _read_arm_joint_layout(self) -> Optional[dict]:
+        """Read the live left-then-right arm DOF axis used by Sim_Raw_GT."""
+        for robot in getattr(self.task, "robots", {}).values():
+            left_indices = [int(v) for v in (getattr(robot, "left_joint_indices", []) or [])]
+            right_indices = [int(v) for v in (getattr(robot, "right_joint_indices", []) or [])]
+            indices = left_indices + right_indices
+            if not indices:
+                continue
+
+            dof_names = list(getattr(robot, "dof_names", []) or [])
+            names = [
+                str(dof_names[index]) if 0 <= index < len(dof_names)
+                else f"dof_{index}"
+                for index in indices
+            ]
+
+            physics_dt_s = 0.03333333333333333
+            collector = getattr(self, "_physx_collector", None)
+            if collector is not None:
+                runtime_dt = getattr(collector, "_physics_dt_s", None)
+                if isinstance(runtime_dt, (int, float)) and math.isfinite(runtime_dt) and runtime_dt > 0.0:
+                    physics_dt_s = float(runtime_dt)
+
+            return {
+                "arm_dof_indices": indices,
+                "arm_dof_names": names,
+                "left_dof_count": len(left_indices),
+                "physics_dt_s": physics_dt_s,
+            }
+        return None
 
     def _read_placement_target_region(self) -> Optional[dict]:
         """Record the same world AABB that the place skill uses for planning."""
@@ -1739,15 +1988,178 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             result["stable_final_gt"] = all(item["stable"] for item in stability_by_object.values())
         return result
 
-    def _compute_physical_grasp_drop_metrics(self, raw_gt: dict) -> dict:
-        """Detect confirmed grasps and unintended drops from physical evidence.
+    @staticmethod
+    def _compact_sim_raw_gt(raw_gt: dict) -> None:
+        """Remove duplicated payloads while preserving the public GT signals.
 
-        A grasp requires at least three consecutive target/robot contact frames
-        while the gripper is below its configured open width.  A drop requires
-        loss of that contact while the gripper remains closed, followed by at
-        least 5 cm of downward motion before re-contact.  Immediate measured
-        opening identifies commanded release; opening only after the object
-        has already fallen does not truncate the physical drop height.
+        Contact points are stored once in ``collision_location_gt`` and aligned
+        to force/impulse samples by ``contact_id``. Repeated full planner paths
+        are interned into a unique plan table. Legacy split right-arm channels
+        and duplicated instruction metadata are removed after being merged.
+        """
+        metadata = raw_gt.get("metadata")
+        if isinstance(metadata, dict):
+            metadata.pop("language_instruction", None)
+            metadata.pop("detailed_language_instruction", None)
+
+        robot = raw_gt.get("robot_state")
+        if isinstance(robot, dict):
+            left = robot.get("ee_pose_gt")
+            right = robot.get("ee_pose_right_gt")
+            already_merged = (
+                isinstance(left, list)
+                and (not left or isinstance(left[0], dict))
+                and not isinstance(right, list)
+            )
+            if not already_merged and (
+                isinstance(left, list) or isinstance(right, list)
+            ):
+                left_values = left if isinstance(left, list) else []
+                right_values = right if isinstance(right, list) else []
+                frame_count = max(len(left_values), len(right_values))
+                robot["ee_pose_gt"] = [
+                    {
+                        "left": left_values[index] if index < len(left_values) else None,
+                        "right": right_values[index] if index < len(right_values) else None,
+                    }
+                    for index in range(frame_count)
+                ]
+            robot.pop("ee_pose_right_gt", None)
+            # ``normalize_arm_joint_state`` has already merged left/right into
+            # the canonical 12-DOF ``joint_position_q_gt`` channel.
+            robot.pop("joint_position_q_right_gt", None)
+
+        collision = raw_gt.get("collision_gt")
+        if isinstance(collision, dict):
+            locations = collision.get("collision_location_gt")
+            forces = collision.get("contact_force_gt")
+            impulses = collision.get("contact_impulse_gt")
+            if all(isinstance(series, list) for series in (locations, forces, impulses)):
+                frame_count = min(len(locations), len(forces), len(impulses))
+                next_contact_id = 0
+                for frame_index in range(frame_count):
+                    location_entries = locations[frame_index] or []
+                    force_entries = forces[frame_index] or []
+                    impulse_entries = impulses[frame_index] or []
+                    entry_count = min(
+                        len(location_entries), len(force_entries), len(impulse_entries)
+                    )
+                    for entry_index in range(entry_count):
+                        location = location_entries[entry_index]
+                        force = force_entries[entry_index]
+                        impulse = impulse_entries[entry_index]
+                        if not all(
+                            isinstance(value, dict)
+                            for value in (location, force, impulse)
+                        ):
+                            continue
+                        if (
+                            "contact_points_m" not in location
+                            and "contact_points" not in force
+                            and "contact_points" not in impulse
+                            and all(
+                                isinstance(value.get("contacts"), list)
+                                for value in (location, force, impulse)
+                            )
+                        ):
+                            continue
+                        location_points = location.pop("contact_points_m", []) or []
+                        force_points = force.pop("contact_points", []) or []
+                        impulse_points = impulse.pop("contact_points", []) or []
+                        point_count = min(
+                            len(location_points), len(force_points), len(impulse_points)
+                        )
+                        compact_locations = []
+                        compact_forces = []
+                        compact_impulses = []
+                        for point_index in range(point_count):
+                            contact_id = next_contact_id
+                            next_contact_id += 1
+                            force_point = force_points[point_index]
+                            impulse_point = impulse_points[point_index]
+                            location_record = {
+                                "contact_id": contact_id,
+                                "position_m": location_points[point_index],
+                            }
+                            normal = None
+                            if isinstance(force_point, dict):
+                                normal = force_point.get(
+                                    "normal_from_bodyB_to_bodyA"
+                                )
+                            if normal is None and isinstance(impulse_point, dict):
+                                normal = impulse_point.get(
+                                    "normal_from_bodyB_to_bodyA"
+                                )
+                            if normal is not None:
+                                location_record[
+                                    "normal_from_bodyB_to_bodyA"
+                                ] = normal
+                            compact_locations.append(location_record)
+                            compact_forces.append({
+                                "contact_id": contact_id,
+                                "force_vector_n": (
+                                    force_point.get("force_vector_n")
+                                    if isinstance(force_point, dict) else None
+                                ),
+                                "force_magnitude_n": (
+                                    force_point.get("force_magnitude_n")
+                                    if isinstance(force_point, dict) else None
+                                ),
+                            })
+                            compact_impulses.append({
+                                "contact_id": contact_id,
+                                "impulse_vector_ns": (
+                                    impulse_point.get("impulse_vector_ns")
+                                    if isinstance(impulse_point, dict) else None
+                                ),
+                                "impulse_magnitude_ns": (
+                                    impulse_point.get("impulse_magnitude_ns")
+                                    if isinstance(impulse_point, dict) else None
+                                ),
+                            })
+                        location["contacts"] = compact_locations
+                        force["contacts"] = compact_forces
+                        impulse["contacts"] = compact_impulses
+
+        planner = raw_gt.get("planner_log")
+        if isinstance(planner, dict):
+            trajectories = planner.get("planned_trajectory")
+            if isinstance(trajectories, list):
+                unique_plans = {}
+                events = []
+                for capture_index, plan in enumerate(trajectories):
+                    canonical = json.dumps(
+                        plan, sort_keys=True, separators=(",", ":")
+                    )
+                    plan_id = "plan_" + hashlib.sha256(
+                        canonical.encode("utf-8")
+                    ).hexdigest()[:16]
+                    if plan_id not in unique_plans:
+                        stored = dict(plan) if isinstance(plan, dict) else {
+                            "trajectory": plan
+                        }
+                        stored["plan_id"] = plan_id
+                        unique_plans[plan_id] = stored
+                    events.append({
+                        "capture_index": capture_index,
+                        "plan_id": plan_id,
+                    })
+                planner["planned_trajectory"] = {
+                    "plans": list(unique_plans.values()),
+                    "events": events,
+                    "num_unique_plans": len(unique_plans),
+                    "num_capture_events": len(events),
+                }
+
+    def _compute_physical_grasp_drop_metrics(self, raw_gt: dict) -> dict:
+        """Detect confirmed grasps and subsequent physical drop events.
+
+        A grasp is confirmed either by three consecutive closed contact frames
+        or by a shorter closed contact that physically lifts the object. After
+        confirmation, any contact loss followed by at least 5 cm downward
+        motion is a drop, whether the gripper stayed closed or intentionally
+        opened. ``drop_height_gt`` ends at the first object-environment impact,
+        not at the trajectory's later minimum.
         """
         pairs = raw_gt.get("collision_gt", {}).get("collision_pair_gt")
         poses = raw_gt.get("object_state", {}).get("object_pose_gt") or {}
@@ -1775,45 +2187,87 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 value = value.tolist()
             if isinstance(value, (list, tuple)):
                 value = value[0] if value else None
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    stripped = stripped[1:-1].strip()
+                value = stripped
             try:
                 return float(value)
             except (TypeError, ValueError):
                 return None
 
-        def _contact(frame, target):
+        def _contact(frame, target, arm):
             entries = frame if isinstance(frame, list) else [frame]
             suffix = "/" + target.strip("/")
             for pair in entries:
                 if not isinstance(pair, dict):
                     continue
                 a, b = str(pair.get("bodyA", "")), str(pair.get("bodyB", ""))
-                if (("robot/" in a.lower() and b.endswith(suffix))
-                        or ("robot/" in b.lower() and a.endswith(suffix))):
+                if ((a.startswith("robot/") and b.endswith(suffix))
+                        or (b.startswith("robot/") and a.endswith(suffix))):
                     return True
             return False
 
+        def _environment_impact(frame, target):
+            entries = frame if isinstance(frame, list) else [frame]
+            object_label = f"object/{target.strip('/')}"
+            for pair in entries:
+                if not isinstance(pair, dict):
+                    continue
+                a, b = str(pair.get("bodyA", "")), str(pair.get("bodyB", ""))
+                if ((a == object_label and b.startswith("environment/"))
+                        or (b == object_label and a.startswith("environment/"))):
+                    return True
+            return False
+
+        def _escaped(position):
+            """Return True once a body has left the usable simulation volume."""
+            if not isinstance(position, (list, tuple)) or len(position) < 3:
+                return False
+            try:
+                x, y, z = (float(position[0]), float(position[1]), float(position[2]))
+            except (TypeError, ValueError):
+                return True
+            return (
+                not all(math.isfinite(value) for value in (x, y, z))
+                or abs(x) > 10.0
+                or abs(y) > 10.0
+                or z < -1.0
+                or z > 10.0
+            )
+
         evidence = {}
-        any_drop = False
-        drop_heights = []
-        all_confirmed = True
+        event_by_object = {}
+        height_by_object = {}
         for target in target_ids:
             arm = "right" if "right" in target.lower() else "left"
             widths = gripper.get(f"gripper_width_{arm}")
             translations = (poses.get(target) or {}).get("translation_per_step")
             max_width = max_widths.get(arm)
             if not isinstance(widths, list) or not isinstance(translations, list):
-                all_confirmed = False
+                event_by_object[target] = None
+                height_by_object[target] = {
+                    "arm": arm,
+                    "drop_height_m": None,
+                    "status": "impact_not_observed",
+                }
                 continue
             try:
                 max_width = float(max_width)
             except (TypeError, ValueError):
-                all_confirmed = False
+                event_by_object[target] = None
+                height_by_object[target] = {
+                    "arm": arm,
+                    "drop_height_m": None,
+                    "status": "impact_not_observed",
+                }
                 continue
             close_threshold = max_width - max(0.005, 0.05 * max_width)
 
             width_series = [_scalar(_sample(widths, i)) for i in range(timeline_length)]
             position_series = [_sample(translations, i) for i in range(timeline_length)]
-            contacts = [_contact(frame, target) for frame in pairs]
+            contacts = [_contact(frame, target, arm) for frame in pairs]
             grasp_frames = [
                 contacts[i] and width_series[i] is not None and width_series[i] < close_threshold
                 for i in range(timeline_length)
@@ -1823,65 +2277,185 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             for active in grasp_frames:
                 run = run + 1 if active else 0
                 longest_run = max(longest_run, run)
-            confirmed = longest_run >= 3
-            all_confirmed = all_confirmed and confirmed
+            grasp_indices = [i for i, active in enumerate(grasp_frames) if active]
+            lifted_during_contact = False
+            if grasp_indices:
+                contact_z = [
+                    float(position_series[i][2])
+                    for i in grasp_indices
+                    if isinstance(position_series[i], (list, tuple))
+                    and len(position_series[i]) >= 3
+                ]
+                lifted_during_contact = (
+                    len(contact_z) >= 2 and max(contact_z) - contact_z[0] >= 0.02
+                )
+            confirmed = longest_run >= 3 or (
+                longest_run >= 1 and lifted_during_contact
+            )
             object_drop = False
-            object_drop_height = 0.0
+            object_drop_height = None
+            drop_start_step = None
+            impact_step = None
+            impact_position_m = None
+            escape_step = None
+            termination_status = "no_drop"
+            release_mode = None
 
             if confirmed:
                 for index in range(1, timeline_length - 3):
                     if not grasp_frames[index - 1] or contacts[index]:
                         continue
                     current_width = width_series[index]
-                    if current_width is None or current_width >= close_threshold:
-                        continue
                     future_widths = [w for w in width_series[index:index + 4] if w is not None]
                     opening = any(
                         future_widths[j] - future_widths[0] > 0.002
                         for j in range(1, len(future_widths))
                     )
-                    if opening:
-                        continue
+                    released_open = (
+                        current_width is not None
+                        and current_width >= close_threshold
+                    )
+                    candidate_release_mode = (
+                        "gripper_opened"
+                        if opening or released_open
+                        else "contact_lost_while_closed"
+                    )
                     start_position = position_series[index - 1]
                     if not isinstance(start_position, (list, tuple)) or len(start_position) < 3:
                         continue
                     z_start = float(start_position[2])
                     z_min = z_start
+                    first_impact = None
+                    first_escape = None
                     for probe in range(index, timeline_length):
-                        if contacts[probe]:
-                            break
                         position = position_series[probe]
                         if isinstance(position, (list, tuple)) and len(position) >= 3:
                             z_min = min(z_min, float(position[2]))
+                            fall_at_probe = max(0.0, z_start - float(position[2]))
+                            if first_escape is None and _escaped(position):
+                                first_escape = (
+                                    probe,
+                                    [float(value) for value in position[:3]],
+                                    fall_at_probe,
+                                )
+                                break
+                            if (
+                                first_impact is None
+                                and fall_at_probe >= 0.05
+                                and _environment_impact(pairs[probe], target)
+                            ):
+                                first_impact = (
+                                    probe,
+                                    [float(value) for value in position[:3]],
+                                    fall_at_probe,
+                                )
+                                break
+                        if contacts[probe] and probe > index:
+                            break
                     fall = max(0.0, z_start - z_min)
                     if fall >= 0.05:
                         object_drop = True
-                        object_drop_height = max(object_drop_height, fall)
+                        drop_start_step = index
+                        release_mode = candidate_release_mode
+                        if first_escape is not None:
+                            escape_step, _, object_drop_height = first_escape
+                            termination_status = "escaped_simulation"
+                        elif first_impact is not None:
+                            impact_step, impact_position_m, object_drop_height = first_impact
+                            termination_status = "impact_detected"
+                        else:
+                            object_drop_height = fall
+                            termination_status = "impact_not_observed"
+                        break
 
-            any_drop = any_drop or object_drop
-            if object_drop:
-                drop_heights.append(object_drop_height)
+            # Detect catastrophic simulation escape even when the ordinary
+            # contact-loss state machine cannot observe a subsequent impact.
+            if not object_drop:
+                first_escape_index = next(
+                    (
+                        index for index, position in enumerate(position_series)
+                        if _escaped(position)
+                    ),
+                    None,
+                )
+                if first_escape_index is not None:
+                    prior_grasp = [
+                        index for index in range(first_escape_index)
+                        if grasp_frames[index]
+                    ]
+                    reference_index = prior_grasp[-1] if prior_grasp else max(
+                        0, first_escape_index - 1
+                    )
+                    reference = position_series[reference_index]
+                    escaped_position = position_series[first_escape_index]
+                    if (
+                        isinstance(reference, (list, tuple))
+                        and len(reference) >= 3
+                        and isinstance(escaped_position, (list, tuple))
+                        and len(escaped_position) >= 3
+                    ):
+                        object_drop_height = max(
+                            0.0,
+                            float(reference[2]) - float(escaped_position[2]),
+                        )
+                    object_drop = True
+                    drop_start_step = reference_index
+                    escape_step = first_escape_index
+                    termination_status = "escaped_simulation"
+                    release_mode = "simulation_escape_without_observed_release"
+
+            event_by_object[target] = object_drop if confirmed or object_drop else None
+            height_by_object[target] = {
+                "arm": arm,
+                "drop_height_m": object_drop_height,
+                "status": termination_status,
+                "release_mode": release_mode,
+                "drop_start_step": drop_start_step,
+                "impact_step": impact_step,
+                "escape_step": escape_step,
+            }
             evidence[target] = {
+                "arm": arm,
                 "grasp_confirmed": confirmed,
                 "longest_closed_contact_run_frames": longest_run,
+                "lifted_during_short_contact": lifted_during_contact,
                 "unexpected_drop_detected": object_drop,
-                "drop_height_m": object_drop_height if object_drop else None,
+                "drop_start_step": drop_start_step,
+                "impact_step": impact_step,
+                "impact_position_m": impact_position_m,
+                "escape_step": escape_step,
+                "termination_status": termination_status,
+                "release_mode": release_mode,
+                "drop_height_m": object_drop_height,
+                "drop_height_definition": (
+                    "vertical distance from last grasped pose to first "
+                    "object-environment impact or first out-of-bounds sample"
+                ),
                 "closed_width_threshold_m": close_threshold,
                 "source": "PhysX robot-object contact pairs + configured gripper width + LMDB object pose",
             }
 
         raw_gt.setdefault("gripper_gt", {})["grasp_evidence_by_object_gt"] = evidence
-        result = {
+        return {
             "physical_drop_evidence": evidence,
-            "drop_height_gt": max(drop_heights) if drop_heights else None,
+            "drop_event_gt": event_by_object,
+            "drop_height_gt": height_by_object,
+            "drop_event_episode_gt": (
+                True if any(value is True for value in event_by_object.values())
+                else False if event_by_object and all(
+                    value is False for value in event_by_object.values()
+                )
+                else None
+            ),
+            "drop_height_episode_max_m": max(
+                (
+                    record["drop_height_m"]
+                    for record in height_by_object.values()
+                    if record.get("drop_height_m") is not None
+                ),
+                default=None,
+            ),
         }
-        if any_drop:
-            result["drop_event_gt"] = True
-        elif all_confirmed and len(evidence) == len(target_ids):
-            result["drop_event_gt"] = False
-        else:
-            result["drop_event_gt"] = None
-        return result
 
     def _compute_support_polygon_margin(self) -> Optional[float]:
         """S-OUT-003: Compute support polygon margin for the pick object.
@@ -1979,12 +2553,14 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
         def _sensor_kind(prefix: str) -> Optional[str]:
             lower = prefix.lower()
+            if "instance_seg" in lower:
+                return "instance_seg"
             if "rgb" in lower:
                 return "rgb"
             if "depth" in lower:
                 return "depth"
-            if "seg" in lower:
-                return "seg"
+            if ".seg." in lower:
+                return "semantic_seg"
             return None
 
         def _camera_name(prefix: str, kind: str) -> str:
@@ -1994,7 +2570,9 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             parts = prefix.split(".")
             return parts[-1] if parts else "default"
 
-        sensor_prefixes = {"rgb": {}, "depth": {}, "seg": {}}
+        sensor_prefixes = {
+            "rgb": {}, "depth": {}, "semantic_seg": {}, "instance_seg": {}
+        }
         with env.begin() as txn:
             cursor = txn.cursor()
             for key, _ in cursor:
@@ -2033,23 +2611,23 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                         for camera, prefix in sorted(sensor_prefixes["depth"].items())
                     },
                 }
-            if sensor_prefixes["seg"]:
+            if sensor_prefixes["semantic_seg"]:
                 result["segmentation_mask_gt"] = {
                     "storage": "lmdb",
                     "lmdb_path": os.path.join(episode_dir, "lmdb"),
                     "cameras": {
                         camera: {"key_prefix": prefix, "num_frames": _count_frames(txn, prefix)}
-                        for camera, prefix in sorted(sensor_prefixes["seg"].items())
+                        for camera, prefix in sorted(sensor_prefixes["semantic_seg"].items())
                     },
                 }
 
-        seg_prefix = next(iter(sensor_prefixes["seg"].values()), None)
+        seg_prefix = next(iter(sensor_prefixes["instance_seg"].values()), None)
         if seg_prefix is None:
-            print(f"[safety_risk] sensor: no seg keys found in LMDB")
+            print("[safety_risk] sensor: no instance_seg keys found in LMDB")
             env.close()
             return result
 
-        print(f"[safety_risk] sensor: found seg prefix '{seg_prefix}'")
+        print(f"[safety_risk] sensor: found instance seg prefix '{seg_prefix}'")
 
         def _decode_seg(raw_value):
             try:
@@ -2064,12 +2642,29 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 return None
             return None
 
-        # Read all seg frames from LMDB.
+        camera_name = next(iter(sensor_prefixes["instance_seg"]), "default")
+        label_key = f"labels.instance_seg.{camera_name}"
+        bbox_key = f"labels.bbox2d_tight.{camera_name}"
+        bbox_labels_key = f"labels.bbox2d_tight_id2labels.{camera_name}"
+
+        def _load_pickle(txn, key):
+            value = txn.get(key.encode("utf-8"))
+            if value is None:
+                return None
+            try:
+                return pickle.loads(value)
+            except Exception:
+                return None
+
+        # Read all pixel-level instance frames from LMDB.
         instance_ids = []
         bboxes = []
         vis_ratios = []
 
         with env.begin() as txn:
+            instance_labels = _load_pickle(txn, label_key)
+            bbox_series = _load_pickle(txn, bbox_key)
+            bbox_label_series = _load_pickle(txn, bbox_labels_key)
             frame_idx = 0
             while True:
                 key = f"{seg_prefix}/{str(frame_idx).zfill(4)}"
@@ -2080,7 +2675,12 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 seg_img = _decode_seg(raw)
 
                 if seg_img is None or seg_img.size == 0:
-                    instance_ids.append({"frame": frame_idx, "visible_instance_ids": None})
+                    instance_ids.append({
+                        "frame": frame_idx,
+                        "lmdb_key": key,
+                        "visible_instance_ids": None,
+                        "decode_status": "failed",
+                    })
                     bboxes.append({"frame": frame_idx, "instances": None})
                     vis_ratios.append({"frame": frame_idx, "instances": None})
                     frame_idx += 1
@@ -2091,14 +2691,29 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
                 total_px = int(seg_img.shape[0] * seg_img.shape[1])
                 unique_ids = sorted(int(x) for x in np.unique(seg_img) if int(x) != 0)
+                frame_instance_labels = (
+                    instance_labels[frame_idx]
+                    if isinstance(instance_labels, list)
+                    and frame_idx < len(instance_labels)
+                    else instance_labels if isinstance(instance_labels, dict) else None
+                )
                 instance_ids.append({
                     "frame": frame_idx,
+                    "lmdb_key": key,
+                    "storage": "lmdb",
+                    "encoding": (
+                        "pickle_numpy_uint32"
+                        if seg_img.dtype == np.uint32 else "uint16_png"
+                    ),
+                    "shape": [int(value) for value in seg_img.shape],
+                    "dtype": str(seg_img.dtype),
                     "visible_instance_ids": unique_ids,
                     "background_id": 0,
+                    "id_to_labels": frame_instance_labels,
                 })
 
                 frame_bboxes = {}
-                frame_ratios = {}
+                frame_ratios = None
                 for inst_id in unique_ids:
                     coords = np.where(seg_img == inst_id)
                     if len(coords[0]) == 0:
@@ -2107,10 +2722,57 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     x_min, x_max = int(coords[1].min()), int(coords[1].max())
                     key_id = str(inst_id)
                     frame_bboxes[key_id] = [x_min, y_min, x_max, y_max]
-                    frame_ratios[key_id] = round(len(coords[0]) / total_px, 6)
 
                 bboxes.append({"frame": frame_idx, "instances": frame_bboxes})
-                vis_ratios.append({"frame": frame_idx, "instances": frame_ratios})
+
+                bbox_frame = (
+                    bbox_series[frame_idx]
+                    if isinstance(bbox_series, list) and frame_idx < len(bbox_series)
+                    else None
+                )
+                bbox_labels = (
+                    bbox_label_series[frame_idx]
+                    if isinstance(bbox_label_series, list)
+                    and frame_idx < len(bbox_label_series)
+                    else bbox_label_series if isinstance(bbox_label_series, dict) else None
+                )
+                ratios = {}
+                dtype_names = getattr(getattr(bbox_frame, "dtype", None), "names", None)
+                if dtype_names and "occlusionRatio" in dtype_names:
+                    for row in bbox_frame:
+                        semantic_id = int(row["semanticId"]) if "semanticId" in dtype_names else len(ratios)
+                        occlusion = float(row["occlusionRatio"])
+                        label = (
+                            bbox_labels.get(str(semantic_id))
+                            if isinstance(bbox_labels, dict) else None
+                        )
+                        class_name = (
+                            str(label.get("class"))
+                            if isinstance(label, dict) and label.get("class") is not None
+                            else None
+                        )
+                        instance_id = None
+                        if class_name and isinstance(frame_instance_labels, dict):
+                            for candidate_id, candidate_label in frame_instance_labels.items():
+                                if class_name in str(candidate_label):
+                                    instance_id = int(candidate_id)
+                                    break
+                        ratio_key = str(instance_id) if instance_id is not None else f"semantic:{semantic_id}"
+                        ratios[ratio_key] = {
+                            "instance_id": instance_id,
+                            "bbox_semantic_id": semantic_id,
+                            "visibility_ratio": max(0.0, min(1.0, 1.0 - occlusion)),
+                            "occlusion_ratio": max(0.0, min(1.0, occlusion)),
+                            "label": label,
+                        }
+                vis_ratios.append({
+                    "frame": frame_idx,
+                    "instances": ratios if ratios else None,
+                    "method": (
+                        "1 - Isaac Sim bounding_box_2d_tight.occlusionRatio"
+                        if ratios else "unavailable"
+                    ),
+                })
 
                 frame_idx += 1
 

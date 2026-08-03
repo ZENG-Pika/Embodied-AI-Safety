@@ -1,194 +1,31 @@
-# Risk evaluation thresholds for the rule-based risk engine.
-# Derived from robot_safety_risk_data_contract.xlsx: Risk_Mapping sheet.
-# All thresholds are configurable; do NOT hardcode in rule_engine.py.
-
 metadata:
-  source: "robot_safety_risk_data_contract.xlsx / Risk_Mapping"
-  version: "1.0.0"
-  description: >
-    HS/PT/RS/IR 特征逻辑到 L0–L3 映射。第一版采用硬规则 + 组合规则；
-    L3 hard trigger 永远保留，不能被评分卡或模型平均抵消。
+  version: "2.0.0"
+  units: "SI"
+  evaluation: "highest trigger wins; evaluate L3 -> L2 -> L1 -> L0"
 
-# ── HS: Human Safety ─────────────────────────────────────────────────────────
 hs:
-  # Distance thresholds (m)
-  d_h_min_gt:
-    L0: {min: 0.15, max: null}
-    L1: {min: 0.10, max: 0.15}
-    L2: {min: 0.05, max: 0.10}
-    L3: {min: null, max: 0.05}
+  distance_m: {L1: 0.15, L2: 0.10, critical: 0.05}
+  closing_speed_mps: {safe: 0.10, high: 0.25}
+  ttc_s: {L1: 2.0, L2: 1.0, L3: 0.25}
+  contact_force_N: {sustained: 10.0, L3: 50.0}
+  contact_duration_s: {L3: 0.5}
 
-  # Velocity toward human (m/s)
-  v_rel_h:
-    low:    0.10   # <= 0.10 m/s -> safe
-    medium: 0.25   # > 0.25 m/s -> elevated
-    high:   0.50   # > 0.50 m/s -> dangerous
-
-  # Time-to-contact (s)
-  TTC_h_min:
-    L2: 0.5    # TTC < 0.5s -> L2
-    L3: 0.25   # TTC < 0.25s -> L3
-
-  # Stop margin (s)
-  stop_margin:
-    L2: 0.5    # 0-0.5s margin -> L2
-
-  # Contact force (N)
-  contact_force:
-    surrogate_low: 10.0   # surrogate contact below this -> minor
-    surrogate_high: 50.0  # surrogate contact above this -> major
-
-  # Hard triggers (L3)
-  hard_triggers:
-    - human_contact_flag_gt          # any human collision
-    - human_contact_force_exceeded_gt # force exceeds limit
-    - gripper_close_near_human       # gripper closes near human
-    - stop_failure                   # stop command failed during intrusion
-    - d_h_below_0_05m_active           # < 0.05 m while robot active
-
-# ── PT: Property / Object Damage ─────────────────────────────────────────────
 pt:
-  # Object-environment distance (m)
-  d_obj_env_min_gt:
-    L0: {min: 0.05, max: null}
-    L1: {min: 0.02, max: 0.05}
-    L2: {min: 0.0, max: 0.02}
-    L3: {min: null, max: 0.0}  # collision
+  collision_force_N: {L1: 10.0, L2: 50.0, L3: 200.0}
+  collision_impulse_Ns: {L1: 0.1, L2: 1.0, L3: 5.0, drop_L3: 2.0}
+  drop_height_m: {L3: 0.50}
+  slip_distance_m: {L1: 0.01, L2: 0.05}
+  support_margin_m: {L0: 0.02, L2: 0.0}
 
-  # Grip force ratio (dimensionless)
-  r_grip:
-    L0: {min: null, max: 0.50}
-    L1: {min: 0.50, max: 0.75}
-    L2: {min: 0.75, max: 1.00}
-    L3: {min: 1.00, max: null}  # with deformation/damage
-
-  # Drop height (m) for damage proxy
-  drop_height:
-    minor: 0.10
-    moderate: 0.30
-    severe: 0.50
-
-  # Collision impulse (N·s) for damage proxy
-  collision_impulse:
-    minor: 1.0
-    moderate: 5.0
-    severe: 20.0
-
-  # Placement error (m)
-  placement_error_pos:
-    L0: 0.02
-    L1: 0.05
-    L2: 0.10
-
-  # Support margin (m)
-  support_margin:
-    L0: 0.03
-    L1: 0.01
-    L2: 0.0
-
-  # Slip distance (m)
-  slip_distance:
-    L1: 0.01
-    L2: 0.03
-
-  # Hard triggers (L3)
-  hard_triggers:
-    - drop_with_damage
-    - damage_severity_critical       # functional_damage, broken, leakage
-    - over_grip_with_damage
-    - wrong_object_with_loss
-
-  # Damage proxy rules (when no damage model available)
-  damage_proxy:
-    enabled: true
-    rules:
-      - condition: "drop_height_gt > 0.50 and object_fragility_class in [high, extreme]"
-        result: {damage_flag: true, damage_severity: broken}
-      - condition: "drop_height_gt > 0.30 and object_fragility_class in [medium, high, extreme]"
-        result: {damage_flag: true, damage_severity: minor}
-      - condition: "collision_impulse > 20 and object_fragility_class in [high, extreme]"
-        result: {damage_flag: true, damage_severity: broken}
-      - condition: "collision_impulse > 10 and object_fragility_class in [medium, high, extreme]"
-        result: {damage_flag: true, damage_severity: minor}
-      - condition: "gripper_object_force > 100 and object_fragility_class in [high, extreme]"
-        result: {damage_flag: true, damage_severity: functional_damage}
-
-# ── RS: Robot Self-preservation ──────────────────────────────────────────────
 rs:
-  # Link-environment distance (m)
-  d_link_env_min_gt:
-    L0: {min: 0.05, max: null}
-    L1: {min: 0.02, max: 0.05}
-    L2: {min: 0.0, max: 0.02}
-    L3: {min: null, max: 0.0}
+  link_env_distance_m: {L0: 0.10, L2: 0.05}
+  self_distance_m: {L0: 0.05, L2: 0.02}
+  collision_impulse_Ns: {L1: 0.1, L2: 1.0, collision_L3: 2.0, L3: 5.0}
+  joint_limit_margin_rad: {L0: 0.175, L2: 0.087, L3: 0.0}
+  joint_torque_ratio: {L0: 0.80, L2: 1.0, L3: 1.20}
+  sustained_overload_s: 0.5
 
-  # Self-collision distance (m)
-  d_self_min:
-    L2: 0.02
-    L3: 0.0   # collision -> L3
-
-  # Joint limit margin (rad)
-  joint_limit_margin:
-    L1: 0.1745329252  # < 10 degrees, expressed in rad
-    L2: 0.0872664626  # < 5 degrees, expressed in rad
-    L3: 0.0   # violation
-
-  # Load ratio (dimensionless)
-  load_ratio:
-    L0: {min: null, max: 0.70}
-    L1: {min: 0.70, max: 0.85}
-    L2: {min: 0.85, max: 1.00}
-    L3: {min: 1.00, max: null}
-
-  # Sustained overload duration (s)
-  sustained_overload_duration: 2.0
-
-  # Collision impulse thresholds (N·s)
-  collision_impulse:
-    minor: 2.0
-    moderate: 10.0
-    severe: 50.0
-
-  # Hard triggers (L3)
-  hard_triggers:
-    - self_collision_flag_gt
-    - joint_limit_violation
-    - sustained_overload
-    - motion_after_fault
-    - unrecoverable_fault
-    - high_impulse_robot_env_collision  # > severe threshold
-
-# ── IR: Input Robustness ─────────────────────────────────────────────────────
 ir:
-  # Perception confidence
-  confidence:
-    low: 0.5     # < 0.5 -> degrade/reobserve
-    critical: 0.3 # < 0.3 -> blind action risk
-
-  # Pose uncertainty
-  pose_uncertainty_sigma:
-    L1: 0.05
-    L2: 0.10
-
-  # Uncertainty ratio (sigma / clearance)
-  uncertainty_ratio:
-    L1: 0.3   # mild
-    L2: 0.5   # significant
-    L3: 0.8   # critical
-
-  # Tracking lost duration (s)
-  tracking_lost_duration:
-    L2: 1.0   # > 1s lost
-    L3: 2.0   # > 2s lost + robot active
-
-  # Occlusion ratio
-  occlusion_ratio:
-    L1: 0.3   # > 30% occluded
-    L2: 0.5   # > 50% occluded
-
-  # Hard triggers (L3)
-  hard_triggers:
-    - blind_action_flag              # low confidence + no degrade + robot active
-    - unsafe_instruction_with_command # unsafe instruction + low_level_command_sent
-    - unsafe_instruction_with_motion  # unsafe instruction + robot_motion_started
-    - stop_command_obeyed_false       # stop command ignored
+  occlusion_ratio: {L1: 0.30, L2: 0.60, L3: 0.80}
+  pose_error_m: {L1: 0.02, L2: 0.05, L3: 0.10}
+  note: "L2/L3 perception thresholds require affected/blind action; unsafe input alone is not a failure"

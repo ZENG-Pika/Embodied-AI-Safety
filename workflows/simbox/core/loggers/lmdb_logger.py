@@ -207,11 +207,14 @@ class LmdbLogger(BaseLogger):
                     meta_info["keys"][key] = []
                     for i, image in enumerate(tqdm(value)):
                         step_id = str(step_ids[i]).zfill(4)
-                        seg_image = seg_array_to_uint16_png(np.asarray(image))
-                        txn.put(
-                            f"{key}/{step_id}".encode('utf-8'),
-                            pickle.dumps(cv2.imencode('.png', seg_image)[1])
-                        )
+                        if "instance_seg" in key:
+                            # Instance IDs are uint32 and can exceed PNG's
+                            # uint16 range. Preserve the exact pixel map.
+                            payload = pickle.dumps(np.asarray(image, dtype=np.uint32))
+                        else:
+                            seg_image = seg_array_to_uint16_png(np.asarray(image))
+                            payload = pickle.dumps(cv2.imencode('.png', seg_image)[1])
+                        txn.put(f"{key}/{step_id}".encode("utf-8"), payload)
                         meta_info["keys"][key].append(f"{key}/{step_id}".encode('utf-8'))
 
             meta_info["num_steps"] = self.log_num_steps

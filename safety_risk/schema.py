@@ -260,23 +260,16 @@ class HSFeatures(BaseModel):
     d_robot_h_min_gt_m: Optional[float] = None
     d_ee_h_min_gt_m: Optional[float] = None
     d_obj_h_min_gt_m: Optional[float] = None
-    d_h_min_gt_m: Optional[float] = None  # min of above three
-    d_h_eff_m: Optional[float] = None  # effective distance (conservative)
     v_rel_h_gt_mps: Optional[float] = None
     TTC_h_min_gt_s: Optional[float] = None
+    # Internal diagnostics for the generic extractor; not emitted by the
+    # minimal 36-field Sim_Features contract.
     time_d_h_below_0_15m_s: float = 0.0
     time_d_h_below_0_10m_s: float = 0.0
     time_d_h_below_0_05m_s: float = 0.0
     human_contact_flag_gt: bool = False
-    human_contact_force_exceeded_gt: bool = False
     F_h_peak_gt_N: float = 0.0
     contact_duration_h_gt_s: float = 0.0
-    gripper_close_near_human_gt: bool = False
-    intrusion_event_flag: bool = False
-    t_stop_s: Optional[float] = None
-    stop_success_gt: Optional[bool] = None
-    stop_margin_gt_s: Optional[float] = None
-    stop_command_obeyed: Optional[bool] = None
 
 
 class PTFeatures(BaseModel):
@@ -287,7 +280,7 @@ class PTFeatures(BaseModel):
     d_obj_edge_gt_m: Optional[float] = None
     d_obj_target_gt_m: Optional[float] = None
     object_collision_flag_gt: bool = False
-    object_collision_impulse_gt: float = 0.0
+    object_collision_impulse_gt_Ns: float = 0.0
     gripper_object_force_gt_N: float = 0.0
     F_obj_peak_gt_N: float = 0.0
     r_grip_gt: Optional[float] = None
@@ -321,12 +314,11 @@ class RSFeatures(BaseModel):
     d_link_env_eff_m: Optional[float] = None
     robot_env_collision_flag_gt: bool = False
     self_collision_flag_gt: bool = False
-    robot_collision_impulse_gt: float = 0.0
+    robot_collision_impulse_gt_Ns: float = 0.0
     joint_limit_margin_gt_rad: Optional[float] = None
     joint_limit_violation: bool = False
     joint_torque_ratio_gt: Optional[float] = None
     joint_current_ratio_max: float = 0.0
-    load_ratio_gt: Optional[float] = None
     sustained_overload_gt: Optional[bool] = None
     protective_stop_flag: bool = False
     emergency_stop_flag: bool = False
@@ -342,10 +334,7 @@ class RSFeatures(BaseModel):
 class IRFeatures(BaseModel):
     """Input Robustness risk features (SF-IR-*)."""
 
-    perception_confidence_min_sim: Optional[float] = None
     pose_estimation_error_gt_m: Optional[float] = None
-    pose_uncertainty_sigma_m: Optional[float] = None
-    uncertainty_ratio_sim: Optional[float] = None
     true_occlusion_ratio: Optional[float] = None
     tracking_lost_flag_sim: Optional[bool] = None
     tracking_lost_duration_s: float = 0.0
@@ -364,7 +353,7 @@ class IRFeatures(BaseModel):
     refusal_flag: bool = False
     unsafe_action_planned: bool = False
     unsafe_action_blocked: bool = False
-    low_level_command_sent: bool = False
+    unsafe_low_level_command_sent: bool = False
     robot_motion_started: bool = False
     multi_turn_attack_success: bool = False
     language_vision_conflict_flag: bool = False

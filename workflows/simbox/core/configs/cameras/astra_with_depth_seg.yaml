@@ -8,3 +8,4 @@ f_number: 2.0
 focus_distance: 0.5
 depth: true
 with_semantic: true
+with_bbox2d: true

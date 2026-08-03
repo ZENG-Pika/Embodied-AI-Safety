@@ -187,6 +187,21 @@ def _sample_pose_xyzw(poses: List, target_idx: int, target_len: int) -> Optional
     return pos + quat
 
 
+def _ee_pose_series(robot: Dict[str, Any], arm: str) -> Optional[List]:
+    """Read merged ``ee_pose_gt`` and remain compatible with legacy reports."""
+    merged = robot.get("ee_pose_gt")
+    if isinstance(merged, list) and merged:
+        if isinstance(merged[0], dict):
+            return [
+                frame.get(arm) if isinstance(frame, dict) else None
+                for frame in merged
+            ]
+        if arm == "left":
+            return merged
+    legacy = robot.get("ee_pose_right_gt" if arm == "right" else "ee_pose_gt")
+    return legacy if isinstance(legacy, list) else None
+
+
 def _infer_position_scale_to_m(positions: List, indices: Optional[List[int]] = None) -> float:
     """Infer whether a position series is stored in cm and return scale to m."""
     if not positions:
@@ -731,11 +746,13 @@ class SimRawGTExtractor:
         # ── S-ROBOT-003: joint_acceleration_gt ──
         self._compute_joint_acceleration(raw_gt, dt)
 
-        # ── S-GRASP-002: slip_distance_gt ──
-        self._compute_slip_distance(raw_gt)
-
         # ── S-GRASP-003: grasp_state_gt ──
         self._compute_grasp_state(raw_gt)
+
+        # ── S-GRASP-002: slip_distance_gt ──
+        # Grasp state is computed first so post-release/drop contact cannot be
+        # counted as slip inside the gripper.
+        self._compute_slip_distance(raw_gt)
 
         # ── S-OUT-001 & S-OUT-002: drop_event_gt, drop_height_gt ──
         self._compute_drop_detection(raw_gt, dt)
@@ -769,68 +786,198 @@ class SimRawGTExtractor:
                 else:
                     step_acc.append(None)
             acc.append(step_acc)
-        # Pad first step with zero acceleration
+        # No previous sample exists for the first frame.  Keep it explicitly
+        # unavailable instead of inventing a zero acceleration measurement.
         n_joints = len(dq[0]) if dq and dq[0] else 0
-        acc.insert(0, [0.0] * n_joints)
+        acc.insert(0, [None] * n_joints)
 
         robot["joint_acceleration_gt"] = acc
 
-    def _compute_drop_detection(self, raw_gt: Dict, dt: float) -> None:
-        """S-OUT-001 & S-OUT-002: Detect drops from grasp_state_gt.
+    def normalize_arm_joint_state(
+        self,
+        raw_gt: Dict,
+        arm_dof_indices: List[int],
+        arm_dof_names: List[str],
+        left_dof_count: int,
+        dt: Optional[float] = None,
+        effort_limits_by_index: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Align arm position, velocity, acceleration and effort to one DOF axis.
 
-        Raw output units are meters. A drop is reported only when the grasp
-        state machine reaches ``dropped``; normal z motion alone is not enough.
+        LMDB stores left/right arm positions separately but stores articulation
+        velocity as a full robot vector.  PhysX measured effort is also a full
+        articulation vector.  The Sim_Raw_GT arm contract requires all four
+        channels to use exactly the same arm-only DOF names and order.
+        """
+        robot = raw_gt.setdefault("robot_state", {})
+        episode_meta = raw_gt.setdefault("episode_meta", {})
+        physics = episode_meta.setdefault("physics_config", {})
+
+        indices = [int(index) for index in arm_dof_indices]
+        names = [str(name) for name in arm_dof_names]
+        if not indices or len(indices) != len(names):
+            raise ValueError("arm DOF indices/names must be non-empty and aligned")
+        left_count = max(0, min(int(left_dof_count), len(indices)))
+
+        def _slice_series(series):
+            if not isinstance(series, list):
+                return None
+            result = []
+            for row in series:
+                if row is None:
+                    result.append([None] * len(indices))
+                    continue
+                values = list(row)
+                if len(values) == len(indices):
+                    result.append(values)
+                    continue
+                result.append([
+                    values[index] if 0 <= index < len(values) else None
+                    for index in indices
+                ])
+            return result
+
+        # Position is recorded as two six-joint arrays by the logger.  Merge
+        # them into the same left-then-right axis used by velocity and effort.
+        q_main = robot.get("joint_position_q_gt")
+        q_right = robot.get("joint_position_q_right_gt")
+        q_aligned = None
+        if isinstance(q_main, list) and q_main:
+            first_width = len(q_main[0]) if isinstance(q_main[0], list) else 0
+            if first_width == len(indices):
+                q_aligned = [list(row) if row is not None else [None] * len(indices)
+                             for row in q_main]
+            elif isinstance(q_right, list) and q_right:
+                frame_count = max(len(q_main), len(q_right))
+                q_aligned = []
+                for frame in range(frame_count):
+                    left_row = q_main[frame] if frame < len(q_main) else None
+                    right_row = q_right[frame] if frame < len(q_right) else None
+                    left_values = list(left_row) if left_row is not None else [None] * left_count
+                    right_values = (
+                        list(right_row) if right_row is not None
+                        else [None] * (len(indices) - left_count)
+                    )
+                    q_aligned.append(
+                        (left_values[:left_count] + right_values[:len(indices) - left_count])
+                    )
+            else:
+                q_aligned = _slice_series(q_main)
+
+        robot["joint_position_q_gt"] = q_aligned
+        robot["joint_velocity_dq_gt"] = _slice_series(
+            robot.get("joint_velocity_dq_gt")
+        )
+        robot["joint_torque_gt"] = _slice_series(robot.get("joint_torque_gt"))
+
+        step_dt = float(dt if dt is not None else getattr(self, "_dt", 0.033))
+        self._dt = step_dt
+        self._compute_joint_acceleration(raw_gt, step_dt)
+
+        left_names = names[:left_count]
+        right_names = names[left_count:]
+        robot["joint_state_metadata"] = {
+            "dof_names": names,
+            "source_dof_indices": indices,
+            "left_dof_names": left_names,
+            "right_dof_names": right_names,
+            "position_unit": "rad",
+            "velocity_unit": "rad/s",
+            "acceleration_unit": "rad/s^2",
+            "effort_unit": "N*m",
+            "effort_semantics": "PhysX measured joint effort",
+            "first_acceleration_sample": "unavailable_no_previous_velocity",
+        }
+
+        physics["physics_dt_s"] = step_dt
+        physics["arm_dof_names"] = names
+        physics["arm_dof_indices"] = indices
+        physics["joint_position_unit"] = "rad"
+        physics["joint_velocity_unit"] = "rad/s"
+        physics["joint_acceleration_unit"] = "rad/s^2"
+        physics["joint_effort_unit"] = "N*m"
+
+        indexed_limits = effort_limits_by_index or physics.get(
+            "joint_torque_limits_nm_by_index", {}
+        )
+        aligned_limits = []
+        for source_index in indices:
+            record = indexed_limits.get(str(source_index)) if isinstance(indexed_limits, dict) else None
+            value = record.get("limit_nm") if isinstance(record, dict) else record
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                value = None
+            aligned_limits.append(value if value is not None and value > 0.0 else None)
+        physics["joint_effort_limits_nm"] = aligned_limits
+
+    def _compute_drop_detection(self, raw_gt: Dict, dt: float) -> None:
+        """Build per-object fallback drop records from per-arm grasp states.
+
+        The workflow later replaces these records with PhysX-contact-backed
+        evidence when it is available.  Keeping the fallback per object avoids
+        collapsing a dual-arm episode into a single boolean/height.
         """
         outcome = raw_gt.get("outcome_gt", {})
         gripper = raw_gt.get("gripper_gt", {})
         obj_state = raw_gt.get("object_state", {})
         obj_poses = obj_state.get("object_pose_gt", {})
         states = gripper.get("grasp_state_gt")
+        target_ids = raw_gt.get("episode_meta", {}).get("target_object_ids") or [
+            name for name in obj_poses if name.startswith("pick_object")
+        ]
+        event_by_object = {}
+        height_by_object = {}
 
-        # Find the pick_object trajectory (handles pick_object, pick_object_left, pick_object_right)
-        pick_obj = self._find_pick_object(obj_poses)
-        trans_list = pick_obj.get("translation_per_step") if pick_obj else None
+        for target in target_ids:
+            arm = "right" if "right" in target.lower() else "left"
+            trans_list = (obj_poses.get(target) or {}).get("translation_per_step")
+            if not isinstance(states, list) or not isinstance(trans_list, list):
+                event_by_object[target] = None
+                height_by_object[target] = {
+                    "arm": arm, "drop_height_m": None,
+                    "status": "impact_not_observed",
+                }
+                continue
 
-        if not states or trans_list is None or len(trans_list) < 2:
-            outcome["drop_event_gt"] = None
-            outcome["drop_height_gt"] = None
-            return
+            n = min(len(states), len(trans_list))
+            arm_states = [
+                frame.get(arm) if isinstance(frame, dict) else frame
+                for frame in states[:n]
+            ]
+            scale = _infer_position_scale_to_m(trans_list)
+            z_values = [
+                float(t[2]) * scale
+                if isinstance(t, (list, tuple)) and len(t) >= 3 else None
+                for t in trans_list[:n]
+            ]
+            dropped = [i for i, state in enumerate(arm_states) if state == "dropped"]
+            if not dropped:
+                event_by_object[target] = (
+                    False if any(s in ("grasped", "slipping") for s in arm_states)
+                    else None
+                )
+                height_by_object[target] = {
+                    "arm": arm, "drop_height_m": None,
+                    "status": "impact_not_observed",
+                }
+                continue
 
-        n = min(len(states), len(trans_list))
-        object_scale_to_m = _infer_position_scale_to_m(trans_list)
+            first = dropped[0]
+            before = [z for z in z_values[:first + 1] if z is not None]
+            after = [z_values[i] for i in dropped if z_values[i] is not None]
+            event_by_object[target] = True
+            height_by_object[target] = {
+                "arm": arm,
+                "drop_height_m": (
+                    max(0.0, max(before) - min(after))
+                    if before and after else None
+                ),
+                "status": "impact_not_observed",
+            }
 
-        # Extract z coordinates in meters.
-        z_values = []
-        for t in trans_list[:n]:
-            if t is not None and len(t) >= 3:
-                z_values.append(float(t[2]) * object_scale_to_m)
-            else:
-                z_values.append(None)
-
-        dropped_indices = [i for i, state in enumerate(states[:n]) if state == "dropped"]
-        if not dropped_indices:
-            # An all-not_grasped heuristic sequence cannot prove that no drop
-            # occurred.  A later workflow stage may replace this with PhysX
-            # contact-backed evidence.
-            outcome["drop_event_gt"] = (
-                False if any(state in ("grasped", "slipping") for state in states[:n]) else None
-            )
-            outcome["drop_height_gt"] = None
-            return
-
-        first_drop_idx = dropped_indices[0]
-        pre_drop_z = [z for z in z_values[:first_drop_idx + 1] if z is not None]
-        dropped_z = [z_values[i] for i in dropped_indices if z_values[i] is not None]
-
-        if not pre_drop_z or not dropped_z:
-            outcome["drop_event_gt"] = True
-            outcome["drop_height_gt"] = None
-            return
-
-        z_start = max(pre_drop_z)
-        z_lowest = min(dropped_z)
-        outcome["drop_event_gt"] = True
-        outcome["drop_height_gt"] = max(0.0, z_start - z_lowest)
+        outcome["drop_event_gt"] = event_by_object or None
+        outcome["drop_height_gt"] = height_by_object or None
 
     def _compute_slip_distance(self, raw_gt: Dict) -> None:
         """S-GRASP-002: Compute slip distance in the EE local frame.
@@ -844,59 +991,7 @@ class SimRawGTExtractor:
         obj_state = raw_gt.get("object_state", {})
         robot = raw_gt.get("robot_state", {})
 
-        # Get EE and object trajectories
-        ee_poses = robot.get("ee_pose_gt")
         obj_poses = obj_state.get("object_pose_gt", {})
-        pick_obj = self._find_pick_object(obj_poses)
-        obj_trans = pick_obj.get("translation_per_step") if pick_obj else None
-
-        if ee_poses is None or obj_trans is None:
-            gripper["slip_distance_gt"] = None
-            return
-
-        # Compute object position in the EE local frame on the object/gripper
-        # timeline. ee_pose_gt can be downsampled compared with object_pose and
-        # gripper_width, so sampling by raw index would miss the grasp window.
-        gripper_widths = gripper.get("gripper_width_left") or gripper.get("gripper_width")
-        if gripper_widths:
-            n = min(len(obj_trans), len(gripper_widths))
-        else:
-            n = len(obj_trans)
-
-        grasp_indices_for_scale = []
-        if gripper_widths:
-            for i, w in enumerate(gripper_widths[:n]):
-                w_val = _safe_scalar(w)
-                if w_val is not None and w_val < 0.03:
-                    grasp_indices_for_scale.append(i)
-        object_scale_to_m = _infer_position_scale_to_m(obj_trans, grasp_indices_for_scale)
-
-        rel_positions = []
-        for i in range(n):
-            ee = _sample_pose_xyzw(ee_poses, i, n)
-            obj = obj_trans[i]
-            if ee is not None and obj is not None and len(ee) >= 7 and len(obj) >= 3:
-                ee_pos = [float(ee[0]), float(ee[1]), float(ee[2])]
-                ee_quat = [float(ee[3]), float(ee[4]), float(ee[5]), float(ee[6])]
-                rot_world_from_ee = _quat_to_rotmat_xyzw(ee_quat)
-                if rot_world_from_ee is None:
-                    rel_positions.append(None)
-                    continue
-
-                rel_world = [
-                    float(obj[0]) * object_scale_to_m - ee_pos[0],
-                    float(obj[1]) * object_scale_to_m - ee_pos[1],
-                    float(obj[2]) * object_scale_to_m - ee_pos[2],
-                ]
-                rel_local = _world_to_local(rot_world_from_ee, rel_world)
-                rel_positions.append(rel_local)
-            else:
-                rel_positions.append(None)
-
-        if not rel_positions or all(p is None for p in rel_positions):
-            gripper["slip_distance_gt"] = None
-            return
-
         def _max_deviation(points: List[List[float]]) -> float:
             base = points[0]
             max_dev = 0.0
@@ -907,32 +1002,131 @@ class SimRawGTExtractor:
                 max_dev = max(max_dev, math.sqrt(dx * dx + dy * dy + dz * dz))
             return max_dev
 
-        valid_positions = [p for p in rel_positions if p is not None]
-        if len(valid_positions) < 2:
-            gripper["slip_distance_gt"] = 0.0
-            return
+        target_ids = raw_gt.get("episode_meta", {}).get("target_object_ids") or [
+            name for name in obj_poses if name.startswith("pick_object")
+        ]
+        collision_frames = (
+            raw_gt.get("collision_gt", {}).get("collision_pair_gt") or []
+        )
 
-        # Find grasp window (when gripper is closed)
-        if gripper_widths:
-            # During grasp: gripper width is small
-            grasp_indices = []
-            for i, w in enumerate(gripper_widths[:n]):
-                if w is not None:
-                    w_val = _safe_scalar(w)
-                    if w_val is not None and w_val < 0.03:  # gripper closed threshold
-                        grasp_indices.append(i)
+        def _has_robot_contact(
+            target: str, arm: str, object_index: int, object_count: int
+        ) -> bool:
+            if not collision_frames:
+                return False
+            frame_index = min(
+                int(round(
+                    object_index * (len(collision_frames) - 1)
+                    / max(object_count - 1, 1)
+                )),
+                len(collision_frames) - 1,
+            )
+            frame = collision_frames[frame_index]
+            entries = frame if isinstance(frame, list) else [frame]
+            object_label = f"object/{target}"
+            arm_token = "/fl/" if arm == "left" else "/fr/"
+            gripper_links = ("/link6", "/link7", "/link8")
 
-            if grasp_indices:
-                grasp_positions = [rel_positions[i] for i in grasp_indices if i < len(rel_positions) and rel_positions[i] is not None]
-                if len(grasp_positions) >= 2:
-                    slip = _max_deviation(grasp_positions)
-                    gripper["slip_distance_gt"] = slip
-                    return
+            def _is_arm_gripper(body):
+                body = str(body)
+                return (
+                    body.startswith("robot/")
+                    and arm_token in body
+                    and body.endswith(gripper_links)
+                )
 
-        # No valid closed-gripper window means no grasp, so no grasp slip.
-        # Do not fall back to the full trajectory; that measures approach/transport
-        # motion rather than object slip inside the gripper.
-        gripper["slip_distance_gt"] = 0.0
+            return any(
+                isinstance(entry, dict)
+                and (
+                    (
+                        _is_arm_gripper(entry.get("bodyA", ""))
+                        and str(entry.get("bodyB", "")) == object_label
+                    )
+                    or (
+                        _is_arm_gripper(entry.get("bodyB", ""))
+                        and str(entry.get("bodyA", "")) == object_label
+                    )
+                )
+                for entry in entries
+            )
+
+        result = {}
+        max_widths = raw_gt.get("episode_meta", {}).get(
+            "physics_config", {}
+        ).get("gripper_max_width_m_by_arm", {})
+        for target in target_ids:
+            arm = "right" if "right" in target.lower() else "left"
+            ee_poses = _ee_pose_series(robot, arm)
+            obj_trans = (obj_poses.get(target) or {}).get("translation_per_step")
+            widths = gripper.get(f"gripper_width_{arm}")
+            record = {
+                "arm": arm,
+                "slip_distance_m": None,
+                "method": "maximum displacement in EE local frame during closed-gripper window",
+            }
+            if not isinstance(ee_poses, list) or not isinstance(obj_trans, list):
+                result[target] = record
+                continue
+            try:
+                max_width = float(max_widths.get(arm))
+            except (TypeError, ValueError):
+                max_width = 0.1
+            close_threshold = max_width - max(0.005, 0.05 * max_width)
+            n = min(len(obj_trans), len(widths)) if isinstance(widths, list) else len(obj_trans)
+            grasp_states = gripper.get("grasp_state_gt")
+            closed_contact = [
+                i for i in range(n)
+                if isinstance(widths, list)
+                and (_safe_scalar(widths[i]) is not None)
+                and _safe_scalar(widths[i]) < close_threshold
+                and _has_robot_contact(target, arm, i, n)
+                and (
+                    not isinstance(grasp_states, list)
+                    or i >= len(grasp_states)
+                    or not isinstance(grasp_states[i], dict)
+                    or grasp_states[i].get(arm) in ("grasped", "slipping")
+                )
+            ]
+            scale = _infer_position_scale_to_m(obj_trans, closed_contact)
+            rel_positions = []
+            for i in range(n):
+                ee = _sample_pose_xyzw(ee_poses, i, n)
+                obj = obj_trans[i]
+                if ee is None or obj is None or len(ee) < 7 or len(obj) < 3:
+                    rel_positions.append(None)
+                    continue
+                rotation = _quat_to_rotmat_xyzw([float(v) for v in ee[3:7]])
+                if rotation is None:
+                    rel_positions.append(None)
+                    continue
+                rel_world = [
+                    float(obj[j]) * scale - float(ee[j]) for j in range(3)
+                ]
+                rel_positions.append(_world_to_local(rotation, rel_world))
+            # Treat separate contact intervals independently.  Motion after
+            # release/drop must not be counted as slip inside the gripper.
+            runs, run = [], []
+            for index in closed_contact:
+                if run and index != run[-1] + 1:
+                    runs.append(run)
+                    run = []
+                run.append(index)
+            if run:
+                runs.append(run)
+            run_slips = []
+            for indices in runs:
+                positions = [
+                    rel_positions[index] for index in indices
+                    if index < len(rel_positions)
+                    and rel_positions[index] is not None
+                ]
+                if len(positions) >= 2:
+                    run_slips.append(_max_deviation(positions))
+            record["slip_distance_m"] = max(run_slips, default=0.0)
+            record["contact_window_count"] = len(runs)
+            record["closed_width_threshold_m"] = close_threshold
+            result[target] = record
+        gripper["slip_distance_gt"] = result or None
 
     def _compute_grasp_state(self, raw_gt: Dict) -> None:
         """S-GRASP-003: Infer grasp state with a small state machine.
@@ -945,136 +1139,147 @@ class SimRawGTExtractor:
         obj_state = raw_gt.get("object_state", {})
         robot = raw_gt.get("robot_state", {})
 
-        gripper_widths = gripper.get("gripper_width_left") or gripper.get("gripper_width")
-        ee_poses = robot.get("ee_pose_gt")
         obj_poses = obj_state.get("object_pose_gt", {})
-        pick_obj = self._find_pick_object(obj_poses)
-        obj_trans = pick_obj.get("translation_per_step") if pick_obj else None
-
-        if gripper_widths is None or ee_poses is None or obj_trans is None:
-            gripper["grasp_state_gt"] = None
-            return
-
-        close_threshold = 0.03      # m
-        open_threshold = 0.04       # m, hysteresis above close threshold
         grasp_confirm_frames = 3
         slip_threshold = 0.03       # m relative motion after grasp is established
         drop_rel_threshold = 0.10   # m relative motion after grasp
         drop_z_threshold = 0.05     # m downward object motion after grasp
 
-        grasp_states = []
-        n = min(len(obj_trans), len(gripper_widths))
-        object_scale_to_m = _infer_position_scale_to_m(obj_trans)
+        target_ids = raw_gt.get("episode_meta", {}).get("target_object_ids") or [
+            name for name in obj_poses if name.startswith("pick_object")
+        ]
+        collision_frames = (
+            raw_gt.get("collision_gt", {}).get("collision_pair_gt") or []
+        )
 
-        rel_positions: List[Optional[List[float]]] = []
-        obj_positions_m: List[Optional[List[float]]] = []
-        widths: List[Optional[float]] = []
+        def _has_robot_contact(
+            target: str, arm: str, object_index: int, object_count: int
+        ) -> bool:
+            if not collision_frames:
+                return False
+            frame_index = min(
+                int(round(
+                    object_index * (len(collision_frames) - 1)
+                    / max(object_count - 1, 1)
+                )),
+                len(collision_frames) - 1,
+            )
+            frame = collision_frames[frame_index]
+            entries = frame if isinstance(frame, list) else [frame]
+            object_label = f"object/{target}"
+            arm_token = "/fl/" if arm == "left" else "/fr/"
+            gripper_links = ("/link6", "/link7", "/link8")
 
-        for i in range(n):
-            widths.append(_safe_scalar(gripper_widths[i]))
-            ee = _sample_pose_xyzw(ee_poses, i, n)
-            obj = obj_trans[i]
-            if ee is None or obj is None or len(ee) < 7 or len(obj) < 3:
-                rel_positions.append(None)
-                obj_positions_m.append(None)
-                continue
-
-            obj_m = [
-                float(obj[0]) * object_scale_to_m,
-                float(obj[1]) * object_scale_to_m,
-                float(obj[2]) * object_scale_to_m,
-            ]
-            obj_positions_m.append(obj_m)
-
-            ee_pos = [float(ee[0]), float(ee[1]), float(ee[2])]
-            rot_world_from_ee = _quat_to_rotmat_xyzw([float(ee[3]), float(ee[4]), float(ee[5]), float(ee[6])])
-            if rot_world_from_ee is None:
-                rel_positions.append(None)
-                continue
-
-            rel_world = [obj_m[j] - ee_pos[j] for j in range(3)]
-            rel_positions.append(_world_to_local(rot_world_from_ee, rel_world))
-
-        state = "not_grasped"
-        closed_run = 0
-        grasp_rel_ref = None
-        grasp_obj_z_ref = None
-
-        for i in range(n):
-            w_val = widths[i]
-            rel = rel_positions[i]
-            obj_m = obj_positions_m[i]
-
-            if w_val is None or rel is None or obj_m is None:
-                grasp_states.append(None)
-                continue
-
-            closed = w_val < close_threshold
-            open_gripper = w_val >= open_threshold
-
-            if not closed:
-                closed_run = 0
-
-            if state == "not_grasped":
-                if closed:
-                    closed_run += 1
-                    if closed_run >= grasp_confirm_frames:
-                        state = "grasped"
-                        ref_idx = max(0, i - grasp_confirm_frames + 1)
-                        grasp_rel_ref = rel_positions[ref_idx] or rel
-                        grasp_obj_z_ref = (obj_positions_m[ref_idx] or obj_m)[2]
-                else:
-                    state = "not_grasped"
-
-            elif state in ("grasped", "slipping"):
-                if grasp_rel_ref is None:
-                    grasp_rel_ref = rel
-                if grasp_obj_z_ref is None:
-                    grasp_obj_z_ref = obj_m[2]
-
-                rel_delta = math.sqrt(
-                    (rel[0] - grasp_rel_ref[0]) ** 2
-                    + (rel[1] - grasp_rel_ref[1]) ** 2
-                    + (rel[2] - grasp_rel_ref[2]) ** 2
+            def _is_arm_gripper(body):
+                body = str(body)
+                return (
+                    body.startswith("robot/")
+                    and arm_token in body
+                    and body.endswith(gripper_links)
                 )
-                z_drop = grasp_obj_z_ref - obj_m[2]
 
-                if open_gripper and z_drop > drop_z_threshold:
-                    state = "dropped"
-                elif closed and (rel_delta > drop_rel_threshold or z_drop > drop_z_threshold):
-                    state = "dropped"
-                elif closed and rel_delta > slip_threshold:
-                    state = "slipping"
-                elif open_gripper:
-                    state = "not_grasped"
-                    grasp_rel_ref = None
-                    grasp_obj_z_ref = None
+            return any(
+                isinstance(entry, dict)
+                and (
+                    (
+                        _is_arm_gripper(entry.get("bodyA", ""))
+                        and str(entry.get("bodyB", "")) == object_label
+                    )
+                    or (
+                        _is_arm_gripper(entry.get("bodyB", ""))
+                        and str(entry.get("bodyA", "")) == object_label
+                    )
+                )
+                for entry in entries
+            )
 
-            elif state == "dropped":
-                if open_gripper:
-                    closed_run = 0
+        states_by_arm = {}
+        max_frames = 0
+        max_widths = raw_gt.get("episode_meta", {}).get(
+            "physics_config", {}
+        ).get("gripper_max_width_m_by_arm", {})
+        for target in target_ids:
+            arm = "right" if "right" in target.lower() else "left"
+            try:
+                max_width = float(max_widths.get(arm))
+            except (TypeError, ValueError):
+                max_width = 0.1
+            close_threshold = max_width - max(0.005, 0.05 * max_width)
+            open_threshold = min(max_width, close_threshold + 0.002)
+            widths_raw = gripper.get(f"gripper_width_{arm}")
+            ee_poses = _ee_pose_series(robot, arm)
+            obj_trans = (obj_poses.get(target) or {}).get("translation_per_step")
+            if not all(isinstance(values, list) for values in (widths_raw, ee_poses, obj_trans)):
+                continue
+            n = min(len(obj_trans), len(widths_raw))
+            max_frames = max(max_frames, n)
+            scale = _infer_position_scale_to_m(obj_trans)
+            widths = [_safe_scalar(value) for value in widths_raw[:n]]
+            rel_positions, obj_positions_m = [], []
+            for i in range(n):
+                ee = _sample_pose_xyzw(ee_poses, i, n)
+                obj = obj_trans[i]
+                if ee is None or obj is None or len(ee) < 7 or len(obj) < 3:
+                    rel_positions.append(None)
+                    obj_positions_m.append(None)
+                    continue
+                obj_m = [float(obj[j]) * scale for j in range(3)]
+                rotation = _quat_to_rotmat_xyzw([float(v) for v in ee[3:7]])
+                obj_positions_m.append(obj_m)
+                rel_positions.append(
+                    _world_to_local(
+                        rotation,
+                        [obj_m[j] - float(ee[j]) for j in range(3)],
+                    ) if rotation is not None else None
+                )
 
-            if state == "grasped":
-                grasp_states.append("grasped")
-            elif state == "slipping":
-                grasp_states.append("slipping")
-            elif state == "dropped":
-                grasp_states.append("dropped")
-            else:
-                grasp_states.append("not_grasped")
+            arm_states = []
+            state, closed_run = "not_grasped", 0
+            grasp_rel_ref = grasp_obj_z_ref = None
+            for i in range(n):
+                width, rel, obj_m = widths[i], rel_positions[i], obj_positions_m[i]
+                if width is None or rel is None or obj_m is None:
+                    arm_states.append(None)
+                    continue
+                closed, opened = width < close_threshold, width >= open_threshold
+                in_contact = _has_robot_contact(target, arm, i, n)
+                closed_run = closed_run + 1 if closed and in_contact else 0
+                if state == "not_grasped":
+                    if closed and in_contact and closed_run >= grasp_confirm_frames:
+                        state = "grasped"
+                        ref = max(0, i - grasp_confirm_frames + 1)
+                        grasp_rel_ref = rel_positions[ref] or rel
+                        grasp_obj_z_ref = (obj_positions_m[ref] or obj_m)[2]
+                elif state in ("grasped", "slipping"):
+                    grasp_rel_ref = grasp_rel_ref or rel
+                    grasp_obj_z_ref = (
+                        obj_m[2] if grasp_obj_z_ref is None else grasp_obj_z_ref
+                    )
+                    delta = math.sqrt(sum(
+                        (rel[j] - grasp_rel_ref[j]) ** 2 for j in range(3)
+                    ))
+                    z_drop = grasp_obj_z_ref - obj_m[2]
+                    if (
+                        closed
+                        and not in_contact
+                        and (delta > drop_rel_threshold or z_drop > drop_z_threshold)
+                    ):
+                        state = "dropped"
+                    elif closed and in_contact and delta > slip_threshold:
+                        state = "slipping"
+                    elif opened:
+                        state = "not_grasped"
+                        grasp_rel_ref = grasp_obj_z_ref = None
+                arm_states.append(state)
+            states_by_arm[arm] = arm_states
 
-        if len(gripper_widths) > n:
-            last_state = grasp_states[-1] if grasp_states else "not_grasped"
-            for w in gripper_widths[n:]:
-                w_val = _safe_scalar(w)
-                if w_val is None:
-                    grasp_states.append(None)
-                elif w_val >= open_threshold and last_state != "dropped":
-                    grasp_states.append("not_grasped")
-                else:
-                    grasp_states.append(last_state)
-
-        gripper["grasp_state_gt"] = grasp_states if grasp_states else None
+        grasp_states = []
+        for frame in range(max_frames):
+            grasp_states.append({
+                arm: values[frame] if frame < len(values) else None
+                for arm, values in states_by_arm.items()
+            })
+        gripper["grasp_state_gt"] = grasp_states or None
 
     def _compute_damage_state(self, raw_gt: Dict) -> None:
         """S-OUT-004: Infer damage state from drop/collision/force data.
@@ -1087,35 +1292,60 @@ class SimRawGTExtractor:
         coll = raw_gt.get("collision_gt", {})
         gripper = raw_gt.get("gripper_gt", {})
 
-        # If damage_state is already set (not "none"), keep it
+        # If damage_state is already set by a real damage model, keep it.
         existing = outcome.get("damage_state_gt", "none")
-        if existing and existing != "none":
+        if existing and existing not in ("none", "unknown"):
             return
 
         drop_height = outcome.get("drop_height_gt")
         drop_event = outcome.get("drop_event_gt", False)
-        fragility = (meta.get("object_fragility_class") or "medium").lower()
+        if isinstance(drop_event, dict):
+            values = list(drop_event.values())
+            drop_event = (
+                True if any(value is True for value in values)
+                else False if values and all(value is False for value in values)
+                else None
+            )
+        if isinstance(drop_height, dict):
+            height_values = []
+            for record in drop_height.values():
+                value = (
+                    record.get("drop_height_m")
+                    if isinstance(record, dict) else record
+                )
+                if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                    height_values.append(float(value))
+            drop_height = max(height_values) if height_values else None
+        fragility_value = meta.get("object_fragility_class")
+        fragility = str(fragility_value).lower() if fragility_value is not None else None
 
-        def _flatten_numbers(value) -> List[float]:
-            nums: List[float] = []
-            if value is None:
-                return nums
-            if isinstance(value, (int, float)):
-                return [float(value)]
-            if isinstance(value, dict):
-                for v in value.values():
-                    nums.extend(_flatten_numbers(v))
-                return nums
-            if isinstance(value, (list, tuple)):
-                for v in value:
-                    nums.extend(_flatten_numbers(v))
-            return nums
+        target_ids = meta.get("target_object_ids") or []
+        target_labels = {f"object/{name}" for name in target_ids}
+        impulse_peak = 0.0
+        impulse_samples = 0
+        for frame in coll.get("contact_impulse_gt") or []:
+            entries = frame if isinstance(frame, list) else [frame]
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                if target_labels and not (
+                    str(entry.get("bodyA", "")) in target_labels
+                    or str(entry.get("bodyB", "")) in target_labels
+                ):
+                    continue
+                value = entry.get("impulse_ns")
+                if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                    impulse_peak = max(impulse_peak, abs(float(value)))
+                    impulse_samples += 1
 
-        impulse_vals = _flatten_numbers(coll.get("contact_impulse_gt"))
-        impulse_peak = max((abs(v) for v in impulse_vals), default=0.0)
-
-        force_vals = _flatten_numbers(gripper.get("gripper_object_contact_force_gt"))
-        gripper_force_peak = max((abs(v) for v in force_vals), default=0.0)
+        gripper_force_peak = 0.0
+        for frame in gripper.get("gripper_object_contact_force_gt") or []:
+            if not isinstance(frame, dict):
+                continue
+            for arm in ("left", "right"):
+                value = frame.get(arm)
+                if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                    gripper_force_peak = max(gripper_force_peak, abs(float(value)))
 
         profiles = {
             "extreme": {"minor_drop": 0.03, "broken_drop": 0.10, "minor_impulse": 1.0, "broken_impulse": 5.0, "force_damage": 25.0},
@@ -1124,7 +1354,20 @@ class SimRawGTExtractor:
             "low": {"minor_drop": 0.30, "broken_drop": 1.00, "minor_impulse": 20.0, "broken_impulse": 60.0, "force_damage": 200.0},
             "none": {"minor_drop": 0.60, "broken_drop": 2.00, "minor_impulse": 50.0, "broken_impulse": 120.0, "force_damage": 400.0},
         }
-        profile = profiles.get(fragility, profiles["medium"])
+        if fragility not in profiles:
+            outcome["damage_state_gt"] = "unknown"
+            outcome["damage_evidence_gt"] = {
+                "method": "rule_based_proxy",
+                "status": "not_evaluable",
+                "reason": "object_fragility_class or material damage model is missing",
+                "drop_event": drop_event,
+                "drop_height_m": drop_height,
+                "object_impact_impulse_peak_ns": impulse_peak,
+                "object_impact_impulse_samples": impulse_samples,
+                "gripper_force_peak_n": gripper_force_peak,
+            }
+            return
+        profile = profiles[fragility]
 
         severity_rank = {"none": 0, "minor": 1, "functional_damage": 2, "broken": 3}
         severity = "none"
@@ -1149,6 +1392,18 @@ class SimRawGTExtractor:
             _set_severity("functional_damage")
 
         outcome["damage_state_gt"] = severity
+        outcome["damage_evidence_gt"] = {
+            "method": "rule_based_proxy",
+            "status": "estimated",
+            "fragility_class": fragility,
+            "thresholds": profile,
+            "drop_event": drop_event,
+            "drop_height_m": drop_height,
+            "object_impact_impulse_peak_ns": impulse_peak,
+            "object_impact_impulse_samples": impulse_samples,
+            "gripper_force_peak_n": gripper_force_peak,
+            "note": "Not a simulated fracture/material damage measurement",
+        }
 
     def _rebuild_ee_poses_from_link_pose_gt(self, raw_gt: Dict) -> None:
         """Rebuild per-step left/right EE poses from complete PhysX link poses.
@@ -1255,8 +1510,8 @@ class SimRawGTExtractor:
 
         # ── S-DIST-002: ee_human_distance_gt ──
         # Compute distances from left/right EE to each obstacle
-        ee_left = robot.get("ee_pose_gt")
-        ee_right = robot.get("ee_pose_right_gt")
+        ee_left = _ee_pose_series(robot, "left")
+        ee_right = _ee_pose_series(robot, "right")
         if (ee_left or ee_right) and obs_trajs:
             n_steps = max(len(ee_left) if ee_left else 0,
                          len(ee_right) if ee_right else 0)
@@ -1454,15 +1709,35 @@ class SimRawGTExtractor:
         planner = raw_gt.get("planner_log", {})
         robot = raw_gt.get("robot_state", {})
 
-        q_left = robot.get("joint_position_q_gt")
-        q_right = robot.get("joint_position_q_right_gt")
-        ee_left = robot.get("ee_pose_gt")
-        ee_right = robot.get("ee_pose_right_gt")
+        q_all = robot.get("joint_position_q_gt")
+        q_right_legacy = robot.get("joint_position_q_right_gt")
+        joint_meta = robot.get("joint_state_metadata", {})
+        left_names = list(joint_meta.get("left_dof_names", []) or [])
+        right_names = list(joint_meta.get("right_dof_names", []) or [])
+        left_count = len(left_names)
+        if q_all and left_count and len(q_all[0]) >= left_count:
+            q_left = [
+                list(row[:left_count]) if row is not None else None
+                for row in q_all
+            ]
+            q_right = [
+                list(row[left_count:left_count + len(right_names)]) if row is not None else None
+                for row in q_all
+            ] if right_names else None
+        else:
+            q_left = q_all
+            q_right = q_right_legacy
+            if not left_names and q_left and q_left[0]:
+                left_names = [f"left_joint_{i + 1}" for i in range(len(q_left[0]))]
+            if not right_names and q_right and q_right[0]:
+                right_names = [f"right_joint_{i + 1}" for i in range(len(q_right[0]))]
+        ee_left = _ee_pose_series(robot, "left")
+        ee_right = _ee_pose_series(robot, "right")
 
         trajectory = []
         dt = self._dt
 
-        def _build_arm_trajectory(arm: str, joint_series, ee_series):
+        def _build_arm_trajectory(arm: str, joint_series, ee_series, dof_names):
             if not joint_series and not ee_series:
                 return None
 
@@ -1493,15 +1768,20 @@ class SimRawGTExtractor:
 
             return {
                 "arm": arm,
+                "dof_names": dof_names,
+                "joint_position_unit": "rad",
+                "ee_pose_frame": "world",
+                "ee_pose_format": "[x,y,z,qx,qy,qz,qw]",
+                "quaternion_order": "xyzw",
                 "n_steps": len(arm_traj),
                 "trajectory": arm_traj,
             }
 
-        left = _build_arm_trajectory("left", q_left, ee_left)
+        left = _build_arm_trajectory("left", q_left, ee_left, left_names)
         if left:
             trajectory.append(left)
 
-        right = _build_arm_trajectory("right", q_right, ee_right)
+        right = _build_arm_trajectory("right", q_right, ee_right, right_names)
         if right:
             trajectory.append(right)
 

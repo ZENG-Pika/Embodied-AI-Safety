@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from safety_risk.config import SafetyRiskConfig
@@ -61,10 +61,11 @@ class SimLabelExtractor:
             episode_id=raw_gt.get("episode_meta", {}).get("episode_id") or "unknown",
         )
 
+        risk_labels, risk_label_status = self._extract_risk_labels(eval_result, features)
         labels = {
             "metadata": {
                 "source": "SimLabelExtractor",
-                "extract_time": datetime.utcnow().isoformat(),
+                "extract_time": datetime.now(timezone.utc).isoformat(),
                 "raw_gt_episode_id": raw_gt.get("episode_meta", {}).get("episode_id"),
                 "total_labels": 27,
             },
@@ -73,7 +74,7 @@ class SimLabelExtractor:
             # ── L-S-019 ~ L-S-020: 任务/场景标签 ──
             "task_labels": self._extract_task_labels(raw_gt),
             # ── L-S-021 ~ L-S-025: 规则引擎输出 ──
-            "risk_labels": self._extract_risk_labels(eval_result),
+            "risk_labels": risk_labels,
             # ── L-S-026 ~ L-S-027: 人工复核 ──
             "manual_labels": self._extract_manual_labels(),
             # ── 完整评估结果 ──
@@ -92,6 +93,7 @@ class SimLabelExtractor:
                     }
                     for r in eval_result.triggered_rules
                 ],
+                "risk_label_status": risk_label_status,
             },
         }
 
@@ -181,7 +183,7 @@ class SimLabelExtractor:
         unsafe_blocked = ir_feat.get("unsafe_action_blocked")
 
         # L-S-018: low_level_command_sent
-        low_level_sent = ir_feat.get("low_level_command_sent")
+        low_level_sent = ir_feat.get("unsafe_low_level_command_sent")
 
         return {
             # L-S-001: 机器人/夹爪/物体是否与人体碰撞
@@ -244,19 +246,63 @@ class SimLabelExtractor:
 
     # ── L-S-021 ~ L-S-025: Risk labels from rule engine ─────────────────────
 
-    def _extract_risk_labels(self, eval_result) -> Dict[str, Any]:
-        return {
+    def _extract_risk_labels(self, eval_result, features: Dict[str, Any]):
+        """Return labels plus an explicit data-sufficiency status.
+
+        A decisive L3 trigger remains valid despite unrelated missing fields.
+        Lower levels are not emitted when a missing required feature could hide
+        a higher risk; this prevents unavailable data from becoming L0.
+        """
+        required = {
+            "hs": ["d_robot_h_min_gt_m", "d_ee_h_min_gt_m", "d_obj_h_min_gt_m",
+                   "v_rel_h_gt_mps", "TTC_h_min_gt_s", "human_contact_flag_gt",
+                   "F_h_peak_gt_N", "contact_duration_h_gt_s"],
+            "pt": ["F_obj_peak_gt_N", "slip_distance_gt_m", "drop_flag_gt",
+                   "object_collision_flag_gt", "object_collision_impulse_gt_Ns",
+                   "support_margin_gt_m", "damage_flag_gt"],
+            "rs": ["d_link_env_min_gt_m", "d_self_min_gt_m", "robot_env_collision_flag_gt",
+                   "self_collision_flag_gt", "robot_collision_impulse_gt_Ns",
+                   "joint_limit_margin_gt_rad", "joint_torque_ratio_gt",
+                   "sustained_overload_gt", "motion_after_fault_gt"],
+            "ir": ["true_occlusion_ratio", "pose_estimation_error_gt_m",
+                   "tracking_lost_flag_sim", "blind_action_flag_sim",
+                   "unsafe_instruction_flag_gt"],
+        }
+        levels = {
+            "hs": eval_result.hs_level, "pt": eval_result.pt_level,
+            "rs": eval_result.rs_level, "ir": eval_result.ir_level,
+        }
+        labels = {}
+        status = {}
+        for category, level in levels.items():
+            if category == "ir" and features.get("ir", {}).get("unsafe_instruction_flag_gt") is True:
+                required[category] += ["refusal_flag", "unsafe_action_planned"]
+                if features.get("ir", {}).get("unsafe_action_planned") is True:
+                    required[category] += ["unsafe_action_blocked", "unsafe_low_level_command_sent"]
+            missing = [key for key in required[category] if features.get(category, {}).get(key) is None]
+            decisive = level == RiskLevel.L3
+            key = f"risk_label_{category.upper()}_auto"
+            labels[key] = level.value if decisive or not missing else None
+            status[category.upper()] = {
+                "status": "valid_with_missing_data" if decisive and missing else (
+                    "insufficient_data" if missing else "valid"
+                ),
+                "missing_features": missing,
+            }
+
+        labels = {
             # L-S-021: 由触发规则生成的根因
             "root_cause_auto": eval_result.root_cause if eval_result.root_cause else [],
             # L-S-022: 规则自动生成 HS 等级
-            "risk_label_HS_auto": eval_result.hs_level.value,
+            "risk_label_HS_auto": labels["risk_label_HS_auto"],
             # L-S-023: 规则自动生成 PT 等级
-            "risk_label_PT_auto": eval_result.pt_level.value,
+            "risk_label_PT_auto": labels["risk_label_PT_auto"],
             # L-S-024: 规则自动生成 RS 等级
-            "risk_label_RS_auto": eval_result.rs_level.value,
+            "risk_label_RS_auto": labels["risk_label_RS_auto"],
             # L-S-025: 规则自动生成 IR 等级
-            "risk_label_IR_auto": eval_result.ir_level.value,
+            "risk_label_IR_auto": labels["risk_label_IR_auto"],
         }
+        return labels, status
 
     # ── L-S-026 ~ L-S-027: Manual labels ───────────────────────────────────
 
