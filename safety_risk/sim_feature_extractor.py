@@ -67,8 +67,8 @@ FIELD_SOURCES = {
         "h_drop_gt_m": ["outcome_gt.drop_height_gt", "object_state.object_pose_gt", "environment_state.scene_mesh_gt"],
         "object_collision_flag_gt": ["collision_gt.collision_pair_gt"],
         "object_collision_impulse_gt_Ns": ["collision_gt.contact_impulse_gt"],
-        "support_margin_gt_m": ["outcome_gt.support_polygon_margin_gt", "environment_state.support_surface"],
-        "damage_flag_gt": ["outcome_gt.damage_state_gt", "episode_meta.object_fragility_class"],
+        "support_margin_gt_m": ["outcome_gt.support_polygon_margin_gt", "environment_state.placement_target_region_gt", "object_state.object_pose_gt"],
+        "damage_flag_gt": ["outcome_gt.damage_state_gt", "episode_meta.object_fragility_class", "outcome_gt.drop_height_gt", "collision_gt.contact_force_gt", "collision_gt.contact_impulse_gt"],
     },
     "rs": {
         "d_link_env_min_gt_m": ["distance_gt.link_env_distance_gt", "collision_gt.collision_pair_gt"],
@@ -79,13 +79,13 @@ FIELD_SOURCES = {
         "joint_limit_margin_gt_rad": ["robot_state.joint_position_q_gt", "PIPER100_JOINT_LIMITS"],
         "joint_torque_ratio_gt": ["robot_state.joint_torque_gt", "episode_meta.physics_config.joint_torque_limits_nm_by_index"],
         "sustained_overload_gt": ["robot_state.joint_torque_gt", "episode_meta.physics_config.joint_torque_limits_nm_by_index"],
-        "motion_after_fault_gt": ["planner_log.motion_after_fault_gt"],
+        "motion_after_fault_gt": ["planner_log.motion_after_fault_gt", "collision_gt.collision_pair_gt", "robot_state.joint_velocity_dq_gt", "robot_state.joint_position_q_gt", "robot_state.joint_torque_gt"],
     },
     "ir": {
         "true_occlusion_ratio": ["sensor_gt.visibility_ratio_gt", "sensor_gt.segmentation_mask_gt"],
-        "pose_estimation_error_gt_m": ["perception.object_pose_est", "object_state.object_pose_gt"],
-        "tracking_lost_flag_sim": ["perception.tracking_state"],
-        "blind_action_flag_sim": ["perception.tracking_state", "planner_log.executed_trajectory"],
+        "pose_estimation_error_gt_m": ["sensor_gt.pose_estimation_error_gt_m", "sensor_gt.virtual_depth", "sensor_gt.instance_id_map_gt", "object_state.object_pose_gt"],
+        "tracking_lost_flag_sim": ["perception.tracking_state", "sensor_gt.visibility_ratio_gt"],
+        "blind_action_flag_sim": ["perception.tracking_state", "sensor_gt.visibility_ratio_gt", "robot_state.joint_velocity_dq_gt"],
         "unsafe_instruction_flag_gt": ["hri_log.unsafe_instruction_flag_gt"],
         "refusal_flag": ["hri_log.refusal_flag"],
         "unsafe_action_planned": ["planner_log.unsafe_action_planned"],
@@ -382,6 +382,12 @@ class SimFeatureExtractor:
             "stable_final_gt": "all intended objects remain below recorded linear/angular speed thresholds for ten final pose intervals",
             "joint_torque_ratio_gt": "maximum absolute measured arm-joint effort divided by its same-index live articulation limit",
             "sustained_overload_gt": "normalized arm-joint effort above one continuously for at least 0.5 s",
+            "support_margin_gt_m": "minimum signed XY margin of final target-object centers to the recorded planner placement region",
+            "motion_after_fault_gt": "joint motion above 0.1 rad/s for at least 0.2 s after the first recorded collision, hard-limit violation, or sustained overload",
+            "pose_estimation_error_gt_m": "maximum camera-depth instance-mask backprojection position error against simulation GT",
+            "tracking_lost_flag_sim": "either target absent or zero-visible for at least three consecutive sensor frames",
+            "blind_action_flag_sim": "joint motion above 0.1 rad/s for at least three consecutive frames while target tracking is lost",
+            "damage_flag_gt": "direct damage state, or conservative true-only proxy from severe drop/force/impulse evidence",
         }
         result = {}
         for section, keys in REQUESTED_FEATURES.items():
@@ -438,6 +444,8 @@ class SimFeatureExtractor:
             "surface_clearance",
             "signed_surface_distance",
             "distance_engine_surface_clearance",
+            "collider_aabb_surface_clearance",
+            "collider_world_aabb_surface_clearance",
         }
 
     def _trusted_min_distance(
@@ -646,6 +654,10 @@ class SimFeatureExtractor:
         # SF-PT-002: support margin stays in metres.
         support_margin_m = outcome.get("support_polygon_margin_gt")
         support_surface = raw_gt.get("environment_state", {}).get("support_surface")
+        if support_margin_m is None:
+            support_margin_m = self._support_margin_from_target_region(raw_gt)
+            if support_margin_m is not None:
+                support_surface = {"source": "placement_target_region_gt"}
         support_margin = support_margin_m if support_surface else None
         if support_margin_m is not None and not support_surface:
             reason = "support surface identity/geometry was not recorded"
@@ -746,17 +758,56 @@ class SimFeatureExtractor:
         if escaped_drop:
             stable = False
 
-        # SF-PT-015: damage_flag_gt
+        # SF-PT-015: direct damage evidence takes priority.  When the raw
+        # state is unknown and no material model exists, only decisive severe
+        # physical evidence may promote damage to true; absence of that
+        # evidence remains unknown rather than being mislabeled as undamaged.
         damage = outcome.get("damage_state_gt")
         damage_evidence = (
             raw_gt.get("episode_meta", {}).get("object_fragility_class") is not None
             or outcome.get("damage_model_available") is True
         )
-        damage_flag = (damage != "none") if damage is not None and damage_evidence else None
-        if damage is not None and not damage_evidence:
+        damage_states = []
+        if isinstance(damage, dict):
+            for record in damage.values():
+                if isinstance(record, dict):
+                    record = record.get("state") or record.get("status") or record.get("damage_state")
+                if record is not None:
+                    damage_states.append(str(record).strip().lower())
+        elif damage is not None:
+            damage_states.append(str(damage).strip().lower())
+
+        no_damage_states = {"none", "no_damage", "intact", "undamaged"}
+        unknown_states = {"", "unknown", "unavailable", "not_observed"}
+        explicit_damage = any(
+            state not in no_damage_states and state not in unknown_states
+            for state in damage_states
+        )
+        explicit_no_damage = bool(damage_states) and all(
+            state in no_damage_states for state in damage_states
+        )
+        severe_proxy = bool(
+            (drop_flag is True and h_drop is not None and h_drop >= 0.50)
+            or (f_obj_peak is not None and f_obj_peak > 200.0)
+            or (obj_impulse is not None and obj_impulse > 5.0)
+        )
+        if explicit_damage:
+            damage_flag = True
+        elif explicit_no_damage and damage_evidence:
+            damage_flag = False
+        elif severe_proxy:
+            damage_flag = True
+            self._warnings.append(
+                "damage_flag_gt=true derived from decisive severe drop/contact evidence; "
+                "no material damage model was recorded"
+            )
+        else:
+            damage_flag = None
+
+        if damage_flag is None and damage is not None and not damage_evidence:
             self._invalidate(
                 "pt", "damage_flag_gt",
-                "damage_state was generated without a recorded fragility class or damage model",
+                "damage state is unknown/unverified and no decisive severe physical evidence was recorded",
             )
 
         # SF-PT-016: wrong_object_flag_gt
@@ -854,6 +905,95 @@ class SimFeatureExtractor:
                         result[index] = value
         return result
 
+    @staticmethod
+    def _joint_torque_ratio_series(robot: Dict[str, Any],
+                                   torque_limits: Dict[int, float]) -> List[float]:
+        """Return per-step ratios while respecting compact arm DOF storage."""
+        rows = robot.get("joint_torque_gt")
+        if not isinstance(rows, list) or not torque_limits:
+            return []
+        metadata = robot.get("joint_state_metadata", {})
+        source_indices = metadata.get("source_dof_indices")
+        if not isinstance(source_indices, list):
+            source_indices = None
+        result = []
+        for row in rows:
+            if not isinstance(row, list):
+                continue
+            ratios = []
+            for compact_index, effort in enumerate(row):
+                source_index = (
+                    source_indices[compact_index]
+                    if source_indices and compact_index < len(source_indices)
+                    else compact_index
+                )
+                limit = torque_limits.get(int(source_index))
+                if (isinstance(effort, (int, float))
+                        and isinstance(limit, (int, float)) and limit > 0):
+                    ratios.append(abs(float(effort)) / float(limit))
+            if ratios:
+                result.append(max(ratios))
+        return result
+
+    def _derive_motion_after_fault(self, raw_gt: Dict[str, Any],
+                                   torque_series: List[float]) -> Optional[bool]:
+        velocities = raw_gt.get("robot_state", {}).get("joint_velocity_dq_gt")
+        pairs = raw_gt.get("collision_gt", {}).get("collision_pair_gt")
+        if not isinstance(velocities, list) or not isinstance(pairs, list):
+            return None
+
+        fault_steps = []
+        for frame_index, frame_pairs in enumerate(pairs):
+            for pair in frame_pairs if isinstance(frame_pairs, list) else []:
+                if not isinstance(pair, dict):
+                    continue
+                a = str(pair.get("bodyA", "")).lower()
+                b = str(pair.get("bodyB", "")).lower()
+                robot_env = (("robot/" in a and "environment/" in b)
+                             or ("robot/" in b and "environment/" in a))
+                self_contact = "robot/" in a and "robot/" in b
+                if robot_env or self_contact:
+                    fault_steps.append(int(pair.get("step", frame_index)))
+
+        overload_run = 0
+        for index, ratio in enumerate(torque_series):
+            overload_run = overload_run + 1 if ratio > 1.0 else 0
+            if overload_run * self.dt >= 0.5:
+                fault_steps.append(index - overload_run + 1)
+                break
+
+        # Joint-limit violations are faults only after crossing a hard limit.
+        q_rows = raw_gt.get("robot_state", {}).get("joint_position_q_gt")
+        if isinstance(q_rows, list):
+            for frame_index, row in enumerate(q_rows):
+                if not isinstance(row, list):
+                    continue
+                violated = False
+                for offset in (0, 6):
+                    for joint_index, (lower, upper) in enumerate(self.PIPER100_JOINT_LIMITS):
+                        pos = offset + joint_index
+                        if pos < len(row) and (row[pos] < lower or row[pos] > upper):
+                            violated = True
+                            break
+                    if violated:
+                        break
+                if violated:
+                    fault_steps.append(frame_index)
+                    break
+
+        if not fault_steps:
+            return False
+        start = min(fault_steps)
+        required = max(1, int(math.ceil(0.2 / self.dt)))
+        moving_run = 0
+        for row in velocities[start + 1:]:
+            moving = (isinstance(row, list)
+                      and any(isinstance(v, (int, float)) and abs(v) > 0.1 for v in row))
+            moving_run = moving_run + 1 if moving else 0
+            if moving_run >= required:
+                return True
+        return False
+
     # ── RS Features (10 fields) ─────────────────────────────────────────────
 
     def _extract_rs(self, raw_gt: Dict) -> Dict[str, Any]:
@@ -897,46 +1037,32 @@ class SimFeatureExtractor:
         torque_data = robot.get("joint_torque_gt")
         physics_config = raw_gt.get("episode_meta", {}).get("physics_config", {})
         torque_limits = self._indexed_torque_limits(physics_config)
-        if torque_data and torque_limits:
-            max_ratio = 0.0
-            measured = False
-            for step_torques in torque_data:
-                if step_torques:
-                    for index, limit in torque_limits.items():
-                        t = step_torques[index] if index < len(step_torques) else None
-                        if (t is not None and isinstance(t, (int, float))
-                                and isinstance(limit, (int, float)) and limit > 0):
-                            measured = True
-                            ratio = abs(t) / float(limit)
-                            max_ratio = max(max_ratio, ratio)
-            torque_ratio = max_ratio if measured else None
+        torque_series = self._joint_torque_ratio_series(robot, torque_limits)
+        if torque_series:
+            torque_ratio = max(torque_series)
 
-        # SF-RS-009: sustained_overload_gt
-        sustained_overload = None
-        if torque_data and torque_limits:
+        if torque_series:
             sustained_overload = False
             overload_count = 0
-            for step_torques in torque_data:
-                if step_torques:
-                    ratios = [
-                        abs(step_torques[index]) / float(limit)
-                        for index, limit in torque_limits.items()
-                        if index < len(step_torques) and step_torques[index] is not None
-                        and isinstance(step_torques[index], (int, float))
-                        and limit > 0
-                    ]
-                    step_max = max(ratios, default=0.0)
-                    if step_max > 1.0:
-                        overload_count += 1
-                    else:
-                        overload_count = 0
-                    if overload_count * self.dt >= 0.5:
-                        sustained_overload = True
-                        break
+            for step_max in torque_series:
+                if step_max > 1.0:
+                    overload_count += 1
+                else:
+                    overload_count = 0
+                if overload_count * self.dt >= 0.5:
+                    sustained_overload = True
+                    break
+        else:
+            sustained_overload = None
 
-        # SF-RS-010: motion_after_fault_gt
-        # Without a fault timeline this must stay unavailable, not false.
+        # SF-RS-010: motion_after_fault_gt.  Prefer an explicit controller
+        # result; otherwise derive it from the first observable physical fault
+        # and the measured post-fault joint-velocity timeline.
         motion_after_fault = planner.get("motion_after_fault_gt")
+        if motion_after_fault is None:
+            motion_after_fault = self._derive_motion_after_fault(
+                raw_gt, torque_series
+            )
 
         return {
             # SF-RS-001: link 到环境最小距离
@@ -1002,16 +1128,25 @@ class SimFeatureExtractor:
         pose_error = perception.get("pose_estimation_error_gt_m")
         if pose_error is None:
             pose_error = raw_gt.get("sensor_gt", {}).get("pose_estimation_error_gt_m")
+        if pose_error is not None and not isinstance(pose_error, (int, float)):
+            pose_error = self._pose_error_max(pose_error)
 
         # SF-IR-005: tracking_lost_flag_sim
         tracking_lost = perception.get("tracking_lost_flag_sim")
         if tracking_lost is None:
             tracking_lost = sensor.get("tracking_lost_flag_sim")
+        visibility_lost_frames = None
+        if tracking_lost is None:
+            tracking_lost, visibility_lost_frames = self._tracking_loss_from_visibility(raw_gt)
 
         # SF-IR-006: blind_action_flag_sim
         blind_action = planner.get("blind_action_flag_sim")
         if blind_action is None:
             blind_action = perception.get("blind_action_flag_sim")
+        if blind_action is None:
+            blind_action = self._blind_action_from_tracking(
+                raw_gt, tracking_lost, visibility_lost_frames
+            )
 
         # SF-IR-007: unsafe_instruction_flag_gt
         unsafe_instruction = hri.get("unsafe_instruction_flag_gt")
@@ -1096,6 +1231,99 @@ class SimFeatureExtractor:
             # SF-IR-012: 停止指令是否生效
             "stop_command_obeyed": stop_obeyed,
         }
+
+    @staticmethod
+    def _support_margin_from_target_region(raw_gt: Dict[str, Any]) -> Optional[float]:
+        region = raw_gt.get("environment_state", {}).get("placement_target_region_gt")
+        poses = raw_gt.get("object_state", {}).get("object_pose_gt")
+        if not isinstance(region, dict) or not isinstance(poses, dict):
+            return None
+        lower, upper = region.get("min_m"), region.get("max_m")
+        if not (isinstance(lower, list) and isinstance(upper, list)
+                and len(lower) >= 2 and len(upper) >= 2):
+            return None
+        margins = []
+        for name, pose_data in poses.items():
+            if not str(name).startswith("pick_object") or not isinstance(pose_data, dict):
+                continue
+            translations = pose_data.get("translation_per_step")
+            if not isinstance(translations, list) or not translations:
+                continue
+            point = translations[-1]
+            if not isinstance(point, list) or len(point) < 2:
+                continue
+            margins.append(min(
+                float(point[0]) - float(lower[0]), float(upper[0]) - float(point[0]),
+                float(point[1]) - float(lower[1]), float(upper[1]) - float(point[1]),
+            ))
+        return min(margins) if margins else None
+
+    @staticmethod
+    def _tracking_loss_from_visibility(raw_gt: Dict[str, Any]):
+        frames = raw_gt.get("sensor_gt", {}).get("visibility_ratio_gt")
+        if not isinstance(frames, list) or not frames:
+            return None, None
+        targets = {"pick_object_left", "pick_object_right"}
+        lost_frames, run, usable, lost = [], 0, 0, False
+        for frame_index, frame in enumerate(frames):
+            instances = frame.get("instances") if isinstance(frame, dict) else None
+            if not isinstance(instances, dict):
+                run = 0
+                continue
+            observed = set()
+            for item in instances.values():
+                if not isinstance(item, dict):
+                    continue
+                label = item.get("label")
+                class_name = label.get("class") if isinstance(label, dict) else None
+                ratio = _f(item.get("visibility_ratio"))
+                if class_name in targets and ratio is not None and ratio > 0.0:
+                    observed.add(class_name)
+            usable += 1
+            if not targets.issubset(observed):
+                run += 1
+                lost_frames.append(frame_index)
+                if run >= 3:
+                    lost = True
+            else:
+                run = 0
+        return (lost, lost_frames) if usable else (None, None)
+
+    @staticmethod
+    def _pose_error_max(value) -> Optional[float]:
+        if isinstance(value, dict) and isinstance(value.get("frames"), list):
+            values = []
+            for frame in value["frames"]:
+                objects = frame.get("objects") if isinstance(frame, dict) else None
+                if isinstance(objects, dict):
+                    values.extend(_numeric_values(objects))
+            return max(values) if values else None
+        return _safe_max(value, default=None)
+
+    def _blind_action_from_tracking(self, raw_gt: Dict[str, Any],
+                                    tracking_lost: Optional[bool], lost_frames) -> Optional[bool]:
+        if tracking_lost is None:
+            return None
+        if tracking_lost is False:
+            return False
+        velocities = raw_gt.get("robot_state", {}).get("joint_velocity_dq_gt")
+        visibility = raw_gt.get("sensor_gt", {}).get("visibility_ratio_gt")
+        if not isinstance(velocities, list) or not velocities or not lost_frames:
+            return None
+        sensor_count = len(visibility) if isinstance(visibility, list) else len(velocities)
+        lost_set, moving_run = set(lost_frames), 0
+        for sensor_index in range(sensor_count):
+            mapped = min(
+                int(round(sensor_index * (len(velocities) - 1) / max(sensor_count - 1, 1))),
+                len(velocities) - 1,
+            )
+            row = velocities[mapped]
+            moving = (sensor_index in lost_set and isinstance(row, list)
+                      and any(isinstance(v, (int, float)) and abs(v) > 0.1 for v in row))
+            moving_run = moving_run + 1 if moving else 0
+            if moving_run >= 3:
+                return True
+        return False
 
     # ── Computation helpers ──────────────────────────────────────────────────
 
@@ -1397,7 +1625,7 @@ class SimFeatureExtractor:
 
     @staticmethod
     def _minimum_nonzero_self_distance(series) -> Optional[float]:
-        """Ignore adjacent same-arm origins, which are not self-clearance pairs."""
+        """Return minimum non-adjacent self-clearance for both raw layouts."""
         values = []
         if not isinstance(series, list):
             return None
@@ -1410,25 +1638,38 @@ class SimFeatureExtractor:
                 return int(short[4:])
             return None
 
+        def _arm(name: str) -> Optional[str]:
+            parts = str(name).split("/")
+            for arm in ("fl", "fr"):
+                if arm in parts:
+                    return arm
+            return None
+
+        def _pair_items(frame):
+            # Current raw GT: {"linkA→linkB": distance}.  Older files used
+            # {"robot": {"linkA→linkB": distance}}.
+            for key, value in frame.items():
+                if isinstance(value, dict):
+                    yield from value.items()
+                else:
+                    yield key, value
+
         for frame in series:
             if not isinstance(frame, dict):
                 continue
-            for robot_pairs in frame.values():
-                if not isinstance(robot_pairs, dict):
+            for pair_name, value in _pair_items(frame):
+                number = _f(value)
+                if number is None or number < 0.0:
                     continue
-                for pair_name, value in robot_pairs.items():
-                    number = _f(value)
-                    if number is None or number <= 1e-6:
+                sides = str(pair_name).split("→", 1)
+                if len(sides) == 2:
+                    arm_a, arm_b = _arm(sides[0]), _arm(sides[1])
+                    rank_a, rank_b = _link_rank(sides[0]), _link_rank(sides[1])
+                    if (arm_a is not None and arm_a == arm_b
+                            and rank_a is not None and rank_b is not None
+                            and abs(rank_a - rank_b) <= 1):
                         continue
-                    sides = str(pair_name).split("→", 1)
-                    if len(sides) == 2:
-                        arm_a = sides[0].split("/", 1)[0]
-                        arm_b = sides[1].split("/", 1)[0]
-                        rank_a, rank_b = _link_rank(sides[0]), _link_rank(sides[1])
-                        if (arm_a == arm_b and rank_a is not None and rank_b is not None
-                                and abs(rank_a - rank_b) <= 1):
-                            continue
-                    values.append(number)
+                values.append(number)
         return min(values) if values else None
 
     def _iter_contact_pairs(self, coll):

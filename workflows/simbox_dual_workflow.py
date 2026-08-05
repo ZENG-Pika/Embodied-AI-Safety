@@ -2660,8 +2660,30 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         instance_ids = []
         bboxes = []
         vis_ratios = []
+        pose_estimates = []
+        pose_errors = []
+
+        depth_prefix = sensor_prefixes["depth"].get(camera_name)
+        intrinsics = None
+        info_path = os.path.join(lmdb_path, "info.json")
+        try:
+            with open(info_path, "r", encoding="utf-8") as info_file:
+                intrinsics = json.load(info_file).get(f"{camera_name}_camera_params")
+        except Exception:
+            intrinsics = None
+
+        def _decode_depth(raw_value):
+            image = _decode_seg(raw_value)
+            if image is None:
+                return None
+            # Recorder stores metric depth as uint16 PNG with a 1e-4 m scale.
+            return image.astype(np.float64) / 10000.0
+
+        object_poses = raw_gt.get("object_state", {}).get("object_pose_gt", {})
 
         with env.begin() as txn:
+            sensor_frame_count = _count_frames(txn, seg_prefix)
+            camera_poses = _load_pickle(txn, f"camera2env_pose.{camera_name}")
             instance_labels = _load_pickle(txn, label_key)
             bbox_series = _load_pickle(txn, bbox_key)
             bbox_label_series = _load_pickle(txn, bbox_labels_key)
@@ -2714,6 +2736,20 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
                 frame_bboxes = {}
                 frame_ratios = None
+                frame_pose_estimates = {}
+                frame_pose_errors = {}
+                depth_img = None
+                if depth_prefix:
+                    depth_raw = txn.get(
+                        f"{depth_prefix}/{str(frame_idx).zfill(4)}".encode("utf-8")
+                    )
+                    if depth_raw is not None:
+                        depth_img = _decode_depth(depth_raw)
+                camera_pose = (
+                    camera_poses[frame_idx]
+                    if isinstance(camera_poses, list) and frame_idx < len(camera_poses)
+                    else None
+                )
                 for inst_id in unique_ids:
                     coords = np.where(seg_img == inst_id)
                     if len(coords[0]) == 0:
@@ -2723,7 +2759,51 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     key_id = str(inst_id)
                     frame_bboxes[key_id] = [x_min, y_min, x_max, y_max]
 
+                    label_text = (
+                        frame_instance_labels.get(key_id)
+                        if isinstance(frame_instance_labels, dict) else None
+                    )
+                    class_name = None
+                    if isinstance(label_text, dict):
+                        class_name = label_text.get("class")
+                    elif label_text is not None:
+                        for candidate in ("pick_object_left", "pick_object_right"):
+                            if candidate in str(label_text):
+                                class_name = candidate
+                                break
+                    if (class_name in ("pick_object_left", "pick_object_right")
+                            and depth_img is not None and camera_pose is not None
+                            and isinstance(intrinsics, list)):
+                        ys, xs = coords[0], coords[1]
+                        depths = depth_img[ys, xs]
+                        valid = np.isfinite(depths) & (depths > 0.0)
+                        if np.any(valid):
+                            z = depths[valid]
+                            u, v = xs[valid], ys[valid]
+                            fx, fy = float(intrinsics[0][0]), float(intrinsics[1][1])
+                            cx, cy = float(intrinsics[0][2]), float(intrinsics[1][2])
+                            camera_points = np.stack([
+                                (u - cx) * z / fx, -(v - cy) * z / fy,
+                                -z, np.ones_like(z),
+                            ], axis=1)
+                            world = (np.asarray(camera_pose) @ camera_points.T).T[:, :3]
+                            estimate = np.median(world, axis=0)
+                            frame_pose_estimates[class_name] = estimate.tolist()
+                            gt_data = object_poses.get(class_name, {})
+                            gt_series = gt_data.get("translation_per_step", []) if isinstance(gt_data, dict) else []
+                            if gt_series:
+                                mapped = min(
+                                    int(round(frame_idx * (len(gt_series) - 1)
+                                              / max(sensor_frame_count - 1, 1))),
+                                    len(gt_series) - 1,
+                                )
+                                frame_pose_errors[class_name] = float(
+                                    np.linalg.norm(estimate - np.asarray(gt_series[mapped][:3]))
+                                )
+
                 bboxes.append({"frame": frame_idx, "instances": frame_bboxes})
+                pose_estimates.append({"frame": frame_idx, "objects": frame_pose_estimates})
+                pose_errors.append({"frame": frame_idx, "objects": frame_pose_errors})
 
                 bbox_frame = (
                     bbox_series[frame_idx]
@@ -2781,6 +2861,17 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         result["instance_id_map_gt"] = instance_ids
         result["object_bbox_gt"] = bboxes
         result["visibility_ratio_gt"] = vis_ratios
+        if any(item["objects"] for item in pose_estimates):
+            result["object_pose_est"] = {
+                "frames": pose_estimates,
+                "method": "head_depth_instance_mask_visible_surface_median_backprojection",
+                "unit": "m",
+            }
+            result["pose_estimation_error_gt_m"] = {
+                "frames": pose_errors,
+                "method": "sensor_depth_estimate_vs_sim_object_center",
+                "unit": "m",
+            }
 
         return result
 

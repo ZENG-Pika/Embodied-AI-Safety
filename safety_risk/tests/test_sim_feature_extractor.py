@@ -41,7 +41,10 @@ def test_si_only_36_field_contract():
 
 
 def test_si_distances_and_occlusion_are_not_rescaled():
-    result = SimFeatureExtractor().extract(raw_gt())
+    raw = raw_gt()
+    for provenance in raw["distance_gt"]["_provenance"].values():
+        provenance["metric"] = "collider_world_aabb_surface_clearance"
+    result = SimFeatureExtractor().extract(raw)
     assert result["hs"]["d_robot_h_min_gt_m"] == pytest.approx(0.15)
     assert result["hs"]["d_ee_h_min_gt_m"] == pytest.approx(0.20)
     assert result["pt"]["d_obj_env_min_gt_m"] == pytest.approx(0.04)
@@ -63,3 +66,82 @@ def test_collision_impulse_is_peak_event_not_episode_sum():
         [{"bodyA": "object/a", "bodyB": "environment/table", "impulse_ns": 0.7}],
     ]}
     assert SimFeatureExtractor()._compute_collision_impulse(coll, "object_env") == pytest.approx(0.7)
+
+
+def test_unknown_damage_is_promoted_only_by_decisive_severe_evidence():
+    raw = raw_gt()
+    raw["outcome_gt"].update({
+        "damage_state_gt": "unknown",
+        "drop_event_gt": True,
+        "drop_height_gt": 0.6,
+    })
+    result = SimFeatureExtractor().extract(raw)
+    assert result["pt"]["damage_flag_gt"] is True
+    assert result["field_quality"]["pt"]["damage_flag_gt"]["status"] == "valid"
+
+    raw["outcome_gt"]["drop_event_gt"] = False
+    raw["outcome_gt"]["drop_height_gt"] = None
+    result = SimFeatureExtractor().extract(raw)
+    assert result["pt"]["damage_flag_gt"] is None
+
+
+def test_self_distance_supports_direct_pair_map_and_excludes_adjacent_links():
+    series = [{
+        "robot/fl/link1→robot/fl/link2": 0.0,
+        "robot/fl/link1→robot/fl/link3": 0.02,
+        "robot/fl/link1→robot/fr/link1": 0.10,
+    }]
+    assert SimFeatureExtractor._minimum_nonzero_self_distance(series) == pytest.approx(0.02)
+
+
+def test_compact_joint_torques_use_source_dof_indices():
+    raw = raw_gt()
+    raw["robot_state"].update({
+        "joint_torque_gt": [[10.0, 20.0]],
+        "joint_velocity_dq_gt": [[0.0, 0.0]],
+        "joint_state_metadata": {"source_dof_indices": [12, 14]},
+    })
+    raw["episode_meta"]["physics_config"]["joint_torque_limits_nm_by_index"] = {
+        "12": {"limit_nm": 100.0}, "14": {"limit_nm": 40.0},
+    }
+    result = SimFeatureExtractor(dt=0.1).extract(raw)
+    assert result["rs"]["joint_torque_ratio_gt"] == pytest.approx(0.5)
+
+
+def test_support_margin_falls_back_to_recorded_target_region():
+    raw = raw_gt()
+    raw["environment_state"]["placement_target_region_gt"] = {
+        "min_m": [0.0, 0.0, 0.0], "max_m": [1.0, 1.0, 1.0],
+    }
+    raw["object_state"]["object_pose_gt"] = {
+        "pick_object_left": {"translation_per_step": [[0.2, 0.3, 0.1]]},
+        "pick_object_right": {"translation_per_step": [[0.7, 0.6, 0.1]]},
+    }
+    result = SimFeatureExtractor().extract(raw)
+    assert result["pt"]["support_margin_gt_m"] == pytest.approx(0.2)
+
+
+def test_visibility_loss_and_motion_produce_blind_action():
+    raw = raw_gt()
+    present = {
+        "1": {"label": {"class": "pick_object_left"}, "visibility_ratio": 1.0},
+        "2": {"label": {"class": "pick_object_right"}, "visibility_ratio": 1.0},
+    }
+    raw["sensor_gt"]["visibility_ratio_gt"] = [
+        {"instances": present}, {"instances": {}}, {"instances": {}}, {"instances": {}}
+    ]
+    raw["robot_state"]["joint_velocity_dq_gt"] = [[0.0], [0.2], [0.2], [0.2]]
+    result = SimFeatureExtractor().extract(raw)
+    assert result["ir"]["tracking_lost_flag_sim"] is True
+    assert result["ir"]["blind_action_flag_sim"] is True
+
+
+def test_motion_after_robot_environment_collision_uses_velocity_timeline():
+    raw = raw_gt()
+    raw["collision_gt"]["collision_pair_gt"] = [
+        [{"bodyA": "robot/link", "bodyB": "environment/table", "step": 0}],
+        [], [], [],
+    ]
+    raw["robot_state"]["joint_velocity_dq_gt"] = [[0.0], [0.2], [0.2], [0.2]]
+    result = SimFeatureExtractor(dt=0.1).extract(raw)
+    assert result["rs"]["motion_after_fault_gt"] is True
