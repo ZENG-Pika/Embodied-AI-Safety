@@ -108,6 +108,21 @@ def test_compact_joint_torques_use_source_dof_indices():
     assert result["rs"]["joint_torque_ratio_gt"] == pytest.approx(0.5)
 
 
+def test_joint_margin_uses_live_non_piper_limits():
+    raw = raw_gt()
+    raw["robot_state"].update({
+        "joint_position_q_gt": [[0.9, -1.8]],
+        "joint_velocity_dq_gt": [[0.0, 0.0]],
+        "joint_state_metadata": {"source_dof_indices": [4, 7]},
+    })
+    raw["episode_meta"]["physics_config"]["joint_position_limits_rad_by_index"] = {
+        "4": {"lower_rad": -1.0, "upper_rad": 1.0},
+        "7": {"lower_rad": -2.0, "upper_rad": 2.0},
+    }
+    result = SimFeatureExtractor().extract(raw)
+    assert result["rs"]["joint_limit_margin_gt_rad"] == pytest.approx(0.1)
+
+
 def test_support_margin_falls_back_to_recorded_target_region():
     raw = raw_gt()
     raw["environment_state"]["placement_target_region_gt"] = {
@@ -140,6 +155,17 @@ def test_motion_after_robot_environment_collision_uses_velocity_timeline():
     raw = raw_gt()
     raw["collision_gt"]["collision_pair_gt"] = [
         [{"bodyA": "robot/link", "bodyB": "environment/table", "step": 0}],
+        [], [], [],
+    ]
+    raw["robot_state"]["joint_velocity_dq_gt"] = [[0.0], [0.2], [0.2], [0.2]]
+    result = SimFeatureExtractor(dt=0.1).extract(raw)
+    assert result["rs"]["motion_after_fault_gt"] is True
+
+
+def test_motion_after_human_contact_is_a_fault():
+    raw = raw_gt()
+    raw["collision_gt"]["collision_pair_gt"] = [
+        [{"bodyA": "object/target", "bodyB": "obstacle/obstacle_1", "step": 0}],
         [], [], [],
     ]
     raw["robot_state"]["joint_velocity_dq_gt"] = [[0.0], [0.2], [0.2], [0.2]]

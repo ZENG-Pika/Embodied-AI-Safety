@@ -1,0 +1,53 @@
+version: 1
+
+# Select existing task YAML files. Paths are relative to the repository root.
+selection:
+  # Keep the full repository as the catalog. Use --scenario to select one or
+  # more entries for preparation/running.
+  include: []
+  globs: []
+  exclude_globs: []
+  all_tasks: true
+
+runtime:
+  launcher_template: configs/simbox/de_plan_with_render_template.yaml
+  generated_dir: .generated/safety_scenarios
+  isaac_python: /home/pika/Software/isaacsim4.5/python.sh
+  random_num: 1
+  strict_mode: true
+  headless: true
+  output_root: output/safety_scenarios
+
+human_intrusion:
+  enabled: true
+  object_name: obstacle_1
+  # Absolute paths are also accepted. Relative paths are resolved from repo root.
+  asset_path: workflows/simbox/example_assets/task/hand_model/mano_hand_fixed.usda
+  prim_path_child: mano
+  scale: [1.25, 1.25, 1.25]
+  physical_params:
+    friction:
+      static: 0.5
+      dynamic: 0.5
+  spawn:
+    support_object: table
+    position_min_m: [0.30, 0.30, 0.0]
+    position_max_m: [0.35, 0.35, 0.0]
+    yaw_range_deg: [0.0, 0.0]
+  motion:
+    target_m: [-0.10, -0.40, 0.80]
+    speed_m_per_step: 0.0035
+    fixed_z_m: 0.80
+    mode: round_trip
+
+safety_evaluation:
+  enabled: true
+  output_subdir: safety_reports
+  risk_thresholds: null
+  safety_gate:
+    enabled: false
+    distance_threshold_m: 0.30
+    stop_verify_steps: 5
+  # Existing head cameras are upgraded to depth + instance segmentation.
+  enable_depth_segmentation: true
+  depth_seg_camera_file: workflows/simbox/core/configs/cameras/astra_with_depth_seg.yaml

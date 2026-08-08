@@ -139,9 +139,18 @@ class BananaBaseTask(BaseTask):
 
         # Update objects
         self.cfg = update_rigid_objs(self.cfg)
-        self.cfg = update_articulated_objs(self.cfg)
+        reload_articulated = any(
+            obj_cfg.get("target_class") == "ArticulatedObject"
+            and obj_cfg.get("reload_each_episode", True)
+            for obj_cfg in self.cfg["objects"]
+        )
+        if reload_articulated:
+            self.cfg = update_articulated_objs(self.cfg)
         for cfg in self.cfg["objects"]:
-            if cfg.get("apply_randomization", False):
+            if cfg.get("apply_randomization", False) and (
+                cfg.get("target_class") != "ArticulatedObject"
+                or cfg.get("reload_each_episode", True)
+            ):
                 delete_prim(os.path.dirname(self.objects[cfg["name"]].prim_path))
                 self.objects[cfg["name"]] = self._load_obj(cfg)
                 self._task_objects[cfg["name"]] = self.objects[cfg["name"]]
@@ -161,7 +170,10 @@ class BananaBaseTask(BaseTask):
 
         # Update objects
         for cfg in self.cfg["objects"]:
-            if cfg.get("apply_randomization", False):
+            if cfg.get("apply_randomization", False) and (
+                cfg.get("target_class") != "ArticulatedObject"
+                or cfg.get("reload_each_episode", True)
+            ):
                 delete_prim(os.path.dirname(self.objects[cfg["name"]].prim_path))
                 self.objects[cfg["name"]] = self._load_obj(cfg)
                 self._task_objects[cfg["name"]] = self.objects[cfg["name"]]
@@ -409,7 +421,7 @@ class BananaBaseTask(BaseTask):
                                         object_name + "_forbid_collision"
                                     ] = RigidContactView(
                                         prim_paths_expr=self._task_objects[object_name].object_prim_path
-                                        + "/instance/*",
+                                        + "/*",
                                         filter_paths_expr=forbid_collision_paths,
                                         disable_stablization=False,
                                         max_contact_count=1000,

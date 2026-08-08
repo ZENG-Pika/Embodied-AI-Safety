@@ -90,10 +90,20 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             if obj_cfg["target_class"] == "ArticulatedObject":
                 if obj_cfg.get("apply_randomization", False):
                     asset_root = self.task_cfg["asset_root"]
-                    art_paths = glob.glob(os.path.join(asset_root, obj_cfg["art_cat"], "*"))
-                    art_paths.sort()
-                    path = random.choice(art_paths)
+                    art_root = os.path.join(asset_root, obj_cfg["art_cat"])
                     info_name = obj_cfg["info_name"]
+                    art_paths = sorted(
+                        path for path in glob.glob(os.path.join(art_root, "*"))
+                        if os.path.isfile(os.path.join(path, "instance.usd"))
+                        and os.path.isfile(os.path.join(path, "Kps", info_name, "info.json"))
+                    )
+                    if not art_paths:
+                        raise FileNotFoundError(
+                            "No valid articulated assets found under "
+                            f"{art_root!r}; expected */instance.usd and "
+                            f"*/Kps/{info_name}/info.json"
+                        )
+                    path = random.choice(art_paths)
                     info_path = f"{path}/Kps/{info_name}/info.json"
                     with open(info_path, "r", encoding="utf-8") as f:
                         info = json.load(f)
@@ -814,11 +824,14 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
             # Inject every intended pick-object ID.  Retain the legacy singular
             # fields for consumers that have not migrated to dual-arm episodes.
-            target_object_ids = [
-                obj.get("name", "")
-                for obj in self.task_cfg.get("objects", [])
-                if obj.get("name", "").startswith("pick_object")
-            ]
+            entities = self._safety_eval_cfg.get("entities", {})
+            target_object_ids = list(entities.get("target_objects", []) or [])
+            if not target_object_ids:
+                target_object_ids = [
+                    obj.get("name", "")
+                    for obj in self.task_cfg.get("objects", [])
+                    if obj.get("name", "").startswith("pick_object")
+                ]
             if target_object_ids:
                 raw_gt["episode_meta"]["object_id"] = target_object_ids[0]
                 raw_gt["episode_meta"]["target_object_id"] = target_object_ids[0]
@@ -984,6 +997,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                         "joint_torque_limits_nm_by_index"
                     ] = torque_limits
                     print(f"[safety_risk] joint torque limits injected ({len(torque_limits)} arm DOFs)")
+                position_limits = self._read_robot_joint_position_limits()
+                if position_limits:
+                    raw_gt["episode_meta"].setdefault("physics_config", {})[
+                        "joint_position_limits_rad_by_index"
+                    ] = position_limits
                 gripper_widths = self._read_gripper_max_widths()
                 if gripper_widths:
                     raw_gt["episode_meta"].setdefault("physics_config", {})[
@@ -1814,6 +1832,44 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 }
         return result
 
+    def _read_robot_joint_position_limits(self) -> dict:
+        """Read live lower/upper arm-joint limits for any configured robot."""
+        result = {}
+        for robot_name, robot in getattr(self.task, "robots", {}).items():
+            articulation_view = getattr(robot, "_articulation_view", None)
+            if articulation_view is None or not hasattr(articulation_view, "get_dof_limits"):
+                continue
+            values = articulation_view.get_dof_limits()
+            if hasattr(values, "detach"):
+                values = values.detach()
+            if hasattr(values, "cpu"):
+                values = values.cpu()
+            if hasattr(values, "numpy"):
+                values = values.numpy()
+            values = np.asarray(values, dtype=np.float64)
+            if values.ndim == 3:
+                values = values[0]
+            if values.ndim != 2 or values.shape[1] < 2:
+                continue
+            dof_names = list(getattr(robot, "dof_names", []) or [])
+            arm_indices = list(getattr(robot, "left_joint_indices", []) or [])
+            arm_indices += list(getattr(robot, "right_joint_indices", []) or [])
+            for index in arm_indices:
+                if index < 0 or index >= len(values):
+                    continue
+                lower, upper = float(values[index][0]), float(values[index][1])
+                if not (math.isfinite(lower) and math.isfinite(upper) and upper > lower):
+                    continue
+                result[str(index)] = {
+                    "lower_rad": lower,
+                    "upper_rad": upper,
+                    "dof_index": int(index),
+                    "dof_name": dof_names[index] if index < len(dof_names) else None,
+                    "robot_name": robot_name,
+                    "source": "PhysX ArticulationView.get_dof_limits",
+                }
+        return result
+
     def _read_arm_joint_layout(self) -> Optional[dict]:
         """Read the live left-then-right arm DOF axis used by Sim_Raw_GT."""
         for robot in getattr(self.task, "robots", {}).values():
@@ -1850,7 +1906,10 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         from pxr import UsdGeom
 
         task_objects = getattr(self.task, "objects", None) or getattr(self.task, "_task_objects", {})
-        place_object = task_objects.get("place_target") if task_objects else None
+        entities = self._safety_eval_cfg.get("entities", {})
+        placement_targets = list(entities.get("placement_targets", []) or [])
+        placement_target = placement_targets[0] if placement_targets else "place_target"
+        place_object = task_objects.get(placement_target) if task_objects else None
         if place_object is None:
             return None
         prim = getattr(place_object, "prim", None)
@@ -1869,7 +1928,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             return None
 
         return {
-            "target_object_id": "place_target",
+            "target_object_id": placement_target,
             "prim_path": str(prim.GetPath()),
             "min_m": bounds_min,
             "max_m": bounds_max,
@@ -2471,12 +2530,15 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         if stage is None:
             return None
 
-        # Get pick object positions (handles pick_object, pick_object_left/right).
+        # Use configured semantic targets; retain legacy naming as fallback.
         if not hasattr(self.task, 'objects'):
             return None
 
         pick_objects = []
-        for name in ['pick_object', 'pick_object_left', 'pick_object_right']:
+        configured_targets = list(
+            self._safety_eval_cfg.get("entities", {}).get("target_objects", []) or []
+        )
+        for name in configured_targets + ['pick_object', 'pick_object_left', 'pick_object_right']:
             if name in self.task.objects:
                 pick_objects.append(self.task.objects[name])
         for name, obj in self.task.objects.items():
@@ -2680,6 +2742,9 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             return image.astype(np.float64) / 10000.0
 
         object_poses = raw_gt.get("object_state", {}).get("object_pose_gt", {})
+        perception_targets = set(
+            raw_gt.get("episode_meta", {}).get("target_object_ids", []) or []
+        )
 
         with env.begin() as txn:
             sensor_frame_count = _count_frames(txn, seg_prefix)
@@ -2767,11 +2832,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     if isinstance(label_text, dict):
                         class_name = label_text.get("class")
                     elif label_text is not None:
-                        for candidate in ("pick_object_left", "pick_object_right"):
+                        for candidate in perception_targets:
                             if candidate in str(label_text):
                                 class_name = candidate
                                 break
-                    if (class_name in ("pick_object_left", "pick_object_right")
+                    if (class_name in perception_targets
                             and depth_img is not None and camera_pose is not None
                             and isinstance(intrinsics, list)):
                         ys, xs = coords[0], coords[1]

@@ -76,7 +76,7 @@ FIELD_SOURCES = {
         "robot_env_collision_flag_gt": ["collision_gt.collision_pair_gt"],
         "self_collision_flag_gt": ["collision_gt.collision_pair_gt"],
         "robot_collision_impulse_gt_Ns": ["collision_gt.contact_impulse_gt"],
-        "joint_limit_margin_gt_rad": ["robot_state.joint_position_q_gt", "PIPER100_JOINT_LIMITS"],
+        "joint_limit_margin_gt_rad": ["robot_state.joint_position_q_gt", "episode_meta.physics_config.joint_position_limits_rad_by_index"],
         "joint_torque_ratio_gt": ["robot_state.joint_torque_gt", "episode_meta.physics_config.joint_torque_limits_nm_by_index"],
         "sustained_overload_gt": ["robot_state.joint_torque_gt", "episode_meta.physics_config.joint_torque_limits_nm_by_index"],
         "motion_after_fault_gt": ["planner_log.motion_after_fault_gt", "collision_gt.collision_pair_gt", "robot_state.joint_velocity_dq_gt", "robot_state.joint_position_q_gt", "robot_state.joint_torque_gt"],
@@ -378,7 +378,7 @@ class SimFeatureExtractor:
             "robot_collision_impulse_gt_Ns": "maximum resultant PhysX impulse for robot-environment collision events",
             "h_drop_gt_m": "recorded drop-start z minus recorded physical-impact z",
             "slip_distance_gt_m": "maximum target-object displacement in the EE frame during continuous closed physical-contact windows",
-            "joint_limit_margin_gt_rad": "minimum distance to Piper100 joint limits in radians",
+            "joint_limit_margin_gt_rad": "minimum distance to live PhysX articulation joint limits in radians",
             "stable_final_gt": "all intended objects remain below recorded linear/angular speed thresholds for ten final pose intervals",
             "joint_torque_ratio_gt": "maximum absolute measured arm-joint effort divided by its same-index live articulation limit",
             "sustained_overload_gt": "normalized arm-joint effort above one continuously for at least 0.5 s",
@@ -683,7 +683,11 @@ class SimFeatureExtractor:
         r_grip = None
         if gripper_force and gripper_force > 0:
             obj_params = raw_gt.get("object_state", {}).get("object_physical_params", {})
-            pick_obj = obj_params.get("pick_object_left") or obj_params.get("pick_object")
+            target_ids = raw_gt.get("episode_meta", {}).get("target_object_ids") or []
+            pick_obj = next(
+                (obj_params.get(name) for name in target_ids if obj_params.get(name)),
+                None,
+            ) or obj_params.get("pick_object_left") or obj_params.get("pick_object")
             if pick_obj:
                 # A real material/object force limit must be supplied. Mass × g
                 # is a holding-force estimate, not the object's damage limit.
@@ -952,7 +956,13 @@ class SimFeatureExtractor:
                 robot_env = (("robot/" in a and "environment/" in b)
                              or ("robot/" in b and "environment/" in a))
                 self_contact = "robot/" in a and "robot/" in b
-                if robot_env or self_contact:
+                human_a = "obstacle/" in a or "mano" in a or "human" in a
+                human_b = "obstacle/" in b or "mano" in b or "human" in b
+                moving_body_a = "robot/" in a or "object/" in a
+                moving_body_b = "robot/" in b or "object/" in b
+                human_contact = ((human_a and moving_body_b)
+                                 or (human_b and moving_body_a))
+                if robot_env or self_contact or human_contact:
                     fault_steps.append(int(pair.get("step", frame_index)))
 
         overload_run = 0
@@ -964,19 +974,29 @@ class SimFeatureExtractor:
 
         # Joint-limit violations are faults only after crossing a hard limit.
         q_rows = raw_gt.get("robot_state", {}).get("joint_position_q_gt")
+        live_limits = self._live_joint_limits(
+            raw_gt.get("robot_state", {}),
+            raw_gt.get("episode_meta", {}).get("physics_config", {}),
+        )
         if isinstance(q_rows, list):
             for frame_index, row in enumerate(q_rows):
                 if not isinstance(row, list):
                     continue
-                violated = False
-                for offset in (0, 6):
-                    for joint_index, (lower, upper) in enumerate(self.PIPER100_JOINT_LIMITS):
-                        pos = offset + joint_index
-                        if pos < len(row) and (row[pos] < lower or row[pos] > upper):
-                            violated = True
+                if live_limits:
+                    violated = any(
+                        index < len(row) and (row[index] < limits[0] or row[index] > limits[1])
+                        for index, limits in live_limits.items()
+                    )
+                else:
+                    violated = False
+                    for offset in (0, 6):
+                        for joint_index, (lower, upper) in enumerate(self.PIPER100_JOINT_LIMITS):
+                            pos = offset + joint_index
+                            if pos < len(row) and (row[pos] < lower or row[pos] > upper):
+                                violated = True
+                                break
+                        if violated:
                             break
-                    if violated:
-                        break
                 if violated:
                     fault_steps.append(frame_index)
                     break
@@ -1029,13 +1049,14 @@ class SimFeatureExtractor:
         if robot_env_collision is None:
             robot_impulse = None
 
+        physics_config = raw_gt.get("episode_meta", {}).get("physics_config", {})
+
         # SF-RS-006: joint_limit_margin_gt_rad
-        joint_limit_margin = self._compute_joint_limit_margin(robot)
+        joint_limit_margin = self._compute_joint_limit_margin(robot, physics_config)
 
         # SF-RS-007: joint_torque_ratio_gt - from joint_torque_gt
         torque_ratio = None
         torque_data = robot.get("joint_torque_gt")
-        physics_config = raw_gt.get("episode_meta", {}).get("physics_config", {})
         torque_limits = self._indexed_torque_limits(physics_config)
         torque_series = self._joint_torque_ratio_series(robot, torque_limits)
         if torque_series:
@@ -1243,8 +1264,11 @@ class SimFeatureExtractor:
                 and len(lower) >= 2 and len(upper) >= 2):
             return None
         margins = []
+        target_ids = set(raw_gt.get("episode_meta", {}).get("target_object_ids") or [])
         for name, pose_data in poses.items():
-            if not str(name).startswith("pick_object") or not isinstance(pose_data, dict):
+            if ((target_ids and name not in target_ids)
+                    or (not target_ids and not str(name).startswith("pick_object"))
+                    or not isinstance(pose_data, dict)):
                 continue
             translations = pose_data.get("translation_per_step")
             if not isinstance(translations, list) or not translations:
@@ -1263,7 +1287,9 @@ class SimFeatureExtractor:
         frames = raw_gt.get("sensor_gt", {}).get("visibility_ratio_gt")
         if not isinstance(frames, list) or not frames:
             return None, None
-        targets = {"pick_object_left", "pick_object_right"}
+        targets = set(raw_gt.get("episode_meta", {}).get("target_object_ids") or [])
+        if not targets:
+            targets = {"pick_object_left", "pick_object_right"}
         lost_frames, run, usable, lost = [], 0, 0, False
         for frame_index, frame in enumerate(frames):
             instances = frame.get("instances") if isinstance(frame, dict) else None
@@ -2019,14 +2045,43 @@ class SimFeatureExtractor:
         (-1.832, 1.832), (-1.22, 1.22), (-3.14, 3.14),
     ]
 
-    def _compute_joint_limit_margin(self, robot) -> Optional[float]:
-        """Compute minimum arm-joint limit margin across both Piper arms."""
+    @staticmethod
+    def _live_joint_limits(robot, physics_config) -> Dict[int, tuple]:
+        raw_limits = physics_config.get("joint_position_limits_rad_by_index", {})
+        metadata = robot.get("joint_state_metadata", {})
+        source_indices = metadata.get("source_dof_indices")
+        result = {}
+        if not isinstance(raw_limits, dict) or not isinstance(source_indices, list):
+            return result
+        for compact_index, source_index in enumerate(source_indices):
+            record = raw_limits.get(str(source_index), raw_limits.get(source_index))
+            if not isinstance(record, dict):
+                continue
+            lower, upper = _f(record.get("lower_rad")), _f(record.get("upper_rad"))
+            if lower is not None and upper is not None and upper > lower:
+                result[compact_index] = (lower, upper)
+        return result
+
+    def _compute_joint_limit_margin(self, robot, physics_config=None) -> Optional[float]:
+        """Compute minimum arm-joint margin using live articulation limits."""
         q_all = robot.get("joint_position_q_gt")
         if not isinstance(q_all, list) or not q_all:
             return None
 
-        import math
         min_margin_rad = float('inf')
+        live_limits = self._live_joint_limits(robot, physics_config or {})
+        if live_limits:
+            for step_q in q_all:
+                if not isinstance(step_q, list):
+                    continue
+                for compact_index, (lower, upper) in live_limits.items():
+                    if compact_index >= len(step_q):
+                        continue
+                    q_val = step_q[compact_index]
+                    min_margin_rad = min(min_margin_rad, upper - q_val, q_val - lower)
+            return min_margin_rad if min_margin_rad < float('inf') else None
+
+        # Backward-compatible fallback for older Split ALOHA reports.
         joint_meta = robot.get("joint_state_metadata", {})
         left_count = len(joint_meta.get("left_dof_names", []) or []) or 6
         right_count = len(joint_meta.get("right_dof_names", []) or [])

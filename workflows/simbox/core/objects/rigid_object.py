@@ -34,7 +34,9 @@ class RigidObject(RigidPrim):
         cfg_name = cfg["name"]
         cfg_path = cfg["path"]
         prim_path = f"{root_prim_path}/{cfg_name}"
-        usd_path = f"{asset_root}/{cfg_path}"
+        # Runtime safety overlays may inject a shared asset outside a task's
+        # asset_root. Preserve absolute paths instead of prefixing them twice.
+        usd_path = cfg_path if os.path.isabs(cfg_path) else os.path.join(asset_root, cfg_path)
         self.init_translation = cfg.get("init_translation", None)
         self.init_orientation = cfg.get("init_orientation", None)
         self.init_parent = cfg.get("init_parent", None)

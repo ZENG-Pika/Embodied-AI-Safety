@@ -4,9 +4,10 @@ import os
 import random
 
 import numpy as np
+from pxr import Usd, UsdPhysics
 from core.objects.base_object import register_object
 from omni.isaac.core.articulations.articulation import Articulation
-from omni.isaac.core.utils.stage import add_reference_to_stage
+from omni.isaac.core.utils.stage import add_reference_to_stage, get_current_stage
 
 try:
     from omni.isaac.core.materials.omni_pbr import OmniPBR  # Isaac Sim 4.1.0 / 4.2.0
@@ -96,7 +97,26 @@ class ArticulatedObject(Articulation):
         self.object_joint_number = 0
         # Contact plane normal
         self.contact_plane_normal = None
-        add_reference_to_stage(usd_path=self.usd_path, prim_path=self.object_prim_path)
+        reference_prim_path = self.object_prim_path
+        add_reference_to_stage(usd_path=self.usd_path, prim_path=reference_prim_path)
+
+        # Some assets keep the ArticulationRootAPI below the USD reference
+        # prim (for example, microwave assets use ``<object>/instance``).
+        # Isaac Sim 4.5 requires Articulation to bind to that exact prim.
+        stage = get_current_stage()
+        reference_prim = stage.GetPrimAtPath(reference_prim_path)
+        articulation_roots = [
+            prim.GetPath().pathString
+            for prim in Usd.PrimRange(reference_prim)
+            if prim.HasAPI(UsdPhysics.ArticulationRootAPI)
+        ]
+        if not articulation_roots:
+            raise RuntimeError(
+                f"No PhysicsArticulationRootAPI found below {reference_prim_path} "
+                f"for asset {self.usd_path}"
+            )
+        self.object_reference_prim_path = reference_prim_path
+        self.object_prim_path = articulation_roots[0]
 
     def get_joint_position(self, stage):
         joint_parent_prim = stage.GetPrimAtPath(self.object_joint_path.rsplit("/", 1)[0])

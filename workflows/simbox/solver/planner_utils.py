@@ -617,10 +617,18 @@ def solve_ik_traj_with_standoff(
 def build_plant(time_step=0.004, discrete_contact_solver="sap", robot_name=None, init_qpos=None):
 
     global robot_plant
-    multibody_plant_config = MultibodyPlantConfig(
-        time_step=time_step,
-        discrete_contact_solver=discrete_contact_solver,
-    )
+    try:
+        multibody_plant_config = MultibodyPlantConfig(
+            time_step=time_step,
+            discrete_contact_solver=discrete_contact_solver,
+        )
+    except AttributeError:
+        # Newer Drake releases renamed this configuration field while
+        # retaining the same string values (for example, "sap").
+        multibody_plant_config = MultibodyPlantConfig(
+            time_step=time_step,
+            discrete_contact_approximation=discrete_contact_solver,
+        )
     builder = DiagramBuilder()
     robot_plant, _ = AddMultibodyPlant(multibody_plant_config, builder)
     if "split_aloha" in robot_name:
@@ -646,10 +654,20 @@ def build_plant(time_step=0.004, discrete_contact_solver="sap", robot_name=None,
     return robot_plant, fk_plant_context
 
 
+def _add_model_from_file(parser, model_path):
+    """Load one model across old and new Drake Parser APIs."""
+    if hasattr(parser, "AddModelFromFile"):
+        return parser.AddModelFromFile(model_path)
+    model_instances = parser.AddModels(model_path)
+    if len(model_instances) != 1:
+        raise RuntimeError(f"Expected one model in {model_path}, got {len(model_instances)}")
+    return model_instances[0]
+
+
 def AddR5a(plant, init_qpos):
     franka_combined_path = "workflows/simbox/panda_drake/r5a/R5a.urdf"
     parser = Parser(plant)
-    franka = parser.AddModelFromFile(franka_combined_path)
+    franka = _add_model_from_file(parser, franka_combined_path)
     plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base_link"))
 
     # Set default positions:
@@ -668,7 +686,7 @@ def AddR5a(plant, init_qpos):
 def AddPiper(plant, init_qpos):
     franka_combined_path = "workflows/simbox/panda_drake/piper100/piper100.urdf"
     parser = Parser(plant)
-    franka = parser.AddModelFromFile(franka_combined_path)
+    franka = _add_model_from_file(parser, franka_combined_path)
     plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("arm_base"))
 
     # Set default positions:
@@ -687,7 +705,7 @@ def AddPiper(plant, init_qpos):
 def AddFranka(plant, init_qpos):
     franka_combined_path = "workflows/simbox/panda_drake/panda_arm_hand.urdf"
     parser = Parser(plant)
-    franka = parser.AddModelFromFile(franka_combined_path)
+    franka = _add_model_from_file(parser, franka_combined_path)
     plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("panda_link0"))
     # Set default positions:
     if init_qpos is None:
