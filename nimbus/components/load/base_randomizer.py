@@ -22,16 +22,19 @@ class LayoutRandomizer(Iterator):
                             scenes are counted towards the randomization limit.
     """
 
-    def __init__(self, scene_iter: Iterator, random_num: int, strict_mode: bool = False):
+    def __init__(self, scene_iter: Iterator, random_num: int, strict_mode: bool = False, max_attempts: int = None):
         super().__init__()
         self.scene_iter = scene_iter
         self.random_num = random_num
         self.strict_mode = strict_mode
+        self.max_attempts = max_attempts
+        self.retry_count = 0
         self.cur_index = sys.maxsize
         self.scene: Optional[Scene] = None
 
     def reset(self, scene):
         self.cur_index = 0
+        self.retry_count = 0
         self.scene = scene
 
     def _fetch_next_scene(self):
@@ -47,10 +50,13 @@ class LayoutRandomizer(Iterator):
         try:
             if self.strict_mode and self.scene is not None:
                 if not self.scene.get_generate_status():
+                    if self.max_attempts is not None and self.retry_count >= self.max_attempts:
+                        raise StopIteration(f"Maximum randomization attempts reached: {self.max_attempts}")
                     self.logger.info("strict_mode is open, retry the randomization to generate sequence.")
                     st = time.time()
                     scene = self._randomize_with_status(self.scene)
                     self.collect_seq_info(1, time.time() - st)
+                    self.retry_count += 1
                     return scene
             if self.cur_index >= self.random_num:
                 self._fetch_next_scene()
@@ -58,6 +64,7 @@ class LayoutRandomizer(Iterator):
                 st = time.time()
                 scene = self._randomize_with_status(self.scene)
                 self.collect_seq_info(1, time.time() - st)
+                self.retry_count += 1
                 self.cur_index += 1
             return scene
         except StopIteration:

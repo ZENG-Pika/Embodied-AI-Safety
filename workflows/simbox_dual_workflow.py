@@ -465,12 +465,27 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         #     self.world.step(render=True)
 
         step_id = 0
-        episode_success = True
+        policy_cfg = dict(self.task_cfg.get("policy", {}) or {})
+        random_dp_enabled = bool(
+            policy_cfg.get("enabled", False)
+            and policy_cfg.get("type") == "random_diffusion"
+        )
+        trained_dp_enabled = bool(
+            policy_cfg.get("enabled", False)
+            and policy_cfg.get("type") == "trained_diffusion"
+        )
+        random_dp_policy = self._initialize_random_diffusion_policy() if random_dp_enabled else None
+        trained_dp_policy = self._initialize_trained_diffusion_policy() if trained_dp_enabled else None
+        policy_enabled = random_dp_enabled or trained_dp_enabled
+        episode_success = not policy_enabled
         should_continue = True
-        max_episode_length = self.task_cfg["data"]["max_episode_length"]
+        max_episode_length = int(
+            policy_cfg.get("max_episode_steps", self.task_cfg["data"]["max_episode_length"])
+        )
         episode_stats = {"succeed_times": 0, "current_times": 0}
 
-        should_continue = self.plan_first_skill(self.skills, should_continue)
+        if not policy_enabled:
+            should_continue = self.plan_first_skill(self.skills, should_continue)
 
         # Warmup
         for _ in range(10):
@@ -478,11 +493,19 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             # self._init_static_objects(self.task)
             self.world.step(render=False)
 
-        while not (step_id >= max_episode_length or (not self.skills and not episode_success) or (not should_continue)):
+        while not (
+            step_id >= max_episode_length
+            or (not policy_enabled and not self.skills and not episode_success)
+            or (not should_continue)
+        ):
             obs = self.world.get_observations()
             action_dict = {}
             record_flag = True
-            if self.skills and should_continue:
+            if random_dp_enabled:
+                action_dict = self._random_diffusion_action(obs, random_dp_policy)
+            elif trained_dp_enabled:
+                action_dict = self._trained_diffusion_action(obs, trained_dp_policy)
+            elif self.skills and should_continue:
                 # Process current skills
                 current_skills = self.skills[0]
                 for robot_name, skill_sequences in current_skills.items():
@@ -526,10 +549,26 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             self.world.step(render=False)
 
             step_id += 1
-            if self.skills:
+            if self.skills and not policy_enabled:
                 episode_success, should_continue = self.update_skill_states(
                     self.skills, episode_success, should_continue
                 )
+
+        if random_dp_enabled and step_id >= max_episode_length:
+            # Store a completed rollout even though an untrained policy is not
+            # expected to satisfy the task semantics.
+            end = True
+            length = step_id
+            print(f"[random_dp] rollout complete ({step_id} steps, task_success=false)")
+        elif trained_dp_enabled and step_id >= max_episode_length:
+            episode_success = self._finalize_trained_policy_rollout(trained_dp_policy)
+            end = True
+            length = step_id
+            print(
+                f"[trained_dp] rollout complete ({step_id} steps, "
+                f"task_success={episode_success})"
+            )
+            self._close_trained_diffusion_policy(trained_dp_policy)
 
         if end:
             if self.step_replay:
@@ -720,7 +759,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             mode: str - "once" (stop at target) or "round_trip" (bounce back and forth)
         """
         obs_cfg = self._safety_eval_cfg.get("obstacle", {})
-        if not obs_cfg.get("enabled", True):
+        if not obs_cfg.get("enabled", True) or not obs_cfg.get("motion_enabled", True):
             return
 
         obs_name = obs_cfg.get("name", "obstacle_1")
@@ -821,6 +860,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
             # Inject episode_id (timestamp-dependent, can't be in task_cfg)
             raw_gt["episode_meta"]["episode_id"] = episode_id
+            if hasattr(self, "_policy_manifest"):
+                raw_gt["episode_meta"]["policy"] = dict(self._policy_manifest)
+                self._atomic_write_json(
+                    episode_dir / "policy_manifest.json", self._policy_manifest
+                )
 
             # Inject every intended pick-object ID.  Retain the legacy singular
             # fields for consumers that have not migrated to dual-arm episodes.
@@ -1099,7 +1143,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
             self._compact_sim_raw_gt(raw_gt)
             raw_gt_path = episode_dir / "sim_raw_gt.json"
-            self._atomic_write_json(raw_gt_path, raw_gt)
+            self._atomic_write_json(raw_gt_path, raw_gt, pretty=True)
             print(f"[safety_risk] 1/4 Sim_Raw_GT → {raw_gt_path}")
 
             # ── Step 2: Sim_Features (from Raw_GT) ──
@@ -1609,10 +1653,10 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         return result
 
     @staticmethod
-    def _atomic_write_json(path, payload) -> None:
+    def _atomic_write_json(path, payload, *, pretty: bool = False) -> None:
         from safety_risk.io_utils import atomic_write_json
 
-        atomic_write_json(path, payload)
+        atomic_write_json(path, payload, pretty=pretty)
 
     def _read_scene_mesh_info(self, exported_stage_path=None) -> dict:
         """S-ENV-001: Export the complete live USD collision scene.
@@ -3064,14 +3108,230 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         from safety_risk.sim_label_extractor import build_safety_report
         return build_safety_report(raw_gt, features, labels)
 
+    def _initialize_random_diffusion_policy(self):
+        policy_cfg = dict(self.task_cfg.get("policy", {}) or {})
+        if not policy_cfg.get("enabled", False):
+            return None
+        if policy_cfg.get("type") != "random_diffusion":
+            raise ValueError(f"Unsupported policy type: {policy_cfg.get('type')!r}")
+        from safety_risk.random_diffusion_policy import RandomDiffusionConfig, RandomDiffusionPolicy
+        from safety_risk.robot_action_adapter import RobotActionAdapter
+
+        base_seed = int(policy_cfg.get("seed", self.random_seed))
+        adapters = {}
+        policies = {}
+        robot_manifests = {}
+        total_parameters = 0
+        for robot_name, robot in sorted(self.task.robots.items()):
+            adapter = RobotActionAdapter.discover(
+                robot_name,
+                robot,
+                control_grippers=bool(policy_cfg.get("control_grippers", False)),
+                group_delta_overrides=dict(policy_cfg.get("max_delta_by_group", {}) or {}),
+            )
+            seed_offset = int.from_bytes(
+                hashlib.sha256(robot_name.encode("utf-8")).digest()[:4], "big"
+            )
+            config = RandomDiffusionConfig(
+                observation_dim=adapter.action_dim,
+                action_dim=adapter.action_dim,
+                action_horizon=int(policy_cfg.get("action_horizon", 8)),
+                diffusion_steps=int(policy_cfg.get("diffusion_steps", 10)),
+                hidden_dim=int(policy_cfg.get("hidden_dim", 128)),
+                max_joint_delta=adapter.max_deltas.tolist(),
+                seed=(base_seed + seed_offset) % (2**31),
+            )
+            policy = RandomDiffusionPolicy(config)
+            model_manifest = policy.manifest()
+            total_parameters += int(model_manifest["parameter_count"])
+            robot_manifests[robot_name] = {
+                "action_schema": adapter.schema_manifest(),
+                "model": model_manifest,
+            }
+            adapters[robot_name] = adapter
+            policies[robot_name] = policy
+        self._policy_manifest = {
+            "policy_type": "diffusion_policy",
+            "policy_name": "random-diffusion-policy",
+            "initialization": "random",
+            "seed": base_seed,
+            "checkpoint": None,
+            "parameter_count": total_parameters,
+            "robots": robot_manifests,
+            "task_success": False,
+            "test_mode": "random_parameter_smoke_test",
+        }
+        print(
+            "[random_dp] initialized "
+            f"robots={list(adapters)}, seed={base_seed}, parameters={total_parameters}"
+        )
+        return {"adapters": adapters, "policies": policies}
+
+    def _initialize_trained_diffusion_policy(self):
+        """Start the LeRobot policy service without changing Isaac's Torch."""
+        policy_cfg = dict(self.task_cfg.get("policy", {}) or {})
+        if policy_cfg.get("type") != "trained_diffusion":
+            raise ValueError(f"Unsupported policy type: {policy_cfg.get('type')!r}")
+        checkpoint = policy_cfg.get("checkpoint")
+        python_executable = policy_cfg.get("python_executable")
+        model_root = policy_cfg.get("model_root")
+        if not checkpoint or not python_executable or not model_root:
+            raise ValueError(
+                "trained_diffusion requires checkpoint, python_executable and model_root"
+            )
+        from safety_risk.trained_dp_client import TrainedDPClient
+
+        clients = {}
+        robot_manifests = {}
+        for robot_name, robot in sorted(self.task.robots.items()):
+            if not str(robot_name).lower().startswith("franka"):
+                raise RuntimeError(
+                    f"trained Franka DP cannot control robot {robot_name!r}; "
+                    "only a single FR3/Franka robot is supported"
+                )
+            if len(getattr(robot, "left_joint_indices", [])) != 7:
+                raise RuntimeError(f"{robot_name}: trained Franka DP requires 7 arm joints")
+            if len(getattr(robot, "left_gripper_indices", [])) != 1:
+                raise RuntimeError(
+                    f"{robot_name}: trained Franka DP requires one width gripper joint"
+                )
+            client = TrainedDPClient(
+                python_executable=python_executable,
+                checkpoint=checkpoint,
+                model_root=model_root,
+                device=str(policy_cfg.get("device", "cuda")),
+                seed=policy_cfg.get("seed"),
+                replan_steps=int(policy_cfg.get("replan_steps", 8)),
+            )
+            clients[robot_name] = client
+            robot_manifests[robot_name] = {
+                "robot_type": "fr3_franka",
+                "arm_joint_indices": list(robot.left_joint_indices),
+                "gripper_joint_indices": list(robot.left_gripper_indices),
+                "gripper_mapping": "policy_width_m / 2 -> PhysX joint",
+                "limit_source": "live_physx_articulation",
+            }
+        self._policy_manifest = clients[next(iter(clients))].manifest()
+        self._policy_manifest["robots"] = robot_manifests
+        self._policy_manifest["task_success"] = False
+        print(
+            "[trained_dp] initialized "
+            f"robots={list(clients)} checkpoint={checkpoint} "
+            f"replan_steps={policy_cfg.get('replan_steps', 8)}"
+        )
+        return {"clients": clients, "camera_name": policy_cfg.get("camera_name")}
+
+    def _trained_diffusion_action(self, obs, policy_bundle):
+        result = {}
+        for robot_name, client in policy_bundle["clients"].items():
+            camera_name = policy_bundle.get("camera_name") or f"{robot_name}_head"
+            camera_obs = obs.get("cameras", {}).get(camera_name)
+            if not camera_obs or camera_obs.get("color_image") is None:
+                raise RuntimeError(f"trained DP camera observation missing: {camera_name}")
+            robot_obs = obs["robots"][robot_name]
+            arm_indices = np.asarray(self.task.robots[robot_name].left_joint_indices, dtype=np.int64)
+            gripper_indices = np.asarray(
+                self.task.robots[robot_name].left_gripper_indices, dtype=np.int64
+            )
+            qpos = np.asarray(robot_obs["states.joint.position"], dtype=np.float32).reshape(-1)
+            gripper_width = float(
+                np.asarray(robot_obs["states.gripper.position"], dtype=np.float32).reshape(-1)[0]
+            )
+            state = np.concatenate([qpos[:7], np.asarray([gripper_width], dtype=np.float32)])
+            action = np.asarray(client.step(camera_obs["color_image"], state), dtype=np.float64)
+            # FR3 exposes a single joint at half the physical gripper width.
+            target = np.concatenate([action[:7], np.asarray([action[7] / 2.0])])
+            indices = np.concatenate([arm_indices, gripper_indices])
+            limits = self.task.robots[robot_name]._articulation_view.get_dof_limits()
+            limits = np.asarray(limits.detach().cpu().numpy() if hasattr(limits, "detach") else limits)
+            if limits.ndim == 3:
+                limits = limits[0]
+            target = np.clip(target, limits[indices, 0], limits[indices, 1])
+            result[robot_name] = {
+                "joint_positions": target,
+                "joint_indices": indices,
+                "raw_action": [{
+                    "lr_name": "left",
+                    "control_group": "left_arm",
+                    "joint_indices": arm_indices,
+                    "joint_positions": target[:7],
+                    "policy_action": action,
+                    "policy_name": "franka_dp_100k_delivery",
+                }],
+            }
+        return result
+
+    def _finalize_trained_policy_rollout(self, policy_bundle):
+        policy_cfg = dict(self.task_cfg.get("policy", {}) or {})
+        target_names = list(
+            self._safety_eval_cfg.get("entities", {}).get("target_objects", []) or []
+        )
+        if not target_names:
+            target_names = [
+                obj.get("name") for obj in self.task_cfg.get("objects", [])
+                if str(obj.get("name", "")).startswith("pick_object")
+            ]
+        lift_threshold = float(policy_cfg.get("success_lift_m", 0.02))
+        success = bool(target_names)
+        final_deltas = {}
+        for name in target_names:
+            if name not in self.task.objects or name not in getattr(self, "_policy_initial_z", {}):
+                success = False
+                continue
+            pose, _ = self.task.objects[name].get_world_pose()
+            delta = float(pose[2]) - float(self._policy_initial_z[name])
+            final_deltas[name] = delta
+            success = success and delta >= lift_threshold
+        if hasattr(self, "_policy_manifest"):
+            self._policy_manifest["task_success"] = success
+            self._policy_manifest["success_lift_threshold_m"] = lift_threshold
+            self._policy_manifest["final_lift_delta_m"] = final_deltas
+        return success
+
+    @staticmethod
+    def _close_trained_diffusion_policy(policy_bundle):
+        if policy_bundle:
+            for client in policy_bundle.get("clients", {}).values():
+                client.close()
+
+    def _random_diffusion_action(self, obs, policy_bundle):
+        del obs  # Runtime joint state comes directly from each articulation.
+        result = {}
+        for robot_name, adapter in policy_bundle["adapters"].items():
+            policy = policy_bundle["policies"][robot_name]
+            current = adapter.current_position()
+            target, delta = policy.predict_joint_target(
+                current, adapter.lower_limits, adapter.upper_limits
+            )
+            result[robot_name] = {
+                "joint_positions": target,
+                "joint_indices": adapter.joint_indices,
+                "raw_action": adapter.raw_action(target, delta),
+            }
+        return result
+
     def plan_with_render(self):
         end = False
 
         step_id = 0
         length = 0
-        episode_success = True
+        policy_cfg = dict(self.task_cfg.get("policy", {}) or {})
+        random_dp_enabled = bool(
+            policy_cfg.get("enabled", False)
+            and policy_cfg.get("type") == "random_diffusion"
+        )
+        trained_dp_enabled = bool(
+            policy_cfg.get("enabled", False)
+            and policy_cfg.get("type") == "trained_diffusion"
+        )
+        random_dp_policy = self._initialize_random_diffusion_policy() if random_dp_enabled else None
+        trained_dp_policy = self._initialize_trained_diffusion_policy() if trained_dp_enabled else None
+        policy_enabled = random_dp_enabled or trained_dp_enabled
+        episode_success = not policy_enabled
         should_continue = True
-        max_episode_length = self.task_cfg["data"]["max_episode_length"]
+        max_episode_length = int(
+            policy_cfg.get("max_episode_steps", self.task_cfg["data"]["max_episode_length"])
+        )
         episode_stats = {"succeed_times": 0, "current_times": 0}
 
         # ── PhysX data collector (for Sim_Raw_GT) ──
@@ -3094,7 +3354,8 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         if self._safety_eval_enabled:
             self._apply_semantic_labels()
 
-        should_continue = self.plan_first_skill(self.skills, should_continue)
+        if not policy_enabled:
+            should_continue = self.plan_first_skill(self.skills, should_continue)
         _safety_stop_active = False
 
         # Record obstacle starting position for round-trip movement
@@ -3112,7 +3373,18 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         #     # self._init_static_objects(self.task)
         #     self.world.step(render=True)
 
-        while not (step_id >= max_episode_length or (not self.skills and not episode_success) or (not should_continue)):
+        self._policy_initial_z = {}
+        if trained_dp_enabled:
+            for name, obj in self.task.objects.items():
+                if str(name).startswith("pick_object"):
+                    pose, _ = obj.get_world_pose()
+                    self._policy_initial_z[name] = float(pose[2])
+
+        while not (
+            step_id >= max_episode_length
+            or (not policy_enabled and not self.skills and not episode_success)
+            or (not should_continue)
+        ):
             obs = self.world.get_observations()
             action_dict = {}
 
@@ -3122,7 +3394,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     if hasattr(ctrl, 'cmd_plan'):
                         ctrl.cmd_plan = None
             record_flag = True
-            if self.skills and should_continue:
+            if random_dp_enabled:
+                action_dict = self._random_diffusion_action(obs, random_dp_policy)
+            elif trained_dp_enabled:
+                action_dict = self._trained_diffusion_action(obs, trained_dp_policy)
+            elif self.skills and should_continue:
                 # Process current skills
                 current_skills = self.skills[0]
                 for robot_name, skill_sequences in current_skills.items():
@@ -3222,10 +3498,26 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     _safety_stop_active = False
 
             step_id += 1
-            if self.skills:
+            if self.skills and not policy_enabled:
                 episode_success, should_continue = self.update_skill_states(
                     self.skills, episode_success, should_continue
                 )
+
+        if random_dp_enabled and step_id >= max_episode_length:
+            # Store a completed rollout even though an untrained policy is not
+            # expected to satisfy the task semantics.
+            end = True
+            length = step_id
+            print(f"[random_dp] rollout complete ({step_id} steps, task_success=false)")
+        elif trained_dp_enabled and step_id >= max_episode_length:
+            episode_success = self._finalize_trained_policy_rollout(trained_dp_policy)
+            end = True
+            length = step_id
+            print(
+                f"[trained_dp] rollout complete ({step_id} steps, "
+                f"task_success={episode_success})"
+            )
+            self._close_trained_diffusion_policy(trained_dp_policy)
 
         # ── Save PhysX data ──
         self._physx_collector = _physx_collector

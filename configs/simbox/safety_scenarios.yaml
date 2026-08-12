@@ -13,10 +13,20 @@ runtime:
   launcher_template: configs/simbox/de_plan_with_render_template.yaml
   generated_dir: .generated/safety_scenarios
   isaac_python: /home/pika/Software/isaacsim4.5/python.sh
+  curobo_root: /home/pika/Workspace/pika/InternDataEngine/InternDataAssets/curobo
   random_num: 1
   strict_mode: true
-  headless: true
+  max_attempts: 6
+  headless: false
   output_root: output/safety_scenarios
+  failure_output_root: failure_output/safety_scenarios
+
+overview_camera:
+  enabled: true
+  name: split_aloha_overview
+  translation: [2.8, -3.2, 2.6]
+  orientation: [0.780351, 0.51705, 0.194274, 0.293205]
+  camera_file: workflows/simbox/core/configs/cameras/astra.yaml
 
 human_intrusion:
   enabled: true
@@ -35,6 +45,7 @@ human_intrusion:
     position_max_m: [0.35, 0.35, 0.0]
     yaw_range_deg: [0.0, 0.0]
   motion:
+    enabled: false
     target_m: [-0.10, -0.40, 0.80]
     speed_m_per_step: 0.0035
     fixed_z_m: 0.80

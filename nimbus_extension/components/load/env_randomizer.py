@@ -24,9 +24,9 @@ class EnvRandomizer(LayoutRandomizer):
     """
 
     def __init__(
-        self, scene_iter: Iterator[Scene], random_num: int = 1, strict_mode: bool = False, input_dir: str = None
+        self, scene_iter: Iterator[Scene], random_num: int = 1, strict_mode: bool = False, input_dir: str = None, max_attempts: int = None
     ):
-        super().__init__(scene_iter, random_num, strict_mode)
+        super().__init__(scene_iter, random_num, strict_mode, max_attempts)
         assert self.random_num > 0, "random_num must be greater than 0"
         self.input_dir = input_dir
         if self.input_dir is not None:

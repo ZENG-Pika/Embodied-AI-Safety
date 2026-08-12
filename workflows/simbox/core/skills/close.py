@@ -75,6 +75,7 @@ class Close(BaseSkill):
         )
         self.traj_keyframes = traj_keyframes
         self.sample_times = sample_times
+
         if self.draw:
             for keypose in traj_keyframes:
                 self.draw.draw_points([(T_world_base @ np.append(keypose[:3, 3], 1))[:3]], [(0, 0, 0, 1)], [7])
@@ -83,6 +84,12 @@ class Close(BaseSkill):
         # Update
         p_base_ee_cur, q_base_ee_cur = self.controller.get_ee_pose()
         ignore_substring = deepcopy(self.controller.ignore_substring + self.skill_cfg.get("ignore_substring", []))
+        # The first approach pose is intentionally on the articulated object.
+        # Keep the target out of CuRobo's conservative obstacle margin during
+        # approach; PhysX remains authoritative for actual contact/GT data.
+        parent_name = self.art_obj.prim_path.split("/")[-2]
+        if parent_name not in ignore_substring:
+            ignore_substring.append(parent_name)
         cmd = (
             p_base_ee_cur,
             q_base_ee_cur,
@@ -103,7 +110,6 @@ class Close(BaseSkill):
                 ignore_substring = deepcopy(
                     self.controller.ignore_substring + self.skill_cfg.get("ignore_substring", [])
                 )
-                parent_name = self.art_obj.prim_path.split("/")[-2]
                 ignore_substring.append(parent_name)
                 cmd = (
                     p_base_ee,

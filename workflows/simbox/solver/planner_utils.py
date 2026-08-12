@@ -288,6 +288,7 @@ def solve_ik_kpam(
     consider_collision=False,
     table_height=0.15,
     contact_plane_normal=None,
+    workspace_bounds=None,
 ):
     """
     the simple case for the kpam problem
@@ -448,8 +449,22 @@ def solve_ik_kpam(
     """solving IK to match tool head keypoint and the object keypoint"""
     # maybe add slackness
 
-    # make sure the arm does not go backward
-    ik.AddPositionConstraint(gripper_frame, [0, 0, 0], robot_plant.world_frame(), [0.05, -1, 0], [1, 1, 1])
+    # Keep the historical forward-workspace restriction by default. The Lift2
+    # arm base is mounted above the table, so valid contact poses can have a
+    # slightly negative z coordinate in the robot-base frame. The caller can
+    # provide robot-specific bounds instead of making that pose infeasible.
+    if workspace_bounds is None:
+        workspace_lower = [0.05, -1.0, 0.0]
+        workspace_upper = [1.0, 1.0, 1.0]
+    else:
+        workspace_lower, workspace_upper = workspace_bounds
+    ik.AddPositionConstraint(
+        gripper_frame,
+        [0, 0, 0],
+        robot_plant.world_frame(),
+        workspace_lower,
+        workspace_upper,
+    )
 
     # no rotation constraint
     # ik.AddOrientationConstraint(gripper_frame, RotationMatrix(), plant.world_frame(), pose.rotation(), rot_tol)

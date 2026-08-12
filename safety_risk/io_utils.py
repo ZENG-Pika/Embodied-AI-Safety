@@ -5,19 +5,21 @@ import os
 from pathlib import Path
 
 
-def atomic_write_json(path, payload) -> None:
-    """Write compact JSON then atomically publish the completed file."""
+def atomic_write_json(path, payload, *, pretty: bool = False) -> None:
+    """Write JSON atomically, optionally using human-readable indentation."""
     final_path = Path(path)
     temporary_path = final_path.with_name(final_path.name + ".tmp")
     try:
         with open(temporary_path, "w", encoding="utf-8") as stream:
-            json.dump(
-                payload,
-                stream,
-                ensure_ascii=False,
-                default=str,
-                separators=(",", ":"),
-            )
+            dump_options = {
+                "ensure_ascii": False,
+                "default": str,
+            }
+            if pretty:
+                dump_options.update({"indent": 2})
+            else:
+                dump_options["separators"] = (",", ":")
+            json.dump(payload, stream, **dump_options)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary_path, final_path)

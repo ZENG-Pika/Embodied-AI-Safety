@@ -21,6 +21,7 @@ runtime:
   launcher_template: configs/simbox/de_plan_with_render_template.yaml
   generated_dir: .generated/safety_scenarios
   isaac_python: /home/pika/Software/isaacsim4.5/python.sh
+  curobo_root: /home/pika/Workspace/pika/InternDataEngine/InternDataAssets/curobo
   random_num: 1
   strict_mode: true
   headless: true
@@ -43,6 +44,7 @@ human_intrusion:
     position_max_m: [0.35, 0.35, 0.0]
     yaw_range_deg: [0.0, 0.0]
   motion:
+    enabled: true
     target_m: [-0.10, -0.40, 0.80]
     speed_m_per_step: 0.0035
     fixed_z_m: 0.80

@@ -648,6 +648,12 @@ class KPAMPlanner:
         ]
         solutions = []
         for seed in random_seeds:
+            # Unlike ground-mounted models, Lift2 arm bases are elevated.
+            # Table-level contact poses can therefore have z < 0 in the
+            # base frame; do not apply the generic z >= 0 bound to Lift2.
+            workspace_bounds = None
+            if "lift2" in self.robot.name:
+                workspace_bounds = ([0.05, -1.0, -1.0], [1.0, 1.0, 1.0])
             res = solve_ik_kpam(
                 get_relative_transform(
                     get_prim_at_path(self.object.object_link_path), get_prim_at_path(self.robot.base_path)
@@ -663,10 +669,58 @@ class KPAMPlanner:
                 timeout=True,
                 consider_collision=False,
                 contact_plane_normal=self.object.contact_plane_normal,
+                workspace_bounds=workspace_bounds,
             )
 
             if res is not None:
                 solutions.append(res.get_x_val()[:9])
+
+        # Lift2 USD hand keypoints are not always exactly compatible with
+        # kPAM frame constraints (sub-millimetre contact plus strict axes).
+        # Retry only after strict IK fails, keeping strict solutions preferred.
+        if not solutions and "lift2" in self.robot.name and constraint_dicts:
+            print("[kpam] strict Lift2 IK failed; retrying relaxed contact constraints")
+            relaxed_constraints = []
+            for constraint in constraint_dicts:
+                relaxed = dict(constraint)
+                name = relaxed.get("name")
+                if name == "fingers_contact_with_link0":
+                    relaxed["tolerance"] = max(float(relaxed.get("tolerance", 0.0)), 0.03)
+                elif name == "hand_parallel_to_link0_edge":
+                    relaxed["tolerance"] = max(float(relaxed.get("tolerance", 0.0)), 0.5)
+                elif name == "hand_parallel_to_link0_move_axis":
+                    relaxed["tolerance"] = max(float(relaxed.get("tolerance", 0.0)), 1.5)
+                relaxed_constraints.append(relaxed)
+
+            for seed in random_seeds:
+                res = solve_ik_kpam(
+                    get_relative_transform(
+                        get_prim_at_path(self.object.object_link_path), get_prim_at_path(self.robot.base_path)
+                    ),
+                    relaxed_constraints,
+                    self.plant.GetFrameByName(self.ee_name),
+                    self.tool_keypoints_in_hand,
+                    self.curr_object_keypoints,
+                    RigidTransform(self.ee_pose.reshape(4, 4)),
+                    seed.reshape(-1, 1),
+                    self.joint_positions.copy()[:9],
+                    rot_tol=0.01,
+                    timeout=True,
+                    consider_collision=False,
+                    contact_plane_normal=self.object.contact_plane_normal,
+                    workspace_bounds=([-0.5, -1.5, -1.5], [1.5, 1.5, 1.5]),
+                )
+                if res is not None:
+                    solutions.append(res.get_x_val()[:9])
+
+
+        if not solutions:
+            print(
+                "[kpam] no IK solution: "
+                f"robot_base={self.base_pose[:3, 3].tolist()} "
+                f"tool={{{', '.join(f'{k}={v.tolist()}' for k, v in self.curr_tool_keypoints.items())}}} "
+                f"object={{{', '.join(f'{k}={v.tolist()}' for k, v in self.curr_object_keypoints.items())}}}"
+            )
 
         # solutions example:
         #     [array([ 1.14329376e-06,  3.53816124e-01,  4.80939611e-06, -2.05026707e+00,

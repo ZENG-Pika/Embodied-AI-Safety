@@ -1,4 +1,6 @@
+import json
 import os
+from datetime import datetime
 
 from nimbus.components.store import BaseWriter
 
@@ -26,7 +28,15 @@ class EnvWriter(BaseWriter):
     """
 
     def __init__(
-        self, data_iter, seq_output_dir=None, output_dir=None, batch_async=True, async_threshold=1, batch_size=1
+        self,
+        data_iter,
+        seq_output_dir=None,
+        output_dir=None,
+        batch_async=True,
+        async_threshold=1,
+        batch_size=1,
+        failure_output_dir=None,
+        max_attempts=None,
     ):
         super().__init__(
             data_iter,
@@ -35,7 +45,53 @@ class EnvWriter(BaseWriter):
             batch_async=batch_async,
             async_threshold=async_threshold,
             batch_size=batch_size,
+            failure_output_dir=failure_output_dir,
+            max_attempts=max_attempts,
         )
+
+    @staticmethod
+    def _recorded_length(task):
+        logger = getattr(task, "logger", None)
+        if logger is None:
+            return 0
+        lengths = []
+        for attr in (
+            "proprio_data_logger",
+            "action_data_logger",
+            "object_data_logger",
+            "color_image_logger",
+        ):
+            robot_data = getattr(logger, attr, {})
+            for values_by_key in robot_data.values():
+                for values in values_by_key.values():
+                    try:
+                        lengths.append(len(values))
+                    except TypeError:
+                        pass
+        return max(lengths, default=0)
+
+    def flush_failure_to_disk(self, task, scene_name, attempt_count):
+        log_dir = os.path.join(self.failure_output_dir, scene_name)
+        os.makedirs(log_dir, exist_ok=True)
+        recorded_length = self._recorded_length(task)
+        task.length = recorded_length
+        manifest = {
+            "status": "failed",
+            "attempt_count": attempt_count,
+            "recorded_frames": recorded_length,
+            "saved_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        try:
+            self.logger.info(f"Saving failed attempt {attempt_count} in {log_dir}")
+            if recorded_length > 0:
+                task.save(log_dir)
+        except Exception as exc:
+            manifest["save_error"] = str(exc)
+            self.logger.exception(f"Failed to save failed attempt data for scene {scene_name}: {exc}")
+        with open(os.path.join(log_dir, "failure_manifest.json"), "w", encoding="utf-8") as stream:
+            json.dump(manifest, stream, indent=2)
+        self.logger.info(f"Saved failed attempt metadata and {recorded_length} recorded frames in {log_dir}")
+        return recorded_length
 
     def flush_to_disk(self, task, scene_name, seq, obs):
         try:

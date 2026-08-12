@@ -17,6 +17,15 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TASK_ROOT = REPO_ROOT / "workflows/simbox/core/configs/tasks"
+_POLICY_INDEX_FIELDS = (
+    "body_indices", "head_indices", "lift_indices",
+    "left_joint_indices", "right_joint_indices",
+    "left_gripper_indices", "right_gripper_indices",
+)
+
+
+class UnsupportedScenarioError(RuntimeError):
+    pass
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
@@ -208,11 +217,40 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
                 ignored.append(token)
         robot["ignore_substring"] = ignored
 
-    if evaluation.get("enable_depth_segmentation", True):
+    if evaluation.get("enable_depth_segmentation", True) and evaluation.get(
+        "replace_head_camera_for_safety", False
+    ):
         camera_file = str(_repo_path(evaluation["depth_seg_camera_file"]).resolve())
         for camera in result.get("cameras", []) or []:
             if isinstance(camera, dict) and "head" in str(camera.get("name", "")).lower():
                 camera["camera_file"] = camera_file
+
+    # Keep the policy's original head camera unchanged. Add a separate camera
+    # for depth/segmentation so the trained visual policy sees its training view.
+    if evaluation.get("enable_depth_segmentation", True) and not evaluation.get(
+        "replace_head_camera_for_safety", False
+    ):
+        camera_file = str(_repo_path(evaluation["depth_seg_camera_file"]).resolve())
+        cameras = result.setdefault("cameras", [])
+        for robot in result.get("robots", []) or []:
+            robot_name = str(robot.get("name", "")) if isinstance(robot, dict) else ""
+            head = next(
+                (
+                    camera for camera in cameras
+                    if isinstance(camera, dict)
+                    and camera.get("name") == f"{robot_name}_head"
+                ),
+                None,
+            )
+            if head is None:
+                continue
+            safety_name = f"{robot_name}_safety"
+            if any(isinstance(camera, dict) and camera.get("name") == safety_name for camera in cameras):
+                continue
+            safety_camera = copy.deepcopy(head)
+            safety_camera["name"] = safety_name
+            safety_camera["camera_file"] = camera_file
+            cameras.append(safety_camera)
 
     targets = _infer_target_objects(result)
     placements = _infer_placement_targets(result, targets)
@@ -227,8 +265,9 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
             "human_surrogates": [object_name],
         },
         "obstacle": {
-            "enabled": bool(intrusion.get("enabled", True)),
+            "enabled": bool(intrusion.get("enabled", True)) and bool(motion.get("enabled", True)),
             "name": object_name,
+            "motion_enabled": bool(motion.get("enabled", True)),
             "target": motion.get("target_m", [-0.10, -0.40, 0.80]),
             "speed": motion.get("speed_m_per_step", 0.0035),
             "fixed_z": motion.get("fixed_z_m", 0.80),
@@ -237,7 +276,84 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
         "safety_gate": evaluation.get("safety_gate", {}),
     }
     result["safety_eval"] = _merge_dict(result.get("safety_eval", {}), safety_overlay)
+
+    policy = dict(config.get("policy", {}) or {})
+    if policy.get("enabled", False):
+        result["policy"] = _merge_dict(result.get("policy", {}), policy)
+
+    overview = config.get("overview_camera", {}) or {}
+    if overview.get("enabled", False):
+        camera_name = str(overview.get("name", "split_aloha_overview"))
+        cameras = result.setdefault("cameras", [])
+        cameras[:] = [camera for camera in cameras if camera.get("name") != camera_name]
+        cameras.append({
+            "name": camera_name,
+            "translation": overview.get("translation", [2.8, -3.2, 2.6]),
+            "orientation": overview.get("orientation", [0.780351, 0.51705, 0.194274, 0.293205]),
+            "camera_axes": "usd",
+            "camera_file": overview.get(
+                "camera_file", "workflows/simbox/core/configs/cameras/astra.yaml"
+            ),
+            "parent": None,
+            "apply_randomization": False,
+        })
     return result
+
+
+def _validate_random_policy_task(
+    task_document: Dict[str, Any],
+    source: Path,
+    asset_root_override: str | None = None,
+) -> None:
+    for task in task_document.get("tasks", []) or []:
+        asset_root = (
+            _repo_path(str(asset_root_override)).resolve()
+            if asset_root_override
+            else _repo_path(str(task.get("asset_root", "")))
+        )
+        for robot in task.get("robots", []) or []:
+            if not isinstance(robot, dict):
+                continue
+            merged = {}
+            config_file = robot.get("robot_config_file")
+            if config_file:
+                config_path = _repo_path(str(config_file))
+                if not config_path.is_file():
+                    raise UnsupportedScenarioError(
+                        f"{_relative_id(source)}: robot config not found: {config_path}"
+                    )
+                merged.update(_load_yaml(config_path))
+            merged.update(robot)
+            controllable = sum(
+                len(merged.get(field, []) or []) for field in _POLICY_INDEX_FIELDS
+            )
+            if controllable == 0:
+                raise UnsupportedScenarioError(
+                    f"{_relative_id(source)}: robot {merged.get('name', '<unnamed>')} "
+                    "has no supported joint-index fields"
+                )
+            robot_asset = merged.get("path")
+            if robot_asset and not _asset_reference_exists(asset_root, str(robot_asset)):
+                raise UnsupportedScenarioError(
+                    f"{_relative_id(source)}: robot asset missing: {asset_root / str(robot_asset)}"
+                )
+        for obj in task.get("objects", []) or []:
+            if not isinstance(obj, dict) or obj.get("art_cat"):
+                continue
+            object_asset = obj.get("path")
+            if object_asset and not _asset_reference_exists(asset_root, str(object_asset)):
+                raise UnsupportedScenarioError(
+                    f"{_relative_id(source)}: object asset missing: {asset_root / str(object_asset)}"
+                )
+
+
+def _asset_reference_exists(asset_root: Path, value: str) -> bool:
+    if "${" in value or value.startswith(("omniverse://", "http://", "https://")):
+        return True
+    path = Path(os.path.expandvars(os.path.expanduser(value)))
+    if not path.is_absolute():
+        path = asset_root / path
+    return path.exists()
 
 
 def _prepare(source: Path, config: Dict[str, Any]) -> tuple[str, Path, Path]:
@@ -249,6 +365,13 @@ def _prepare(source: Path, config: Dict[str, Any]) -> tuple[str, Path, Path]:
     launcher_output = generated_root / "launchers" / f"{slug}.yaml"
 
     task_document = _load_yaml(source)
+    asset_root_override = runtime.get("asset_root_override")
+    if asset_root_override:
+        for task in task_document.get("tasks", []) or []:
+            if isinstance(task, dict):
+                task["asset_root"] = str(_repo_path(str(asset_root_override)).resolve())
+    if config.get("policy", {}).get("enabled", False):
+        _validate_random_policy_task(task_document, source, asset_root_override)
     task_document["tasks"] = [
         _inject_task(task, config) for task in task_document["tasks"]
     ]
@@ -263,10 +386,17 @@ def _prepare(source: Path, config: Dict[str, Any]) -> tuple[str, Path, Path]:
     randomizer = launcher["load_stage"]["layout_random_generator"]["args"]
     randomizer["random_num"] = int(runtime.get("random_num", 1))
     randomizer["strict_mode"] = bool(runtime.get("strict_mode", True))
-    launcher["store_stage"]["writer"]["args"]["output_dir"] = (
+    randomizer["max_attempts"] = int(runtime.get("max_attempts", 0)) or None
+    writer_args = launcher["store_stage"]["writer"]["args"]
+    writer_args["output_dir"] = (
         str(_repo_path(runtime.get("output_root", "output/safety_scenarios")).resolve())
         + f"/{slug}/"
     )
+    writer_args["failure_output_dir"] = (
+        str(_repo_path(runtime.get("failure_output_root", "failure_output/safety_scenarios")).resolve())
+        + f"/{slug}/"
+    )
+    writer_args["max_attempts"] = int(runtime.get("max_attempts", 0)) or None
     _write_yaml(launcher_output, launcher)
     return scenario_id, task_output, launcher_output
 
@@ -280,13 +410,99 @@ def main() -> int:
     )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--list", action="store_true")
+    mode.add_argument("--list-runnable", action="store_true")
+    mode.add_argument("--list-skipped", action="store_true")
     mode.add_argument("--prepare", action="store_true")
     mode.add_argument("--run", action="store_true")
     parser.add_argument("--confirm-all", action="store_true", help="Required when selection.all_tasks=true and --run")
+    parser.add_argument(
+        "--no-retry",
+        action="store_true",
+        help="Run one scene attempt only; keep planner failures without re-randomizing the scene.",
+    )
+    parser.add_argument(
+        "--policy", choices=("random-diffusion", "trained-diffusion"),
+        help="Replace scripted skills with a policy rollout.",
+    )
+    parser.add_argument("--policy-seed", type=int, default=42)
+    parser.add_argument("--max-episode-steps", type=int, default=200)
+    parser.add_argument("--policy-control-grippers", action="store_true")
+    parser.add_argument("--checkpoint", help="Trained DP checkpoint directory.")
+    parser.add_argument("--model-root", help="Directory containing the model inference.py.")
+    parser.add_argument("--policy-python", help="Python executable for the trained DP service.")
+    parser.add_argument("--policy-device", default="cuda")
+    parser.add_argument("--policy-replan-steps", type=int, default=8)
+    parser.add_argument(
+        "--asset-root-override",
+        help="Use a complete external SimBox asset root when a task asset_root is unavailable.",
+    )
+    parser.add_argument(
+        "--max-attempts", type=int,
+        help="Maximum scene attempts; random-policy runs default to one.",
+    )
+    parser.add_argument(
+        "--evaluation-output-root", default="eval_output",
+        help="Sibling directory for random-policy rollout records.",
+    )
+    parser.add_argument(
+        "--evaluation-failure-root", default="failure_eval_output",
+        help="Sibling directory for failed random-policy rollout records.",
+    )
     args = parser.parse_args()
 
     config_path = _repo_path(args.config)
     config = _load_yaml(config_path)
+    if args.policy == "random-diffusion":
+        config["policy"] = {
+            "enabled": True,
+            "type": "random_diffusion",
+            "seed": args.policy_seed,
+            "action_horizon": 8,
+            "diffusion_steps": 10,
+            "hidden_dim": 128,
+            "max_episode_steps": args.max_episode_steps,
+            "control_grippers": args.policy_control_grippers,
+        }
+    elif args.policy == "trained-diffusion":
+        missing = [
+            name for name, value in (
+                ("--checkpoint", args.checkpoint),
+                ("--model-root", args.model_root),
+                ("--policy-python", args.policy_python),
+            ) if not value
+        ]
+        if missing:
+            raise SystemExit(
+                "--policy trained-diffusion requires " + ", ".join(missing)
+            )
+        config["policy"] = {
+            "enabled": True,
+            "type": "trained_diffusion",
+            "checkpoint": str(_repo_path(args.checkpoint).resolve()),
+            "model_root": str(_repo_path(args.model_root).resolve()),
+            "python_executable": str(_repo_path(args.policy_python).resolve()),
+            "device": args.policy_device,
+            "seed": args.policy_seed,
+            "max_episode_steps": args.max_episode_steps,
+            "replan_steps": args.policy_replan_steps,
+            "camera_name": "franka_head",
+        }
+    if args.asset_root_override:
+        config.setdefault("runtime", {})["asset_root_override"] = args.asset_root_override
+    if args.policy in ("random-diffusion", "trained-diffusion"):
+        config.setdefault("runtime", {})["max_attempts"] = (
+            args.max_attempts if args.max_attempts is not None else 1
+        )
+        config["runtime"]["output_root"] = args.evaluation_output_root
+        config["runtime"]["failure_output_root"] = args.evaluation_failure_root
+    elif args.max_attempts is not None:
+        config.setdefault("runtime", {})["max_attempts"] = args.max_attempts
+    if args.no_retry:
+        runtime = config.setdefault("runtime", {})
+        runtime["strict_mode"] = False
+        runtime["max_attempts"] = 1
+    if (args.list_runnable or args.list_skipped) and not config.get("policy", {}).get("enabled"):
+        config["policy"] = {"enabled": True, "type": "random_diffusion"}
     sources = _discover(config)
     if args.scenario:
         sources = [path for path in sources if any(
@@ -301,24 +517,68 @@ def main() -> int:
         print(f"Total: {len(sources)}")
         return 0
 
+    if args.list_runnable or args.list_skipped:
+        runnable = []
+        skipped = []
+        for source in sources:
+            try:
+                _validate_random_policy_task(
+                    _load_yaml(source),
+                    source,
+                    config.get("runtime", {}).get("asset_root_override"),
+                )
+                runnable.append(_relative_id(source))
+            except UnsupportedScenarioError as error:
+                skipped.append(str(error))
+        values = runnable if args.list_runnable else skipped
+        for value in values:
+            print(value)
+        print(f"Total: {len(values)}", file=sys.stderr)
+        return 0
+
     if (config.get("selection", {}).get("all_tasks") and not args.scenario
             and not args.list and not args.confirm_all):
         raise SystemExit(
             "Select at least one task with --scenario, or explicitly use --confirm-all"
         )
 
-    prepared = [_prepare(source, config) for source in sources]
+    prepared = []
+    skipped = []
+    for source in sources:
+        try:
+            prepared.append(_prepare(source, config))
+        except UnsupportedScenarioError as error:
+            skipped.append(str(error))
+    for reason in skipped:
+        print(f"Skipped unsupported scenario: {reason}", file=sys.stderr)
+    if not prepared:
+        print("No supported scenarios remained after policy preflight", file=sys.stderr)
+        return 2
     for scenario_id, task_path, launcher_path in prepared:
         print(f"Prepared {scenario_id}\n  task: {task_path}\n  launcher: {launcher_path}")
     if not args.run:
         return 0
 
     isaac_python = _repo_path(config["runtime"]["isaac_python"])
+    curobo_root = _repo_path(
+        str(config["runtime"].get(
+            "curobo_root",
+            "/home/pika/Workspace/pika/InternDataEngine/InternDataAssets/curobo",
+        ))
+    )
+    if not (curobo_root / "src/curobo").is_dir():
+        raise FileNotFoundError(f"CuRobo source directory does not exist: {curobo_root / 'src/curobo'}")
+    child_env = os.environ.copy()
+    child_env["PYTHONPATH"] = os.pathsep.join(
+        [str(curobo_root / "src"), child_env.get("PYTHONPATH", "")]
+    ).rstrip(os.pathsep)
+    child_env.pop("INTERNDATA_ISAAC5_COMPAT", None)
     for scenario_id, _, launcher_path in prepared:
         print(f"Running {scenario_id}", flush=True)
         subprocess.run(
             [str(isaac_python), str(REPO_ROOT / "launcher.py"), "--config", str(launcher_path)],
             cwd=REPO_ROOT,
+            env=child_env,
             check=True,
         )
     return 0

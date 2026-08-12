@@ -109,8 +109,19 @@ def update_articulated_objs(cfg):
         apply_randomization = obj_cfg.get("apply_randomization", False)
         if apply_randomization and obj_cfg["target_class"] == "ArticulatedObject":
             dirs = os.path.join(cfg["asset_root"], os.path.dirname(os.path.dirname(obj_cfg["path"])))
-            paths = glob.glob(os.path.join(dirs, "*"))
+            paths = [
+                path
+                for path in glob.glob(os.path.join(dirs, "*"))
+                if os.path.isfile(os.path.join(path, "instance.usd"))
+                and os.path.getsize(os.path.join(path, "instance.usd")) > 1024
+                and os.path.isfile(os.path.join(path, "Kps", obj_cfg["info_name"], "info.json"))
+            ]
             paths.sort()
+            if not paths:
+                raise RuntimeError(
+                    f"No complete articulated USD assets found under {dirs}; "
+                    "download the Git LFS payloads for this category."
+                )
             path = random.choice(paths)
 
             info_name = obj_cfg["info_name"]

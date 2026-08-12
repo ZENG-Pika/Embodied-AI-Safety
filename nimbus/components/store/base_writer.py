@@ -48,6 +48,8 @@ class BaseWriter(Iterator):
         batch_async: bool = True,
         async_threshold: int = 1,
         batch_size: int = 2,
+        failure_output_dir: str = None,
+        max_attempts: int = None,
     ):
         super().__init__()
         assert (
@@ -56,6 +58,8 @@ class BaseWriter(Iterator):
         self.data_iter = data_iter
         self.seq_output_dir = seq_output_dir
         self.obs_output_dir = obs_output_dir
+        self.failure_output_dir = failure_output_dir
+        self.max_attempts = max_attempts
         self.scene = None
         self.async_mode = batch_async
         self.batch_size = batch_size if batch_size <= 8 else 8
@@ -101,6 +105,14 @@ class BaseWriter(Iterator):
             if seq is None and obs is None:
                 self.logger.info(f"generate failed, skip once! success rate: {self.success_case}/{self.total_case}")
                 self.scene.update_generate_status(success=False)
+                if (
+                    self.failure_output_dir is not None
+                    and self.max_attempts is not None
+                    and self.total_case >= self.max_attempts
+                ):
+                    io_start_time = time.time()
+                    length = self.flush_failure_to_disk(self.scene.wf, self.scene.name, self.total_case)
+                    self.collect_io_frame_info(length, time.time() - io_start_time)
                 return None
             scene_name = self.scene.name
             io_start_time = time.time()
@@ -161,3 +173,6 @@ class BaseWriter(Iterator):
     @abstractmethod
     def flush_to_disk(self, task, scene_name, seq, obs):
         raise NotImplementedError("This method should be overridden by subclasses")
+
+    def flush_failure_to_disk(self, task, scene_name, attempt_count):
+        raise NotImplementedError("Failure output is not supported by this writer")

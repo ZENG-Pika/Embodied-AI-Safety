@@ -4,7 +4,7 @@ set -euo pipefail
 # Portable hand-avoidance launcher.
 # Override when needed:
 #   ISAACSIM_ROOT=/path/to/isaacsim ./scripts/run_hand_avoidance.sh
-#   CONFIG=configs/simbox/de_hand_avoidance.yaml ./scripts/run_hand_avoidance.sh
+#   CONFIG=configs/simbox/hand_avoidance.yaml ./scripts/run_hand_avoidance.sh
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   cat <<'EOF'
@@ -12,7 +12,8 @@ Usage: ./scripts/run_hand_avoidance.sh
 
 Environment variables:
   ISAACSIM_ROOT  IsaacSim install root containing python.sh
-  CONFIG         Config path, default configs/simbox/de_hand_avoidance.yaml
+  CUROBO_ROOT    CuRobo source root containing src/curobo
+  CONFIG         Config path, default configs/simbox/hand_avoidance.yaml
   LOG_FILE       Optional log path. If set, stdout/stderr are redirected there.
 
 Examples:
@@ -23,17 +24,24 @@ EOF
   exit 0
 fi
 
-CONFIG="${CONFIG:-configs/simbox/de_hand_avoidance.yaml}"
+CUROBO_ROOT="${CUROBO_ROOT:-/home/pika/Workspace/pika/InternDataEngine/InternDataAssets/curobo}"
+CONFIG="${CONFIG:-configs/simbox/hand_avoidance.yaml}"
 LOG_FILE="${LOG_FILE:-}"
 
 if [[ -z "${ISAACSIM_ROOT:-}" ]]; then
-  for candidate in     "/home/pika/Software/isaacsim4.5"     "/home/pika/isaacsim-4.5.0"     "/home/pika/isaacsim4.5"     "/home/wp/isaacsim-4.1.0"     "/home/wp/isaacsim4.5"     "/opt/isaacsim"; do
+  for candidate in     "/home/pika/Software/isaacsim4.5"     "/home/pika/Software/isaacsim4.5"     "/home/pika/isaacsim-4.5.0"     "/home/pika/isaacsim4.5"     "/home/wp/isaacsim-4.1.0"     "/home/wp/isaacsim4.5"     "/opt/isaacsim"; do
     if [[ -x "$candidate/python.sh" ]]; then
       ISAACSIM_ROOT="$candidate"
       break
     fi
   done
 fi
+
+if [[ ! -d "$CUROBO_ROOT/src/curobo" ]]; then
+  echo "ERROR: Could not find CuRobo sources at $CUROBO_ROOT/src/curobo." >&2
+  exit 2
+fi
+export PYTHONPATH="$CUROBO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
 if [[ -z "${ISAACSIM_ROOT:-}" || ! -x "$ISAACSIM_ROOT/python.sh" ]]; then
   echo "ERROR: Could not find IsaacSim python.sh." >&2
@@ -43,28 +51,16 @@ if [[ -z "${ISAACSIM_ROOT:-}" || ! -x "$ISAACSIM_ROOT/python.sh" ]]; then
   exit 2
 fi
 
-# Some IsaacSim installs keep project-compatible torch wheels outside the default python path.
-if [[ -d "$ISAACSIM_ROOT/torch-cu128" ]]; then
-  export PYTHONPATH="$ISAACSIM_ROOT/torch-cu128${PYTHONPATH:+:$PYTHONPATH}"
-  for libdir in     "$ISAACSIM_ROOT/torch-cu128/nvidia/cudnn/lib"     "$ISAACSIM_ROOT/torch-cu128/nvidia/nccl/lib"     "$ISAACSIM_ROOT/torch-cu128/nvidia/cusparselt/lib"; do
-    if [[ -d "$libdir" ]]; then
-      export LD_LIBRARY_PATH="$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    fi
-  done
-fi
-
-if [[ -d /usr/local/cuda-12.8 ]]; then
-  export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-12.8}"
-  export PATH="/usr/local/cuda-12.8/bin:$PATH"
-  export LD_LIBRARY_PATH="/usr/local/cuda-12.8/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-fi
-
 if [[ -n "${TORCH_CUDA_ARCH_LIST:-}" ]]; then
   export TORCH_CUDA_ARCH_LIST
   echo "Using TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST"
 fi
 
+# This launcher targets Isaac Sim 4.5; do not inherit Isaac 5 compatibility.
+unset INTERNDATA_ISAAC5_COMPAT
+
 echo "Using ISAACSIM_ROOT=$ISAACSIM_ROOT"
+echo "Using CUROBO_ROOT=$CUROBO_ROOT"
 echo "Using CONFIG=$CONFIG"
 
 if [[ -n "$LOG_FILE" ]]; then

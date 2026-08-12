@@ -77,6 +77,11 @@ class BananaBaseTask(BaseTask):
         for cfg in self.cfg["objects"]:
             self.objects[cfg["name"]] = self._load_obj(cfg)
 
+        # Some PM articulated assets contain malformed face-varying UV arrays.
+        # Block only the invalid visual primvars before the first PhysX reset;
+        # collision meshes, joints, and keypoint metadata remain unchanged.
+        self._sanitize_invalid_mesh_primvars()
+
         # MANO assets ship with RigidBodyAPI on both the articulation root and
         # child links.  Fix this before the first PhysX stage parse/reset.
         self._fix_obstacle_physics_hierarchy()
@@ -124,6 +129,31 @@ class BananaBaseTask(BaseTask):
 
         # Update language
         self.language_instruction, self.detailed_language_instruction = update_language(self.cfg)
+
+    def _sanitize_invalid_mesh_primvars(self):
+        """Block malformed UV primvars that can crash Hydra during reset."""
+        sanitized = 0
+        for prim in self.stage.Traverse():
+            if not prim.IsA(UsdGeom.Mesh):
+                continue
+            mesh = UsdGeom.Mesh(prim)
+            face_vertex_counts = mesh.GetFaceVertexCountsAttr().Get() or []
+            points = mesh.GetPointsAttr().Get() or []
+            expected_by_interpolation = {
+                "faceVarying": sum(int(value) for value in face_vertex_counts),
+                "vertex": len(points),
+            }
+            for primvar in UsdGeom.PrimvarsAPI(prim).GetPrimvars():
+                if primvar.GetName() not in ("primvars:st", "primvars:st_1"):
+                    continue
+                values = primvar.Get()
+                expected = expected_by_interpolation.get(primvar.GetInterpolation())
+                if values is None or expected is None or len(values) == expected:
+                    continue
+                primvar.GetAttr().Set(Sdf.ValueBlock())
+                sanitized += 1
+        if sanitized:
+            print(f"[asset_sanitize] blocked {sanitized} malformed UV primvars")
 
     def individual_reset(self):
         self.current_id += 1

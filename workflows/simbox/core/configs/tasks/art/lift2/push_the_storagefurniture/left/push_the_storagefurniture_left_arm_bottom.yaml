@@ -52,18 +52,18 @@ tasks:
         random_type: A_on_B_region_sampler
         random_config:
           pos_range: [
-            [-0.40, -0.025, 0.0],
-            [0.05, 0.125, 0.0]
+            [-0.25, 0.05, 0.0],
+            [-0.10, 0.10, 0.0]
           ]
-          yaw_rotation: [-30, 30]
+          yaw_rotation: [0.0, 0.0]
       -
         object: lift2
         target: table
         random_type: A_on_B_region_sampler
         random_config:
           pos_range: [
-            [-0.025, -0.8, -0.7],
-            [0.025, -0.80, -0.6]
+            [-0.025, -0.5, -0.7],
+            [0.025, -0.5, -0.6]
           ]
           yaw_rotation: [0.0, 0.0]
 
