@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pickle
 import struct
 import subprocess
@@ -10,6 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+
+_MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 
 
 def _resize_rgb(image: np.ndarray, height: int = 360, width: int = 640) -> np.ndarray:
@@ -45,6 +49,14 @@ class TrainedDPClient:
         self.replan_steps = int(replan_steps)
         self._chunk = np.empty((0, 8), dtype=np.float32)
         self._steps_since_plan = 0
+        # Isaac Sim exports Python 3.10 variables into its process. Remove
+        # them before starting the independent Python 3.12 policy service;
+        # otherwise the child interpreter can import Isaac's stdlib and fail
+        # with an ``SRE module mismatch`` assertion.
+        child_env = os.environ.copy()
+        for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE", "PYTHONSTARTUP"):
+            child_env.pop(key, None)
+        child_env.pop("PYTHONNOUSERSITE", None)
         self._process = subprocess.Popen(
             [
                 str(python_executable),
@@ -61,11 +73,25 @@ class TrainedDPClient:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=sys.stderr,
+            env=child_env,
             bufsize=0,
         )
         self.checkpoint = str(Path(checkpoint).resolve())
         self.device = str(device)
         self.seed = seed
+
+    def _read_exact(self, size: int) -> bytes | None:
+        if self._process.stdout is None:
+            return None
+        chunks = []
+        remaining = int(size)
+        while remaining:
+            chunk = self._process.stdout.read(remaining)
+            if not chunk:
+                return None
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
 
     def _request(self, request: dict[str, Any]) -> dict[str, Any]:
         if self._process.poll() is not None:
@@ -76,12 +102,17 @@ class TrainedDPClient:
         self._process.stdin.write(struct.pack("!I", len(payload)))
         self._process.stdin.write(payload)
         self._process.stdin.flush()
-        header = self._process.stdout.read(4)
-        if len(header) != 4:
+        header = self._read_exact(4)
+        if header is None:
             raise RuntimeError("trained DP process closed before replying")
         size = struct.unpack("!I", header)[0]
-        response = self._process.stdout.read(size)
-        if len(response) != size:
+        if size > _MAX_MESSAGE_BYTES:
+            raise RuntimeError(
+                "invalid trained DP response size "
+                f"{size} bytes; policy stdout may contain non-protocol output"
+            )
+        response = self._read_exact(size)
+        if response is None:
             raise RuntimeError("truncated response from trained DP process")
         result = pickle.loads(response)
         if not result.get("ok", False):

@@ -3255,6 +3255,8 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     "control_group": "left_arm",
                     "joint_indices": arm_indices,
                     "joint_positions": target[:7],
+                    "arm_action": target[:7],
+                    "gripper_action": target[7:],
                     "policy_action": action,
                     "policy_name": "franka_dp_100k_delivery",
                 }],

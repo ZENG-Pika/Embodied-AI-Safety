@@ -17,7 +17,7 @@ runtime:
   random_num: 1
   strict_mode: true
   max_attempts: 6
-  headless: false
+  headless: true
   output_root: output/safety_scenarios
   failure_output_root: failure_output/safety_scenarios
 

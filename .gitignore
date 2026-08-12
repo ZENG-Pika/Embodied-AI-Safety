@@ -33,3 +33,5 @@ evaluation_output/
 franka_dp_100k_delivery/
 *.orig
 *.rej
+
+failure_eval_output/

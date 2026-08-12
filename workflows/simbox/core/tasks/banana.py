@@ -1079,7 +1079,7 @@ class BananaBaseTask(BaseTask):
             tmp_cfg = {}
             tmp_cfg["name"] = "distractors" + "/" + path.split("/")[-2]
             tmp_cfg["name"] = (tmp_cfg["name"]).replace("-", "_")
-            tmp_cfg["path"] = path.replace(self.asset_root, "")
+            tmp_cfg["path"] = os.path.relpath(path, self.asset_root)
             tmp_cfg["target_class"] = distractors_cfg.get("target_class", "RigidObject")  # "RigidObject"
             tmp_cfg["prim_path_child"] = distractors_cfg.get("prim_path_child", "Aligned")  # "Aligned"
             tmp_cfg["translation"] = distractors_cfg.get("translation", [0.0, 0.0, 0.0])

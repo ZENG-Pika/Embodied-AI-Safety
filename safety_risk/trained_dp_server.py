@@ -7,21 +7,37 @@ through length-prefixed pickle messages so its Torch installation is untouched.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import pickle
 import struct
 import sys
 from pathlib import Path
 
 
+_MAX_MESSAGE_BYTES = 64 * 1024 * 1024
+
+
+def _read_exact(stream, size: int):
+    chunks = []
+    remaining = int(size)
+    while remaining:
+        chunk = stream.buffer.read(remaining)
+        if not chunk:
+            return None
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 def _read_message(stream):
-    header = stream.buffer.read(4)
-    if not header:
+    header = _read_exact(stream, 4)
+    if header is None:
         return None
-    if len(header) != 4:
-        raise EOFError("truncated policy request header")
     size = struct.unpack("!I", header)[0]
-    payload = stream.buffer.read(size)
-    if len(payload) != size:
+    if size > _MAX_MESSAGE_BYTES:
+        raise ValueError(f"policy request is too large: {size} bytes")
+    payload = _read_exact(stream, size)
+    if payload is None:
         raise EOFError("truncated policy request")
     return pickle.loads(payload)
 
@@ -46,7 +62,10 @@ def main() -> int:
         sys.path.insert(0, str(model_root))
     from inference import DPInference
 
-    policy = DPInference(args.checkpoint, device=args.device, seed=args.seed)
+    # stdout is the binary protocol channel. Some libraries print progress while
+    # loading or running inference, so keep all ordinary output on stderr.
+    with contextlib.redirect_stdout(sys.stderr):
+        policy = DPInference(args.checkpoint, device=args.device, seed=args.seed)
     print(
         "[trained_dp] loaded "
         f"checkpoint={args.checkpoint} device={args.device}",
@@ -65,8 +84,13 @@ def main() -> int:
                 continue
             if command != "predict":
                 raise ValueError(f"unsupported policy command: {command}")
-            actions = policy.predict(request["image"], request["state"])
-            _write_message(sys.stdout, {"ok": True, "actions": actions})
+            with contextlib.redirect_stdout(sys.stderr):
+                actions = policy.predict(request["image"], request["state"])
+            # Do not pickle a NumPy array across the Python environments. Newer
+            # NumPy records ``numpy._core`` module paths that Isaac's older
+            # NumPy cannot import. The action chunk is small, so a list is cheap
+            # and version-independent; the client converts it back to ndarray.
+            _write_message(sys.stdout, {"ok": True, "actions": actions.tolist()})
         except Exception as exc:
             _write_message(
                 sys.stdout,
