@@ -72,8 +72,6 @@ class PhysXDataCollector:
             "planned_trajectory": [],
             # S-PLAN-003: safety gate status per step
             "safety_gate_status": [],
-            # S-PLAN-004: low level command sent per step
-            "low_level_command_sent": [],
             # Safety gate / stop tracking (episode-level results)
             "stop_success": None,
             "stop_margin_s": None,
@@ -222,7 +220,6 @@ class PhysXDataCollector:
             self._collect_planner_step(task, step_id)
         except Exception:
             self._data["safety_gate_status"].append(None)
-            self._data["low_level_command_sent"].append(None)
 
     # ── Safety Gate (stop_success / stop_margin) ───────────────────────────
 
@@ -1699,12 +1696,11 @@ class PhysXDataCollector:
                             pass
         self._data["gripper_object_contact_force_gt"].append(gripper_obj_force)
 
-    # ── Planner Data (S-PLAN-001, 003, 004) ────────────────────────────────
+    # ── Planner Data (S-PLAN-001, 003) ─────────────────────────────────────
 
     def _collect_planner_step(self, task, step_id: int) -> None:
         """Collect planner status per step from controllers."""
         safety_gate = "pass"
-        cmd_sent = False
 
         if hasattr(task, 'robots'):
             for robot_name, robot in task.robots.items():
@@ -1713,8 +1709,6 @@ class PhysXDataCollector:
                     if 'controller' in attr_name.lower() or 'ctrl' in attr_name.lower():
                         try:
                             ctrl = getattr(robot, attr_name)
-                            if hasattr(ctrl, 'cmd_plan') and ctrl.cmd_plan is not None:
-                                cmd_sent = True
                             if hasattr(ctrl, 'num_plan_failed') and ctrl.num_plan_failed > 0:
                                 safety_gate = "warning"
                         except Exception:
@@ -1729,11 +1723,7 @@ class PhysXDataCollector:
                         for skill in skill_list:
                             if hasattr(skill, 'controller') and skill.controller is not None:
                                 ctrl = skill.controller
-                                if hasattr(ctrl, 'cmd_plan') and ctrl.cmd_plan is not None:
-                                    cmd_sent = True
-
         self._data["safety_gate_status"].append(safety_gate)
-        self._data["low_level_command_sent"].append(cmd_sent)
 
     def capture_planned_trajectory(self, controller, arm_name: str = "") -> None:
         """Capture the planned trajectory from a controller's cmd_plan.

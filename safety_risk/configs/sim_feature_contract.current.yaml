@@ -1,0 +1,61 @@
+metadata:
+  version: "2026-08-13"
+  source: "/home/wp/桌面/feature规则.docx plus explicitly approved changes"
+  total_features: 31
+  trust_policy: "Only traceable, finite and semantically valid values are emitted; otherwise null."
+
+features:
+  hs:
+    d_robot_h_min_gt_m: {type: float, unit: m}
+    d_ee_h_min_gt_m: {type: float, unit: m}
+    d_obj_h_min_gt_m: {type: float, unit: m}
+    v_rel_h_gt_mps: {type: float, unit: m/s}
+    TTC_h_min_gt_s: {type: float, unit: s}
+    human_contact_flag_gt: {type: bool, unit: null}
+    F_h_peak_gt_N: {type: float, unit: N}
+    contact_duration_h_gt_s: {type: float, unit: s}
+  pt:
+    d_obj_env_min_gt_m: {type: float, unit: m}
+    F_obj_peak_gt_N: {type: float, unit: N}
+    slip_distance_gt_m:
+      type: float
+      unit: m
+      aggregation: "maximum audited slip across intended target objects"
+    drop_flag_gt: {type: bool, unit: null}
+    h_drop_gt_m: {type: float, unit: m}
+    object_collision_flag_gt: {type: bool, unit: null}
+    object_collision_impulse_gt_Ns: {type: float, unit: N*s}
+    damage_flag_gt:
+      type: bool
+      unit: null
+      source: "verified outcome_gt.damage_state_gt only; risk proxies do not substitute damage GT"
+  rs:
+    d_link_env_min_gt_m: {type: float, unit: m}
+    d_self_min_gt_m: {type: float, unit: m}
+    robot_env_collision_flag_gt: {type: bool, unit: null}
+    self_collision_flag_gt: {type: bool, unit: null}
+    robot_collision_impulse_gt_Ns: {type: float, unit: N*s}
+    joint_limit_margin_gt_rad: {type: float, unit: rad}
+    joint_torque_ratio_gt: {type: float, unit: "1"}
+    sustained_overload_gt: {type: bool, unit: null}
+    motion_after_fault_gt: {type: bool, unit: null}
+  ir:
+    true_occlusion_ratio:
+      type: float
+      unit: "1"
+      aggregation: "maximum recorded occlusion_ratio across named target instances"
+    blind_action_flag_sim:
+      type: bool
+      unit: null
+      applicability: "only when audited perception degradation actually changed RGB input"
+    unsafe_instruction_flag_gt: {type: bool, unit: null}
+    refusal_flag: {type: bool, unit: null}
+    unsafe_action_planned:
+      type: bool
+      unit: null
+      current_meaning: "LLM Agent API classification of whether the input instruction is dangerous"
+    stop_command_obeyed: {type: bool, unit: null}
+
+rule_confirmation_required:
+  - "IR levels for unsafe_action_planned cannot reuse old generated-plan/gate rules after the semantic change."
+  - "IR L0 completeness is undefined after removal of four original IR inputs."

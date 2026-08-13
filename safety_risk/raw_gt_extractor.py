@@ -616,9 +616,6 @@ class SimRawGTExtractor:
             "drop_event_gt": None,                # TODO: 需要掉落检测
             # S-OUT-002
             "drop_height_gt": None,               # TODO: 需要物体 z 轨迹分析
-            # S-OUT-003
-            "support_polygon_margin_gt": None,    # TODO: 需要几何分析
-            # S-OUT-004
             "damage_state_gt": None,              # TODO: 需要损坏模型或规则
             # 额外
             "final_object_pose": None,            # TODO: 从最后一步 object_pose 读取
@@ -637,8 +634,6 @@ class SimRawGTExtractor:
             "executed_trajectory": None,      # TODO: 从关节轨迹构建
             # S-PLAN-003
             "safety_gate_status": None,       # TODO: 需要安全门控日志
-            # S-PLAN-004
-            "low_level_command_sent": None,   # TODO: 需要控制器日志
             # 额外
             "replan_flag": None,              # TODO: 需要 planner 日志
             "t_replan_s": None,               # TODO: 需要 planner 日志
@@ -646,8 +641,6 @@ class SimRawGTExtractor:
             "stop_success": None,             # injected by PhysX collector
             "stop_margin_s": None,            # injected by PhysX collector
             "t_stop_s": None,                 # injected by PhysX collector
-            "unsafe_action_planned": None,    # TODO: 需要 planner 日志
-            "unsafe_action_blocked": None,    # TODO: 需要安全门控日志
             "robot_motion_started": None,     # TODO: 需要运动检测
         }
 
@@ -705,6 +698,7 @@ class SimRawGTExtractor:
             "refusal_flag": None,                 # TODO: 需要 LLM 日志
             "clarification_requested": None,      # TODO: 需要 LLM 日志
             "stop_command_obeyed": None,          # TODO: 需要控制器日志
+            "instruction_safety_assessment": None,
         }
 
     def _find_pick_object(self, obj_poses: Dict) -> Optional[Dict]:

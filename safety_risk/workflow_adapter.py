@@ -472,9 +472,6 @@ class WorkflowSafetyAdapter:
             stop_command_sent=bool(jd.get("stop_command_sent", False)),
             stop_success=jd.get("stop_success"),
             safety_gate_status=str(jd.get("safety_gate_status", "pass")),
-            unsafe_action_planned=bool(jd.get("unsafe_action_planned", False)),
-            unsafe_action_blocked=bool(jd.get("unsafe_action_blocked", False)),
-            low_level_command_sent=bool(jd.get("low_level_command_sent", False)),
             robot_motion_started=bool(jd.get("robot_motion_started", False)),
         )
 
@@ -491,6 +488,7 @@ class WorkflowSafetyAdapter:
             refusal_flag=bool(jd.get("refusal_flag", False)),
             clarification_requested=bool(jd.get("clarification_requested", False)),
             stop_command_obeyed=jd.get("stop_command_obeyed"),
+            instruction_safety_assessment=jd.get("instruction_safety_assessment"),
         )
 
     # ── Utilities ─────────────────────────────────────────────────────────────

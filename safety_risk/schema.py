@@ -188,7 +188,6 @@ class OutcomeGT(BaseModel):
     placement_error_pos: Optional[float] = None  # m
     placement_error_rot: Optional[float] = None  # rad
     stable_final: Optional[bool] = None
-    support_polygon_margin: Optional[float] = None  # m
     damage_state: str = "none"  # DamageSeverity
 
 
@@ -204,9 +203,6 @@ class PlannerLog(BaseModel):
     stop_margin_s: Optional[float] = None
     t_stop_s: Optional[float] = None
     safety_gate_status: str = "pass"  # SafetyGateStatus
-    unsafe_action_planned: bool = False
-    unsafe_action_blocked: bool = False
-    low_level_command_sent: bool = False
     robot_motion_started: bool = False
 
 
@@ -220,6 +216,7 @@ class HRILog(BaseModel):
     refusal_flag: bool = False
     clarification_requested: bool = False
     stop_command_obeyed: Optional[bool] = None
+    instruction_safety_assessment: Optional[Dict[str, Any]] = None
 
 
 class SimRawEpisode(BaseModel):
@@ -240,6 +237,7 @@ class SimRawEpisode(BaseModel):
     outcome_gt: OutcomeGT = Field(default_factory=OutcomeGT)
     planner_log: PlannerLog = Field(default_factory=PlannerLog)
     hri_log: HRILog = Field(default_factory=HRILog)
+    perception_degradation_log: Optional[Dict[str, Any]] = None
 
 
 # ── Risk Features ────────────────────────────────────────────────────────────
@@ -263,7 +261,7 @@ class HSFeatures(BaseModel):
     v_rel_h_gt_mps: Optional[float] = None
     TTC_h_min_gt_s: Optional[float] = None
     # Internal diagnostics for the generic extractor; not emitted by the
-    # minimal 36-field Sim_Features contract.
+    # minimal 31-field Sim_Features contract.
     time_d_h_below_0_15m_s: float = 0.0
     time_d_h_below_0_10m_s: float = 0.0
     time_d_h_below_0_05m_s: float = 0.0
@@ -296,7 +294,6 @@ class PTFeatures(BaseModel):
     placement_error_pos_gt_m: Optional[float] = None
     placement_error_rot_gt_rad: Optional[float] = None
     stable_final_gt: Optional[bool] = None
-    support_margin_gt_m: Optional[float] = None
     damage_flag_gt: Optional[bool] = None
     damage_severity_gt: Optional[str] = None
     wrong_location_flag_gt: bool = False
@@ -334,10 +331,7 @@ class RSFeatures(BaseModel):
 class IRFeatures(BaseModel):
     """Input Robustness risk features (SF-IR-*)."""
 
-    pose_estimation_error_gt_m: Optional[float] = None
     true_occlusion_ratio: Optional[float] = None
-    tracking_lost_flag_sim: Optional[bool] = None
-    tracking_lost_duration_s: float = 0.0
     reobserve_flag: bool = False
     degrade_mode_flag: bool = False
     blind_action_flag_sim: Optional[bool] = None
@@ -351,9 +345,7 @@ class IRFeatures(BaseModel):
     unsafe_instruction_flag_gt: bool = False
     unsafe_instruction_detected: bool = False
     refusal_flag: bool = False
-    unsafe_action_planned: bool = False
-    unsafe_action_blocked: bool = False
-    unsafe_low_level_command_sent: bool = False
+    unsafe_action_planned: Optional[bool] = None
     robot_motion_started: bool = False
     multi_turn_attack_success: bool = False
     language_vision_conflict_flag: bool = False

@@ -4984,7 +4984,6 @@
     "placement_error_pos": null,
     "placement_error_rot": null,
     "stable_final": true,
-    "support_polygon_margin": null,
     "damage_state": "none"
   },
   "planner_log": {
@@ -4995,9 +4994,6 @@
     "stop_command_sent": false,
     "stop_success": true,
     "safety_gate_status": "pass",
-    "unsafe_action_planned": false,
-    "unsafe_action_blocked": false,
-    "low_level_command_sent": false,
     "robot_motion_started": false
   },
   "hri_log": {
@@ -5007,6 +5003,7 @@
     "model_response": "",
     "refusal_flag": false,
     "clarification_requested": false,
-    "stop_command_obeyed": true
+    "stop_command_obeyed": true,
+    "instruction_safety_assessment": null
   }
 }

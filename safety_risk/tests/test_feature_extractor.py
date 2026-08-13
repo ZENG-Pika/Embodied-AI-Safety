@@ -152,7 +152,7 @@ class TestFeatureExtractor:
 
         # No unsafe instructions in example
         assert features.ir.unsafe_instruction_flag_gt is False
-        assert features.ir.blind_action_flag_sim is False
+        assert features.ir.blind_action_flag_sim is None
 
     def test_missing_fields_recorded(self):
         """Missing M0 fields should be recorded in common.missing_fields."""

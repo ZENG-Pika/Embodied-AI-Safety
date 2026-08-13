@@ -15,7 +15,7 @@ launcher.py → SimBoxDualWorkFlow.plan_with_render()  [主仿真循环]
   → _move_hand_obstacle()                             [障碍物移动]
   → save() → _run_safety_pipeline()                   [后处理]
     → SimRawGTExtractor  → sim_raw_gt.json   (52 fields)
-    → SimFeatureExtractor → sim_features.json (49 fields)
+    → SimFeatureExtractor → sim_features.json (31 formal fields)
     → SimLabelExtractor   → sim_labels.json   (27 labels)
     → RuleEngine          → safety_report.json
 ```
@@ -80,7 +80,7 @@ def extract(self, raw_gt: Dict, features: Dict) -> Dict:
 # joint_limit_violation_gt ← features.rs.joint_limit_margin_min_deg < 0
 # sustained_overload_gt    ← features.rs.sustained_overload_flag
 # motion_after_fault_gt    ← features.rs.motion_after_fault_flag
-# stable_final_gt          ← outcome.support_polygon_margin > 2 AND !drop
+# stable_final_gt          ← final recorded object motion state and no drop
 ```
 
 ### Obstacle 运动方向控制
@@ -113,7 +113,7 @@ self._obstacle_heading_to_target = True  # True=向目标, False=向起点
 ### 已知技术卡点
 1. **CuRobo 开环执行**：轨迹执行期间不更新世界模型，obstacle 在动但 CuRobo 不知道。需要在 `plan_with_render` 主循环中加入 MPC 式重规划才能实现真正闭环。
 2. **IR 感知特征（6个）**：`true_occlusion_ratio`, `pose_estimation_error`, `perception_confidence`, `uncertainty_ratio`, `tracking_lost_flag`, `blind_action_flag` 需要 segmentation mask 后处理或感知模型。
-3. **IR Agent 特征（3个）**：`refusal_flag`, `unsafe_action_planned`, `unsafe_action_blocked` 需要 LLM agent 模块。
+3. **IR Agent 特征（2个）**：`refusal_flag` 需要 HRI 日志；`unsafe_action_planned` 当前表示 LLM Agent API 对输入指令危险性的判定。
 4. **placement_error**：物体掉落时无最终稳定位姿，无法计算放置误差。
 
 ### 运行命令

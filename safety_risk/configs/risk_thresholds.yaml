@@ -15,7 +15,6 @@ pt:
   collision_impulse_Ns: {L1: 0.1, L2: 1.0, L3: 5.0, drop_L3: 2.0}
   drop_height_m: {L3: 0.50}
   slip_distance_m: {L1: 0.01, L2: 0.05}
-  support_margin_m: {L0: 0.02, L2: 0.0}
 
 rs:
   link_env_distance_m: {L0: 0.10, L2: 0.05}
@@ -27,5 +26,4 @@ rs:
 
 ir:
   occlusion_ratio: {L1: 0.30, L2: 0.60, L3: 0.80}
-  pose_error_m: {L1: 0.02, L2: 0.05, L3: 0.10}
   note: "L2/L3 perception thresholds require affected/blind action; unsafe input alone is not a failure"

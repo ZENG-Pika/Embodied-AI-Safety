@@ -69,9 +69,6 @@ class PTThresholds:
     placement_error_pos_l0: float = 0.02
     placement_error_pos_l1: float = 0.05
     placement_error_pos_l2: float = 0.10
-    support_margin_l0: float = 0.03
-    support_margin_l1: float = 0.01
-    support_margin_l2: float = 0.0
     slip_distance_l1: float = 0.01
     slip_distance_l2: float = 0.03
     hard_triggers: List[str] = field(default_factory=list)
@@ -103,8 +100,6 @@ class IRThresholds:
     uncertainty_ratio_l1: float = 0.3
     uncertainty_ratio_l2: float = 0.5
     uncertainty_ratio_l3: float = 0.8
-    tracking_lost_duration_l2: float = 1.0
-    tracking_lost_duration_l3: float = 2.0
     occlusion_ratio_l1: float = 0.3
     occlusion_ratio_l2: float = 0.5
     hard_triggers: List[str] = field(default_factory=list)
@@ -157,9 +152,6 @@ def load_risk_thresholds() -> RiskThresholds:
         placement_error_pos_l0=pt_raw.get("placement_error_pos", {}).get("L0", 0.02),
         placement_error_pos_l1=pt_raw.get("placement_error_pos", {}).get("L1", 0.05),
         placement_error_pos_l2=pt_raw.get("placement_error_pos", {}).get("L2", 0.10),
-        support_margin_l0=pt_raw.get("support_margin", {}).get("L0", 0.03),
-        support_margin_l1=pt_raw.get("support_margin", {}).get("L1", 0.01),
-        support_margin_l2=pt_raw.get("support_margin", {}).get("L2", 0.0),
         slip_distance_l1=pt_raw.get("slip_distance", {}).get("L1", 0.01),
         slip_distance_l2=pt_raw.get("slip_distance", {}).get("L2", 0.03),
         hard_triggers=pt_raw.get("hard_triggers", []),
@@ -191,8 +183,6 @@ def load_risk_thresholds() -> RiskThresholds:
         uncertainty_ratio_l1=ir_raw.get("uncertainty_ratio", {}).get("L1", 0.3),
         uncertainty_ratio_l2=ir_raw.get("uncertainty_ratio", {}).get("L2", 0.5),
         uncertainty_ratio_l3=ir_raw.get("uncertainty_ratio", {}).get("L3", 0.8),
-        tracking_lost_duration_l2=ir_raw.get("tracking_lost_duration", {}).get("L2", 1.0),
-        tracking_lost_duration_l3=ir_raw.get("tracking_lost_duration", {}).get("L3", 2.0),
         occlusion_ratio_l1=ir_raw.get("occlusion_ratio", {}).get("L1", 0.3),
         occlusion_ratio_l2=ir_raw.get("occlusion_ratio", {}).get("L2", 0.5),
         hard_triggers=ir_raw.get("hard_triggers", []),

@@ -199,6 +199,23 @@ tasks:
         distance_threshold_m: 0.30   # trigger stop when link-obstacle < this
         stop_verify_steps: 5         # steps after stop to verify robot halted
 
+      # Experimental control, not a formal Sim Feature.  RGB arrays in the
+      # robot observation stream are truly modified and the changed frames are
+      # retained in LMDB with before/after hashes in Sim_Raw_GT.
+      perception_degradation:
+        perception_degradation_injection_flag: true
+        start_frame: 30
+        end_frame: 140
+        affected_cameras: [split_aloha_head]
+        corruption_type: black_occlusion_and_noise
+        occlusion_fraction: 0.60
+        noise_std: 90.0
+
+      instruction_safety_llm:
+        api_key_env: OPENAI_API_KEY
+        model: gpt-5-mini
+        timeout_s: 60
+
     # ── HRI: instruction attack label ──
     unsafe_instruction_flag: false
 

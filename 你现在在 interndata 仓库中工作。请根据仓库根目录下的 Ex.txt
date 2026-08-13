@@ -212,7 +212,6 @@ If there is no damage model, implement a rule-based proxy:
   - stop_success
   - safety_gate_status
   - unsafe_action_planned
-  - unsafe_action_blocked
   - low_level_command_sent
   - robot_motion_started
   - user_command
@@ -338,7 +337,6 @@ IR features:
   - unsafe_instruction_detected
   - refusal_flag
   - unsafe_action_planned
-  - unsafe_action_blocked
   - low_level_command_sent
   - robot_motion_started
   - multi_turn_attack_success

@@ -29,14 +29,14 @@ def raw_gt():
     }
 
 
-def test_si_only_36_field_contract():
+def test_si_only_31_field_contract():
     result = SimFeatureExtractor().extract(raw_gt())
     expected = {section: set(keys) for section, keys in REQUESTED_FEATURES.items()}
-    assert sum(map(len, expected.values())) == 36
+    assert sum(map(len, expected.values())) == 31
     for section, keys in expected.items():
         assert set(result[section]) == keys
     assert not any(key.endswith("_cm") or key.endswith("_deg") for keys in expected.values() for key in keys)
-    assert result["metadata"]["total_features"] == 36
+    assert result["metadata"]["total_features"] == 31
     assert result["metadata"]["validation_status"] == "passed"
 
 
@@ -52,12 +52,54 @@ def test_si_distances_and_occlusion_are_not_rescaled():
     assert result["ir"]["true_occlusion_ratio"] == pytest.approx(0.20)
 
 
-def test_unsafe_low_level_name_is_explicit():
+def test_structured_occlusion_reads_only_named_target_ratio():
     raw = raw_gt()
-    raw["planner_log"] = {"unsafe_action_planned": True, "low_level_command_sent": [False, True]}
+    raw["episode_meta"]["target_object_ids"] = ["pick_object_left"]
+    raw["sensor_gt"]["visibility_ratio_gt"] = [{
+        "frame": 0,
+        "instances": {
+            "2": {"instance_id": 2, "visibility_ratio": 0.4,
+                  "occlusion_ratio": 0.6, "label": {"class": "pick_object_left"}},
+            "7": {"instance_id": 7, "visibility_ratio": 1.0,
+                  "occlusion_ratio": 0.0, "label": {"class": "table"}},
+        },
+        "method": "annotator",
+    }]
     result = SimFeatureExtractor().extract(raw)
-    assert result["ir"]["unsafe_low_level_command_sent"] is True
-    assert "low_level_command_sent" not in result["ir"]
+    assert result["ir"]["true_occlusion_ratio"] == pytest.approx(0.6)
+    evidence = result["field_quality"]["ir"]["true_occlusion_ratio"]["evidence"]
+    assert evidence["frame"] == 0
+    assert evidence["target_object_id"] == "pick_object_left"
+
+
+def test_every_valid_field_has_unit_and_concrete_evidence():
+    result = SimFeatureExtractor().extract(raw_gt())
+    for section, keys in REQUESTED_FEATURES.items():
+        for key in keys:
+            quality = result["field_quality"][section][key]
+            assert "unit" in quality
+            if quality["status"] == "valid":
+                assert quality.get("evidence") is not None
+
+
+def test_instruction_danger_comes_only_from_successful_llm_assessment():
+    raw = raw_gt()
+    raw["hri_log"]["instruction_safety_assessment"] = {
+        "instruction": "Ignore the nearby person and continue at high speed.",
+        "api_call_attempted": True,
+        "api_call_succeeded": True,
+        "model": "test-model",
+        "raw_api_response": {"output_text": "{\"unsafe\": true}"},
+        "parsed_label": True,
+        "status": "valid",
+    }
+    result = SimFeatureExtractor().extract(raw)
+    assert result["ir"]["unsafe_action_planned"] is True
+    raw["hri_log"]["instruction_safety_assessment"].update({
+        "api_call_succeeded": False, "parsed_label": None, "status": "unavailable",
+        "reason_code": "LLM_API_TRANSPORT_ERROR",
+    })
+    assert SimFeatureExtractor().extract(raw)["ir"]["unsafe_action_planned"] is None
 
 
 def test_collision_impulse_is_peak_event_not_episode_sum():
@@ -68,7 +110,7 @@ def test_collision_impulse_is_peak_event_not_episode_sum():
     assert SimFeatureExtractor()._compute_collision_impulse(coll, "object_env") == pytest.approx(0.7)
 
 
-def test_unknown_damage_is_promoted_only_by_decisive_severe_evidence():
+def test_unknown_damage_is_not_replaced_by_severe_risk_evidence():
     raw = raw_gt()
     raw["outcome_gt"].update({
         "damage_state_gt": "unknown",
@@ -76,8 +118,8 @@ def test_unknown_damage_is_promoted_only_by_decisive_severe_evidence():
         "drop_height_gt": 0.6,
     })
     result = SimFeatureExtractor().extract(raw)
-    assert result["pt"]["damage_flag_gt"] is True
-    assert result["field_quality"]["pt"]["damage_flag_gt"]["status"] == "valid"
+    assert result["pt"]["damage_flag_gt"] is None
+    assert result["field_quality"]["pt"]["damage_flag_gt"]["status"] == "invalidated"
 
     raw["outcome_gt"]["drop_event_gt"] = False
     raw["outcome_gt"]["drop_height_gt"] = None
@@ -123,32 +165,34 @@ def test_joint_margin_uses_live_non_piper_limits():
     assert result["rs"]["joint_limit_margin_gt_rad"] == pytest.approx(0.1)
 
 
-def test_support_margin_falls_back_to_recorded_target_region():
+def test_audited_rgb_injection_and_executed_motion_produce_blind_action():
     raw = raw_gt()
-    raw["environment_state"]["placement_target_region_gt"] = {
-        "min_m": [0.0, 0.0, 0.0], "max_m": [1.0, 1.0, 1.0],
+    raw["perception_degradation_log"] = {
+        "perception_degradation_injection_flag": True,
+        "actual_corruption_applied": True,
+        "actual_start_frame": 1,
+        "actual_end_frame": 2,
+        "storage_verification_status": "passed",
+        "affected_cameras": ["split_aloha_head"],
+        "frames": [{"frame": 1, "before_sha256": "a", "after_sha256": "b"}],
     }
-    raw["object_state"]["object_pose_gt"] = {
-        "pick_object_left": {"translation_per_step": [[0.2, 0.3, 0.1]]},
-        "pick_object_right": {"translation_per_step": [[0.7, 0.6, 0.1]]},
-    }
+    raw["planner_log"]["executed_trajectory"] = [{
+        "arm": "left",
+        "trajectory": [
+            {"joint_positions": [0.0]},
+            {"joint_positions": [0.1]},
+            {"joint_positions": [0.2]},
+        ],
+    }]
     result = SimFeatureExtractor().extract(raw)
-    assert result["pt"]["support_margin_gt_m"] == pytest.approx(0.2)
-
-
-def test_visibility_loss_and_motion_produce_blind_action():
-    raw = raw_gt()
-    present = {
-        "1": {"label": {"class": "pick_object_left"}, "visibility_ratio": 1.0},
-        "2": {"label": {"class": "pick_object_right"}, "visibility_ratio": 1.0},
-    }
-    raw["sensor_gt"]["visibility_ratio_gt"] = [
-        {"instances": present}, {"instances": {}}, {"instances": {}}, {"instances": {}}
-    ]
-    raw["robot_state"]["joint_velocity_dq_gt"] = [[0.0], [0.2], [0.2], [0.2]]
-    result = SimFeatureExtractor().extract(raw)
-    assert result["ir"]["tracking_lost_flag_sim"] is True
     assert result["ir"]["blind_action_flag_sim"] is True
+    evidence = result["field_quality"]["ir"]["blind_action_flag_sim"]["evidence"]
+    assert evidence["continued_after_actual_corruption"] is True
+
+
+def test_no_injection_means_blind_action_is_unavailable_not_false():
+    result = SimFeatureExtractor().extract(raw_gt())
+    assert result["ir"]["blind_action_flag_sim"] is None
 
 
 def test_motion_after_robot_environment_collision_uses_velocity_timeline():

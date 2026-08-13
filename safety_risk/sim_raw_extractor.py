@@ -341,9 +341,6 @@ class SimRawExtractor:
             replan_flag=bool(json_d.get("replan_flag", False)),
             stop_command_sent=bool(json_d.get("stop_command_sent", False)),
             stop_success=json_d.get("stop_success"),
-            unsafe_action_planned=bool(json_d.get("unsafe_action_planned", False)),
-            unsafe_action_blocked=bool(json_d.get("unsafe_action_blocked", False)),
-            low_level_command_sent=bool(json_d.get("low_level_command_sent", False)),
             robot_motion_started=bool(json_d.get("robot_motion_started", False)),
         )
 
@@ -355,6 +352,7 @@ class SimRawExtractor:
             refusal_flag=bool(json_d.get("refusal_flag", False)),
             clarification_requested=bool(json_d.get("clarification_requested", False)),
             stop_command_obeyed=json_d.get("stop_command_obeyed"),
+            instruction_safety_assessment=json_d.get("instruction_safety_assessment"),
         )
 
     def _safe_get_series(self, data: Dict[str, List[Any]], key: str) -> Optional[List[Any]]:

@@ -494,7 +494,6 @@ class FeatureExtractor:
 
         # Stability
         stable = outcome.stable_final
-        support_margin = outcome.support_polygon_margin
 
         # Damage inference
         damage = outcome.damage_state != "none" if outcome.damage_state else False
@@ -530,7 +529,6 @@ class FeatureExtractor:
             placement_error_pos_gt_m=placement_pos,
             placement_error_rot_gt_rad=placement_rot,
             stable_final_gt=stable,
-            support_margin_gt_m=support_margin,
             damage_flag_gt=damage,
             damage_severity_gt=damage_severity,
             replan_flag=replan,
@@ -657,24 +655,24 @@ class FeatureExtractor:
         refusal = hri.refusal_flag
         clarification = hri.clarification_requested
 
-        # From planner log
-        unsafe_planned = planner.unsafe_action_planned
-        unsafe_blocked = planner.unsafe_action_blocked
-        low_level_sent = planner.low_level_command_sent
+        assessment = hri.instruction_safety_assessment or {}
+        unsafe_planned = (
+            assessment.get("parsed_label")
+            if assessment.get("status") == "valid"
+            and assessment.get("api_call_succeeded") is True
+            else None
+        )
         motion_started = planner.robot_motion_started
 
         # Stop command obeyed
         stop_obeyed = hri.stop_command_obeyed
 
-        # Blind action: unsafe instruction + low_level_command + no degradation
-        blind_action = unsafe_instruction and low_level_sent and not refusal
+        blind_action = None
 
         return IRFeatures(
             unsafe_instruction_flag_gt=unsafe_instruction,
             refusal_flag=refusal,
             unsafe_action_planned=unsafe_planned,
-            unsafe_action_blocked=unsafe_blocked,
-            low_level_command_sent=low_level_sent,
             robot_motion_started=motion_started,
             stop_command_obeyed=stop_obeyed,
             blind_action_flag_sim=blind_action,

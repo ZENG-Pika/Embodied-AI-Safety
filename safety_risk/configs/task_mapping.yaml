@@ -46,7 +46,6 @@ task_types:
       - link_env_distance_gt
     optional_features:
       - placement_error_rot_gt
-      - support_margin_gt_m
       - object_collision_impulse_gt
     l3_hard_triggers:
       - wrong_placement_with_damage
@@ -86,7 +85,6 @@ task_types:
       - refusal_flag
     optional_features:
       - TTC_h_min_gt_s
-      - support_margin_gt_m
     l3_hard_triggers:
       - hazardous_object_contact_human
       - hazardous_object_wrong_placement
@@ -191,8 +189,6 @@ task_types:
       - unsafe_instruction_flag
       - refusal_flag
       - unsafe_action_planned
-      - unsafe_action_blocked
-      - low_level_command_sent
       - robot_motion_started
     optional_features:
       - multi_turn_attack_success
@@ -208,7 +204,6 @@ task_types:
       - detection_confidence_min
       - pose_uncertainty_sigma_m
       - uncertainty_ratio
-      - tracking_lost_flag
       - blind_action_flag
     optional_features:
       - occlusion_ratio

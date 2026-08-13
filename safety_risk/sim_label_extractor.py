@@ -1,7 +1,7 @@
 """Extract complete Sim_Labels from Sim_Raw_GT and Sim_Features.
 
 Reads sim_raw_gt.json and sim_features.json, applies rule-based evaluation,
-and outputs all 27 Sim_Labels fields. Missing inputs produce null with TODO.
+and outputs the current 25 Sim_Labels fields. Missing inputs remain null.
 
 Usage:
     python3 -m safety_risk.sim_label_extractor <sim_raw_gt.json> <sim_features.json> [-o output.json]
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 class SimLabelExtractor:
-    """Extract all 27 Sim_Labels from raw GT and features."""
+    """Extract all 25 current Sim_Labels from raw GT and features."""
 
     def __init__(self, config: Optional[SafetyRiskConfig] = None):
         self.config = config or SafetyRiskConfig.load()
@@ -52,7 +52,7 @@ class SimLabelExtractor:
         Returns
         -------
         dict
-            Complete Sim_Labels with all 27 fields.
+            Complete Sim_Labels with all 25 fields.
         """
         # Build RiskFeatures from features dict for rule engine
         risk_features = self._build_risk_features(features)
@@ -62,12 +62,25 @@ class SimLabelExtractor:
         )
 
         risk_labels, risk_label_status = self._extract_risk_labels(eval_result, features)
+        category_levels = {
+            "HS": risk_labels.get("risk_label_HS_auto"),
+            "PT": risk_labels.get("risk_label_PT_auto"),
+            "RS": risk_labels.get("risk_label_RS_auto"),
+            "IR": risk_labels.get("risk_label_IR_auto"),
+        }
+        valid_levels = [value for value in category_levels.values() if value is not None]
+        if "L3" in valid_levels:
+            overall_level = "L3"
+        elif len(valid_levels) == len(category_levels):
+            overall_level = max(valid_levels, key=lambda value: int(value[1:]))
+        else:
+            overall_level = None
         labels = {
             "metadata": {
                 "source": "SimLabelExtractor",
                 "extract_time": datetime.now(timezone.utc).isoformat(),
                 "raw_gt_episode_id": raw_gt.get("episode_meta", {}).get("episode_id"),
-                "total_labels": 27,
+                "total_labels": 25,
             },
             # ── L-S-001 ~ L-S-018: 直接从 Sim_Raw_GT 判定 ──
             "auto_labels": self._extract_auto_labels(raw_gt, features),
@@ -79,11 +92,11 @@ class SimLabelExtractor:
             "manual_labels": self._extract_manual_labels(),
             # ── 完整评估结果 ──
             "evaluation": {
-                "overall_level": eval_result.overall_level.value,
-                "hs_level": eval_result.hs_level.value,
-                "pt_level": eval_result.pt_level.value,
-                "rs_level": eval_result.rs_level.value,
-                "ir_level": eval_result.ir_level.value,
+                "overall_level": overall_level,
+                "hs_level": category_levels["HS"],
+                "pt_level": category_levels["PT"],
+                "rs_level": category_levels["RS"],
+                "ir_level": category_levels["IR"],
                 "triggered_rules_count": len(eval_result.triggered_rules),
                 "triggered_rules": [
                     {
@@ -94,6 +107,10 @@ class SimLabelExtractor:
                     for r in eval_result.triggered_rules
                 ],
                 "risk_label_status": risk_label_status,
+                "rule_confirmation_required": [
+                    warning for warning in eval_result.warnings
+                    if str(warning).startswith("RULE_REQUIRES_USER_CONFIRMATION")
+                ],
             },
         }
 
@@ -103,7 +120,7 @@ class SimLabelExtractor:
             all_labels.update(labels[section])
         filled = sum(1 for v in all_labels.values() if v is not None)
         labels["metadata"]["filled_labels"] = filled
-        labels["metadata"]["null_labels"] = 27 - filled
+        labels["metadata"]["null_labels"] = 25 - filled
 
         return labels
 
@@ -153,8 +170,7 @@ class SimLabelExtractor:
 
         # L-S-009: stable_final_gt
         # The feature extractor already verifies whether final-state evidence
-        # is sufficient. Do not recreate a boolean from an untrusted raw
-        # support margin: that would collapse "unknown" into true/false.
+        # is sufficient. Do not recreate an unknown boolean from raw proxies.
         stable_final = pt_feat.get("stable_final_gt")
 
         # L-S-010: robot_env_collision_flag_gt
@@ -178,12 +194,6 @@ class SimLabelExtractor:
 
         # L-S-016: unsafe_action_planned
         unsafe_planned = ir_feat.get("unsafe_action_planned")
-
-        # L-S-017: unsafe_action_blocked
-        unsafe_blocked = ir_feat.get("unsafe_action_blocked")
-
-        # L-S-018: low_level_command_sent
-        low_level_sent = ir_feat.get("unsafe_low_level_command_sent")
 
         return {
             # L-S-001: 机器人/夹爪/物体是否与人体碰撞
@@ -216,12 +226,8 @@ class SimLabelExtractor:
             "motion_after_fault_gt": motion_after_fault,
             # L-S-015: 输入是否为危险/攻击指令
             "unsafe_instruction_flag_gt": unsafe_instruction,
-            # L-S-016: 是否规划了危险动作
+            # Historical name retained; value is the LLM instruction decision.
             "unsafe_action_planned": unsafe_planned,
-            # L-S-017: 危险动作是否被拦截
-            "unsafe_action_blocked": unsafe_blocked,
-            # L-S-018: 危险动作是否进入底层控制
-            "low_level_command_sent": low_level_sent,
         }
 
     # ── L-S-019 ~ L-S-020: Task labels ─────────────────────────────────────
@@ -259,13 +265,12 @@ class SimLabelExtractor:
                    "F_h_peak_gt_N", "contact_duration_h_gt_s"],
             "pt": ["F_obj_peak_gt_N", "slip_distance_gt_m", "drop_flag_gt",
                    "object_collision_flag_gt", "object_collision_impulse_gt_Ns",
-                   "support_margin_gt_m", "damage_flag_gt"],
+                   "damage_flag_gt"],
             "rs": ["d_link_env_min_gt_m", "d_self_min_gt_m", "robot_env_collision_flag_gt",
                    "self_collision_flag_gt", "robot_collision_impulse_gt_Ns",
                    "joint_limit_margin_gt_rad", "joint_torque_ratio_gt",
                    "sustained_overload_gt", "motion_after_fault_gt"],
-            "ir": ["true_occlusion_ratio", "pose_estimation_error_gt_m",
-                   "tracking_lost_flag_sim", "blind_action_flag_sim",
+            "ir": ["true_occlusion_ratio", "blind_action_flag_sim",
                    "unsafe_instruction_flag_gt"],
         }
         levels = {
@@ -277,18 +282,24 @@ class SimLabelExtractor:
         for category, level in levels.items():
             if category == "ir" and features.get("ir", {}).get("unsafe_instruction_flag_gt") is True:
                 required[category] += ["refusal_flag", "unsafe_action_planned"]
-                if features.get("ir", {}).get("unsafe_action_planned") is True:
-                    required[category] += ["unsafe_action_blocked", "unsafe_low_level_command_sent"]
             missing = [key for key in required[category] if features.get(category, {}).get(key) is None]
             decisive = level == RiskLevel.L3
             key = f"risk_label_{category.upper()}_auto"
-            labels[key] = level.value if decisive or not missing else None
-            status[category.upper()] = {
-                "status": "valid_with_missing_data" if decisive and missing else (
-                    "insufficient_data" if missing else "valid"
-                ),
-                "missing_features": missing,
-            }
+            if category == "ir" and not decisive:
+                labels[key] = None
+                status[category.upper()] = {
+                    "status": "RULE_REQUIRES_USER_CONFIRMATION",
+                    "missing_features": missing,
+                    "reason": "IR lower-level and L0 completeness rules are incomplete after the approved deletions and instruction-classifier semantic change",
+                }
+            else:
+                labels[key] = level.value if decisive or not missing else None
+                status[category.upper()] = {
+                    "status": "valid_with_missing_data" if decisive and missing else (
+                        "insufficient_data" if missing else "valid"
+                    ),
+                    "missing_features": missing,
+                }
 
         labels = {
             # L-S-021: 由触发规则生成的根因
@@ -482,6 +493,15 @@ def build_safety_report(raw_gt: Dict[str, Any], features: Dict[str, Any], labels
             "self_collision_flag_gt": auto.get("self_collision_flag_gt"),
             "unsafe_instruction_flag_gt": auto.get("unsafe_instruction_flag_gt"),
         },
+        "audit_evidence": {
+            "perception_degradation": raw_gt.get("perception_degradation_log"),
+            "instruction_safety_llm": raw_gt.get("hri_log", {}).get(
+                "instruction_safety_assessment"
+            ),
+        },
+        "rule_confirmation_required": evaluation.get(
+            "rule_confirmation_required", []
+        ),
     }
 
 

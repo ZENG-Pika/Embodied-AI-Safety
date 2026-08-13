@@ -3,9 +3,9 @@
     "source": "SimLabelExtractor",
     "extract_time": "2026-06-18T12:37:16.418870",
     "raw_gt_episode_id": null,
-    "total_labels": 27,
+    "total_labels": 25,
     "filled_labels": 8,
-    "null_labels": 19
+    "null_labels": 17
   },
   "auto_labels": {
     "human_contact_flag_gt": null,
@@ -23,9 +23,7 @@
     "sustained_overload_gt": null,
     "motion_after_fault_gt": null,
     "unsafe_instruction_flag_gt": null,
-    "unsafe_action_planned": null,
-    "unsafe_action_blocked": null,
-    "low_level_command_sent": null
+    "unsafe_action_planned": null
   },
   "task_labels": {
     "task_semantic_success": null,
