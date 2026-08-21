@@ -4,6 +4,7 @@ import time
 from nimbus.components.data.iterator import Iterator
 from nimbus.components.data.observation import Observations
 from nimbus.components.data.scene import Scene
+from nimbus.components.load.base_randomizer import FatalSimulationError, SceneRandomizationError
 from nimbus.daemon.decorators import status_monitor
 from nimbus.utils.flags import is_debug_mode
 
@@ -46,6 +47,8 @@ class EnvPlanWithRender(Iterator):
                         return None, None, None
                 except StopIteration:
                     raise StopIteration("No more scene to process.")
+                except (FatalSimulationError, SceneRandomizationError):
+                    raise
                 except Exception as e:
                     self.logger.exception(f"Error loading next scene: {e}")
                     if is_debug_mode():
@@ -69,6 +72,8 @@ class EnvPlanWithRender(Iterator):
                 self.logger.info(f"Generate seq failed and retry. Current episode id is {self.current_episode}")
         except StopIteration:
             raise StopIteration("No more scene to process.")
+        except (FatalSimulationError, SceneRandomizationError):
+            raise
         except Exception as e:
             scene_name = getattr(self.scene, "name", "<unknown>")
             self.logger.exception(

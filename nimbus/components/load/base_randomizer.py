@@ -8,6 +8,22 @@ from nimbus.components.data.scene import Scene
 from nimbus.daemon.decorators import status_monitor
 
 
+class FatalSimulationError(RuntimeError):
+    """The current Isaac Sim World cannot be safely reused after this error."""
+
+
+class SceneRandomizationError(RuntimeError):
+    """Scene randomization exhausted its configured retry budget."""
+
+
+def _is_invalidated_simulation_view(exc: Exception) -> bool:
+    message = str(exc)
+    return (
+        "Simulation view object is invalidated" in message
+        or "Failed to get rigid body velocities from backend" in message
+    )
+
+
 class LayoutRandomizer(Iterator):
     """
     Base class for layout randomization in a scene. This class defines the structure for randomizing scenes and
@@ -71,7 +87,16 @@ class LayoutRandomizer(Iterator):
             raise StopIteration("No more scenes to randomize.")
         except Exception as e:
             self.logger.exception(f"Error during scene idx {self.cur_index} randomization: {e}")
+            if _is_invalidated_simulation_view(e):
+                raise FatalSimulationError(
+                    "Isaac Sim PhysX tensor view was invalidated; restart the World/process."
+                ) from e
+            self.retry_count += 1
             self.cur_index += 1
+            if self.max_attempts is not None and self.retry_count >= self.max_attempts:
+                raise SceneRandomizationError(
+                    f"Scene randomization failed after {self.max_attempts} attempt(s)."
+                ) from e
             raise e
 
     @abstractmethod

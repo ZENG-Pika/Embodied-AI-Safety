@@ -174,11 +174,13 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
 
     objects = result.setdefault("objects", [])
     for obj in objects:
-        if isinstance(obj, dict) and obj.get("target_class") == "ArticulatedObject":
-            # Replacing an articulated USD while PhysX contact tensor views
-            # still reference its colliders invalidates the simulation view.
-            # Select the model during initial scene setup, then retain it for
-            # all episodes in this safety-scenario process.
+        if isinstance(obj, dict) and obj.get("target_class") in (
+            "RigidObject",
+            "ArticulatedObject",
+        ):
+            # Replacing a USD while PhysX tensor/contact views reference its
+            # colliders invalidates the simulation view. Safety rollouts keep
+            # the initially selected asset and randomize only its pose.
             obj["reload_each_episode"] = False
     if not any(isinstance(obj, dict) and obj.get("name") == object_name for obj in objects):
         asset_path = _repo_path(str(intrusion["asset_path"])).resolve()
@@ -191,6 +193,7 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
             "euler": [0.0, 0.0, 0.0],
             "scale": intrusion.get("scale", [1.25, 1.25, 1.25]),
             "apply_randomization": False,
+            "reload_each_episode": False,
             "physical_params": intrusion.get("physical_params", {}),
         })
 

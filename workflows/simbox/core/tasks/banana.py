@@ -62,6 +62,35 @@ class BananaBaseTask(BaseTask):
         self.particlesVisualMaterialPath = None
         self._defaultFluidPath = Sdf.Path("/World/task_0/fulid")
 
+    @staticmethod
+    def _should_reload_object(cfg: DictConfig) -> bool:
+        """Return whether an episode may replace this object's USD prim."""
+        return bool(
+            cfg.get("apply_randomization", False)
+            and cfg.get("reload_each_episode", True)
+        )
+
+    @staticmethod
+    def _reset_object_velocity(obj, cfg: DictConfig) -> None:
+        """Reset velocity when the asset exposes typed velocity attributes."""
+        for method_name in ("set_linear_velocity", "set_angular_velocity"):
+            method = getattr(obj, method_name, None)
+            if method is None:
+                continue
+            try:
+                method(np.zeros(3, dtype=np.float32))
+            except Exception as exc:
+                message = str(exc)
+                if (
+                    "Simulation view object is invalidated" in message
+                    or "Failed to get rigid body velocities from backend" in message
+                ):
+                    raise
+                print(
+                    f"[object_reset] name={cfg['name']} "
+                    f"velocity_reset_skipped method={method_name}: {exc}"
+                )
+
     def set_up_scene(self, scene: Scene) -> None:
         super().set_up_scene(scene)
         self._set_envmap()
@@ -177,13 +206,22 @@ class BananaBaseTask(BaseTask):
         if reload_articulated:
             self.cfg = update_articulated_objs(self.cfg)
         for cfg in self.cfg["objects"]:
-            if cfg.get("apply_randomization", False) and (
-                cfg.get("target_class") != "ArticulatedObject"
-                or cfg.get("reload_each_episode", True)
-            ):
+            if self._should_reload_object(cfg):
+                print(
+                    f"[object_reset] name={cfg['name']} action=reload "
+                    f"path={cfg.get('path', '<unknown>')}"
+                )
                 delete_prim(os.path.dirname(self.objects[cfg["name"]].prim_path))
                 self.objects[cfg["name"]] = self._load_obj(cfg)
                 self._task_objects[cfg["name"]] = self.objects[cfg["name"]]
+            else:
+                print(
+                    f"[object_reset] name={cfg['name']} action=reuse "
+                    f"path={cfg.get('path', '<unknown>')}"
+                )
+                obj = self.objects.get(cfg["name"])
+                if obj is not None:
+                    self._reset_object_velocity(obj, cfg)
 
         optimize_2d_manip_layout(self.cfg["objects"], self.cfg["regions"], self.objects)
         self.pickcontact_views = self._set_pickcontact_view(self.cfg)
@@ -200,13 +238,22 @@ class BananaBaseTask(BaseTask):
 
         # Update objects
         for cfg in self.cfg["objects"]:
-            if cfg.get("apply_randomization", False) and (
-                cfg.get("target_class") != "ArticulatedObject"
-                or cfg.get("reload_each_episode", True)
-            ):
+            if self._should_reload_object(cfg):
+                print(
+                    f"[object_reset] name={cfg['name']} action=reload "
+                    f"path={cfg.get('path', '<unknown>')}"
+                )
                 delete_prim(os.path.dirname(self.objects[cfg["name"]].prim_path))
                 self.objects[cfg["name"]] = self._load_obj(cfg)
                 self._task_objects[cfg["name"]] = self.objects[cfg["name"]]
+            else:
+                print(
+                    f"[object_reset] name={cfg['name']} action=reuse "
+                    f"path={cfg.get('path', '<unknown>')}"
+                )
+                obj = self.objects.get(cfg["name"])
+                if obj is not None:
+                    self._reset_object_velocity(obj, cfg)
 
         optimize_2d_manip_layout(self.cfg["objects"], self.cfg["regions"], self.objects)
         self.pickcontact_views = self._set_pickcontact_view(self.cfg)
