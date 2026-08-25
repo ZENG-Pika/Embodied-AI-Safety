@@ -22,6 +22,11 @@ from omni.physx import acquire_physx_interface
 from tqdm import tqdm
 from yaml import Loader
 
+from safety_risk.drop_metrics import (
+    DROP_EVENT_DISPLACEMENT_THRESHOLD_M,
+    escape_drop_displacement_m,
+    meets_drop_displacement_threshold,
+)
 from deps.world_toolkit.world_recorder import WorldRecorder
 from workflows.simbox.utils.task_config_parser import TaskConfigParser
 
@@ -1034,6 +1039,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 # Planner data
                 raw_gt["planner_log"]["planned_trajectory"] = physx_data.get("planned_trajectory")
                 raw_gt["planner_log"]["safety_gate_status"] = physx_data.get("safety_gate_status")
+                raw_gt["planner_log"]["low_level_command_sent"] = physx_data.get("low_level_command_sent")
                 # Safety gate / stop event data
                 raw_gt["planner_log"]["stop_success"] = physx_data.get("stop_success")
                 raw_gt["planner_log"]["stop_margin_s"] = physx_data.get("stop_margin_s")
@@ -1163,39 +1169,6 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 raw_gt["perception_degradation_log"] = verify_lmdb_storage(
                     injector.audit_log(), str(episode_dir / "lmdb")
                 )
-
-            # Classify the original instruction through a real LLM Agent API.
-            # The classifier has no keyword/default fallback: any unavailable
-            # credential, HTTP failure, or invalid response remains null later.
-            try:
-                from safety_risk.instruction_safety import LLMInstructionSafetyClassifier
-                llm_cfg = self._safety_eval_cfg.get("instruction_safety_llm", {})
-                instruction = raw_gt.get("hri_log", {}).get("user_command_text")
-                assessment = LLMInstructionSafetyClassifier.from_config(llm_cfg).classify(
-                    instruction
-                )
-                raw_gt.setdefault("hri_log", {})[
-                    "instruction_safety_assessment"
-                ] = assessment
-                print(
-                    "[safety_risk] instruction LLM assessment "
-                    f"status={assessment.get('status')} "
-                    f"reason={assessment.get('reason_code')}"
-                )
-            except Exception as e:
-                raw_gt.setdefault("hri_log", {})[
-                    "instruction_safety_assessment"
-                ] = {
-                    "instruction": raw_gt.get("hri_log", {}).get("user_command_text"),
-                    "api_call_attempted": False,
-                    "api_call_succeeded": False,
-                    "model": None,
-                    "raw_api_response": None,
-                    "parsed_label": None,
-                    "status": "unavailable",
-                    "reason_code": "LLM_CLASSIFIER_INITIALIZATION_FAILED",
-                    "error_type": type(e).__name__,
-                }
 
             self._compact_sim_raw_gt(raw_gt)
             raw_gt_path = episode_dir / "sim_raw_gt.json"
@@ -2500,7 +2473,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                                 break
                             if (
                                 first_impact is None
-                                and fall_at_probe >= 0.05
+                                and meets_drop_displacement_threshold(fall_at_probe)
                                 and _environment_impact(pairs[probe], target)
                             ):
                                 first_impact = (
@@ -2512,7 +2485,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                         if contacts[probe] and probe > index:
                             break
                     fall = max(0.0, z_start - z_min)
-                    if fall >= 0.05:
+                    if meets_drop_displacement_threshold(fall):
                         object_drop = True
                         drop_start_step = index
                         release_mode = candidate_release_mode
@@ -2547,21 +2520,20 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     )
                     reference = position_series[reference_index]
                     escaped_position = position_series[first_escape_index]
-                    if (
-                        isinstance(reference, (list, tuple))
-                        and len(reference) >= 3
-                        and isinstance(escaped_position, (list, tuple))
-                        and len(escaped_position) >= 3
-                    ):
-                        object_drop_height = max(
-                            0.0,
-                            float(reference[2]) - float(escaped_position[2]),
-                        )
-                    object_drop = True
-                    drop_start_step = reference_index
-                    escape_step = first_escape_index
-                    termination_status = "escaped_simulation"
-                    release_mode = "simulation_escape_without_observed_release"
+                    escape_displacement = escape_drop_displacement_m(
+                        reference, escaped_position, first_escape_index,
+                    )
+                    if meets_drop_displacement_threshold(escape_displacement):
+                        object_drop_height = escape_displacement
+                        object_drop = True
+                        drop_start_step = reference_index
+                        escape_step = first_escape_index
+                        termination_status = "escaped_simulation"
+                        release_mode = "simulation_escape_without_observed_release"
+                    elif first_escape_index == 0:
+                        termination_status = "initial_state_out_of_bounds"
+                    else:
+                        termination_status = "escape_below_drop_displacement_threshold"
 
             event_by_object[target] = object_drop if confirmed or object_drop else None
             height_by_object[target] = {
@@ -2586,6 +2558,12 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 "termination_status": termination_status,
                 "release_mode": release_mode,
                 "drop_height_m": object_drop_height,
+                "drop_event_displacement_threshold_m": DROP_EVENT_DISPLACEMENT_THRESHOLD_M,
+                "drop_event_metric": (
+                    "downward displacement from the last pre-escape sample to the first out-of-bounds sample"
+                    if release_mode == "simulation_escape_without_observed_release"
+                    else "post-confirmed-grasp downward displacement after robot-object contact loss"
+                ),
                 "drop_height_definition": (
                     "vertical distance from last grasped pose to first "
                     "object-environment impact or first out-of-bounds sample"
@@ -2745,8 +2723,32 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         instance_ids = []
         bboxes = []
         vis_ratios = []
+        pose_estimates = []
+        pose_errors = []
+
+        depth_prefix = sensor_prefixes["depth"].get(camera_name)
+        intrinsics = None
+        try:
+            with open(os.path.join(lmdb_path, "info.json"), "r", encoding="utf-8") as info_file:
+                intrinsics = json.load(info_file).get(f"{camera_name}_camera_params")
+        except Exception:
+            intrinsics = None
+
+        def _decode_depth(raw_value):
+            image = _decode_seg(raw_value)
+            if image is None:
+                return None
+            if np.issubdtype(image.dtype, np.integer):
+                return image.astype(np.float64) / 10000.0
+            return image.astype(np.float64)
+
+        object_poses = raw_gt.get("object_state", {}).get("object_pose_gt", {})
+        perception_targets = set(
+            raw_gt.get("episode_meta", {}).get("target_object_ids", []) or []
+        )
         with env.begin() as txn:
             sensor_frame_count = _count_frames(txn, seg_prefix)
+            camera_poses = _load_pickle(txn, f"camera2env_pose.{camera_name}")
             instance_labels = _load_pickle(txn, label_key)
             bbox_series = _load_pickle(txn, bbox_key)
             bbox_label_series = _load_pickle(txn, bbox_labels_key)
@@ -2768,6 +2770,8 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     })
                     bboxes.append({"frame": frame_idx, "instances": None})
                     vis_ratios.append({"frame": frame_idx, "instances": None})
+                    pose_estimates.append({"frame": frame_idx, "objects": {}})
+                    pose_errors.append({"frame": frame_idx, "objects": {}})
                     frame_idx += 1
                     continue
 
@@ -2798,7 +2802,20 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 })
 
                 frame_bboxes = {}
-                frame_ratios = None
+                frame_pose_estimates = {}
+                frame_pose_errors = {}
+                depth_img = None
+                if depth_prefix:
+                    depth_raw = txn.get(
+                        f"{depth_prefix}/{str(frame_idx).zfill(4)}".encode("utf-8")
+                    )
+                    if depth_raw is not None:
+                        depth_img = _decode_depth(depth_raw)
+                camera_pose = (
+                    camera_poses[frame_idx]
+                    if isinstance(camera_poses, list) and frame_idx < len(camera_poses)
+                    else None
+                )
                 for inst_id in unique_ids:
                     coords = np.where(seg_img == inst_id)
                     if len(coords[0]) == 0:
@@ -2812,7 +2829,53 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                         frame_instance_labels.get(key_id)
                         if isinstance(frame_instance_labels, dict) else None
                     )
+                    class_name = None
+                    if isinstance(label_text, dict):
+                        class_name = label_text.get("class")
+                    elif label_text is not None:
+                        for candidate in perception_targets:
+                            if candidate in str(label_text):
+                                class_name = candidate
+                                break
+                    if (class_name in perception_targets
+                            and depth_img is not None and camera_pose is not None
+                            and isinstance(intrinsics, list)):
+                        ys, xs = coords[0], coords[1]
+                        depths = depth_img[ys, xs]
+                        valid = np.isfinite(depths) & (depths > 0.0)
+                        if np.any(valid):
+                            z = depths[valid]
+                            u, v = xs[valid], ys[valid]
+                            fx, fy = float(intrinsics[0][0]), float(intrinsics[1][1])
+                            cx, cy = float(intrinsics[0][2]), float(intrinsics[1][2])
+                            camera_points = np.stack([
+                                (u - cx) * z / fx,
+                                -(v - cy) * z / fy,
+                                -z,
+                                np.ones_like(z),
+                            ], axis=1)
+                            world = (np.asarray(camera_pose) @ camera_points.T).T[:, :3]
+                            estimate = np.median(world, axis=0)
+                            frame_pose_estimates[str(class_name)] = estimate.tolist()
+                            gt_data = object_poses.get(class_name, {})
+                            gt_series = (
+                                gt_data.get("translation_per_step", [])
+                                if isinstance(gt_data, dict) else []
+                            )
+                            if gt_series:
+                                mapped = min(
+                                    int(round(frame_idx * (len(gt_series) - 1)
+                                              / max(sensor_frame_count - 1, 1))),
+                                    len(gt_series) - 1,
+                                )
+                                frame_pose_errors[str(class_name)] = float(
+                                    np.linalg.norm(
+                                        estimate - np.asarray(gt_series[mapped][:3])
+                                    )
+                                )
                 bboxes.append({"frame": frame_idx, "instances": frame_bboxes})
+                pose_estimates.append({"frame": frame_idx, "objects": frame_pose_estimates})
+                pose_errors.append({"frame": frame_idx, "objects": frame_pose_errors})
 
                 bbox_frame = (
                     bbox_series[frame_idx]
@@ -2870,6 +2933,17 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         result["instance_id_map_gt"] = instance_ids
         result["object_bbox_gt"] = bboxes
         result["visibility_ratio_gt"] = vis_ratios
+        if any(item["objects"] for item in pose_estimates):
+            result["object_pose_est"] = {
+                "frames": pose_estimates,
+                "method": "head_depth_instance_mask_visible_surface_median_backprojection",
+                "unit": "m",
+            }
+            result["pose_estimation_error_gt_m"] = {
+                "frames": pose_errors,
+                "method": "sensor_depth_estimate_vs_sim_object_center",
+                "unit": "m",
+            }
         return result
 
     def _fix_obstacle_physics_hierarchy(self):
@@ -3349,6 +3423,9 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     settle_step_id = step_id + j_idx
                     if _physx_collector is not None:
                         _physx_collector.collect_step(self.task, settle_step_id)
+                        _physx_collector.record_low_level_command_sent(
+                            settle_step_id, False
+                        )
                     obs = self._apply_perception_degradation(
                         self.world.get_observations(), settle_step_id
                     )
@@ -3379,6 +3456,9 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             if _physx_collector is not None:
                 try:
                     _physx_collector.collect_step(self.task, step_id)
+                    _physx_collector.record_low_level_command_sent(
+                        step_id, bool(action_dict)
+                    )
                 except Exception:
                     pass  # Never block the simulation loop
 

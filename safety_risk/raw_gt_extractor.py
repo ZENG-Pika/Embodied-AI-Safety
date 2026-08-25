@@ -17,6 +17,11 @@ import pickle
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from safety_risk.drop_metrics import (
+    DROP_EVENT_DISPLACEMENT_THRESHOLD_M,
+    meets_drop_displacement_threshold,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -634,6 +639,8 @@ class SimRawGTExtractor:
             "executed_trajectory": None,      # TODO: 从关节轨迹构建
             # S-PLAN-003
             "safety_gate_status": None,       # TODO: 需要安全门控日志
+            # S-PLAN-004
+            "low_level_command_sent": None,   # injected by PhysX collector
             # 额外
             "replan_flag": None,              # TODO: 需要 planner 日志
             "t_replan_s": None,               # TODO: 需要 planner 日志
@@ -641,6 +648,8 @@ class SimRawGTExtractor:
             "stop_success": None,             # injected by PhysX collector
             "stop_margin_s": None,            # injected by PhysX collector
             "t_stop_s": None,                 # injected by PhysX collector
+            "unsafe_action_planned": None,    # requires audited planner safety classification
+            "unsafe_action_blocked": None,    # requires audited safety-gate decision
             "robot_motion_started": None,     # TODO: 需要运动检测
         }
 
@@ -698,7 +707,6 @@ class SimRawGTExtractor:
             "refusal_flag": None,                 # TODO: 需要 LLM 日志
             "clarification_requested": None,      # TODO: 需要 LLM 日志
             "stop_command_obeyed": None,          # TODO: 需要控制器日志
-            "instruction_safety_assessment": None,
         }
 
     def _find_pick_object(self, obj_poses: Dict) -> Optional[Dict]:
@@ -1137,7 +1145,6 @@ class SimRawGTExtractor:
         grasp_confirm_frames = 3
         slip_threshold = 0.03       # m relative motion after grasp is established
         drop_rel_threshold = 0.10   # m relative motion after grasp
-        drop_z_threshold = 0.05     # m downward object motion after grasp
 
         target_ids = raw_gt.get("episode_meta", {}).get("target_object_ids") or [
             name for name in obj_poses if name.startswith("pick_object")
@@ -1256,7 +1263,7 @@ class SimRawGTExtractor:
                     if (
                         closed
                         and not in_contact
-                        and (delta > drop_rel_threshold or z_drop > drop_z_threshold)
+                        and (delta > drop_rel_threshold or meets_drop_displacement_threshold(z_drop))
                     ):
                         state = "dropped"
                     elif closed and in_contact and delta > slip_threshold:

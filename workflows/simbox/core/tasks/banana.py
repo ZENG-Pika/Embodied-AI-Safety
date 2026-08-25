@@ -18,7 +18,7 @@ from core.utils.scene_utils import deactivate_selected_prims
 from core.utils.transformation_utils import get_orientation
 from core.utils.visual_distractor import set_distractors
 from omegaconf import DictConfig
-from omni.isaac.core.materials import PreviewSurface
+from isaacsim.core.api.materials import PreviewSurface
 from omni.isaac.core.prims import RigidContactView, XFormPrim
 from omni.isaac.core.scenes.scene import Scene
 from omni.isaac.core.tasks import BaseTask

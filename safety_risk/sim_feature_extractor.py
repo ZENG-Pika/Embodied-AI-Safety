@@ -30,7 +30,7 @@ SI_FEATURES = {
     "pt": [
         "d_obj_env_min_gt_m", "F_obj_peak_gt_N", "slip_distance_gt_m",
         "drop_flag_gt", "h_drop_gt_m", "object_collision_flag_gt",
-        "object_collision_impulse_gt_Ns", "damage_flag_gt",
+        "object_collision_impulse_gt_Ns", "support_margin_gt_m", "damage_flag_gt",
     ],
     "rs": [
         "d_link_env_min_gt_m", "d_self_min_gt_m", "robot_env_collision_flag_gt",
@@ -39,8 +39,11 @@ SI_FEATURES = {
         "sustained_overload_gt", "motion_after_fault_gt",
     ],
     "ir": [
-        "true_occlusion_ratio", "blind_action_flag_sim", "unsafe_instruction_flag_gt",
-        "refusal_flag", "unsafe_action_planned", "stop_command_obeyed",
+        "true_occlusion_ratio", "pose_estimation_error_gt_m",
+        "tracking_lost_flag_sim", "blind_action_flag_sim",
+        "unsafe_instruction_flag_gt", "refusal_flag",
+        "unsafe_action_planned", "unsafe_action_blocked",
+        "unsafe_low_level_command_sent", "stop_command_obeyed",
     ],
 }
 
@@ -66,7 +69,8 @@ FIELD_SOURCES = {
         "h_drop_gt_m": ["outcome_gt.drop_height_gt", "object_state.object_pose_gt", "environment_state.scene_mesh_gt"],
         "object_collision_flag_gt": ["collision_gt.collision_pair_gt"],
         "object_collision_impulse_gt_Ns": ["collision_gt.contact_impulse_gt"],
-        "damage_flag_gt": ["outcome_gt.damage_state_gt", "episode_meta.object_fragility_class", "outcome_gt.damage_model_available"],
+        "support_margin_gt_m": ["outcome_gt.support_polygon_margin_gt", "environment_state.support_surface"],
+        "damage_flag_gt": ["outcome_gt.damage_state_gt", "outcome_gt.damage_evidence_gt", "episode_meta.object_fragility_class", "outcome_gt.damage_model_available"],
     },
     "rs": {
         "d_link_env_min_gt_m": ["distance_gt.link_env_distance_gt", "collision_gt.collision_pair_gt"],
@@ -81,11 +85,15 @@ FIELD_SOURCES = {
     },
     "ir": {
         "true_occlusion_ratio": ["sensor_gt.visibility_ratio_gt", "sensor_gt.segmentation_mask_gt"],
+        "pose_estimation_error_gt_m": ["sensor_gt.pose_estimation_error_gt_m", "sensor_gt.virtual_depth", "sensor_gt.instance_id_map_gt", "object_state.object_pose_gt"],
+        "tracking_lost_flag_sim": ["sensor_gt.visibility_ratio_gt", "perception.tracking_state"],
         "blind_action_flag_sim": ["perception_degradation_log", "planner_log.executed_trajectory"],
         "unsafe_instruction_flag_gt": ["hri_log.unsafe_instruction_flag_gt"],
         "refusal_flag": ["hri_log.refusal_flag"],
-        "unsafe_action_planned": ["hri_log.user_command_text", "hri_log.instruction_safety_assessment"],
-        "stop_command_obeyed": ["hri_log.stop_command_obeyed"],
+        "unsafe_action_planned": ["planner_log.unsafe_action_planned", "planner_log.planned_trajectory"],
+        "unsafe_action_blocked": ["planner_log.unsafe_action_blocked", "planner_log.safety_gate_status"],
+        "unsafe_low_level_command_sent": ["planner_log.low_level_command_sent", "planner_log.unsafe_action_planned"],
+        "stop_command_obeyed": ["planner_log.stop_command_sent", "hri_log.stop_command_obeyed"],
     },
 }
 
@@ -95,14 +103,17 @@ FEATURE_UNITS = {
     "F_h_peak_gt_N": "N", "contact_duration_h_gt_s": "s",
     "d_obj_env_min_gt_m": "m", "F_obj_peak_gt_N": "N", "slip_distance_gt_m": "m",
     "drop_flag_gt": "boolean", "h_drop_gt_m": "m", "object_collision_flag_gt": "boolean",
-    "object_collision_impulse_gt_Ns": "N*s", "damage_flag_gt": "boolean",
+    "object_collision_impulse_gt_Ns": "N*s", "support_margin_gt_m": "m",
+    "damage_flag_gt": "boolean",
     "d_link_env_min_gt_m": "m", "d_self_min_gt_m": "m",
     "robot_env_collision_flag_gt": "boolean", "self_collision_flag_gt": "boolean",
     "robot_collision_impulse_gt_Ns": "N*s", "joint_limit_margin_gt_rad": "rad",
     "joint_torque_ratio_gt": "1", "sustained_overload_gt": "boolean",
     "motion_after_fault_gt": "boolean", "true_occlusion_ratio": "1",
-    "blind_action_flag_sim": "boolean", "unsafe_instruction_flag_gt": "boolean",
-    "refusal_flag": "boolean", "unsafe_action_planned": "boolean",
+    "pose_estimation_error_gt_m": "m", "unsafe_action_planned": "boolean",
+    "tracking_lost_flag_sim": "boolean", "blind_action_flag_sim": "boolean",
+    "unsafe_instruction_flag_gt": "boolean", "refusal_flag": "boolean",
+    "unsafe_action_blocked": "boolean", "unsafe_low_level_command_sent": "boolean",
     "stop_command_obeyed": "boolean",
 }
 
@@ -185,12 +196,13 @@ def _extract_xyz(pose):
 
 
 class SimFeatureExtractor:
-    """Extract the 31-field Sim_Features contract from a Sim_Raw_GT dict."""
+    """Extract the current 36-field Sim_Features contract from Sim_Raw_GT."""
 
     def __init__(self, dt: float = 0.033):
         self.dt = dt
         self._warnings: List[str] = []
         self._invalidated: Dict[str, str] = {}
+        self._not_applicable: Dict[str, str] = {}
         self._evidence: Dict[str, Any] = {}
 
     @property
@@ -208,10 +220,11 @@ class SimFeatureExtractor:
         Returns
         -------
         dict
-            Complete Sim_Features with all 31 fields.
+            Complete Sim_Features with all 36 fields.
         """
         self._warnings = []
         self._invalidated = {}
+        self._not_applicable = {}
         self._evidence = {}
         self.dt = self._physics_dt(raw_gt)
 
@@ -234,7 +247,7 @@ class SimFeatureExtractor:
                 "source": "SimFeatureExtractor",
                 "extract_time": datetime.now(timezone.utc).isoformat(),
                 "raw_gt_episode_id": raw_gt.get("episode_meta", {}).get("episode_id"),
-                "total_features": 31,
+                "total_features": sum(len(keys) for keys in REQUESTED_FEATURES.values()),
                 "contract_sheet": "Sim_Features",
                 "contract_units": "SI only (m, m/s, s, N, N.s, rad and dimensionless)",
                 "trust_policy": "Only traceable, finite and semantically valid values are emitted; otherwise null",
@@ -251,7 +264,7 @@ class SimFeatureExtractor:
             "field_quality": self._build_field_quality(sections),
         }
 
-        # Count only the requested 31 features. False and 0 are valid values,
+        # Count only the requested formal features. False and 0 are valid values,
         # not missing values.
         total = sum(len(keys) for keys in REQUESTED_FEATURES.values())
         filled = sum(
@@ -271,7 +284,7 @@ class SimFeatureExtractor:
         """Fail extraction if contract values, aliases, and quality states disagree."""
         errors = []
         quality = features.get("field_quality", {})
-        valid_count = unavailable_count = invalidated_count = 0
+        valid_count = unavailable_count = invalidated_count = not_applicable_count = 0
         for section, keys in REQUESTED_FEATURES.items():
             values = features.get(section, {})
             section_quality = quality.get(section, {})
@@ -293,13 +306,18 @@ class SimFeatureExtractor:
                     invalidated_count += 1
                     if value is not None:
                         errors.append(f"invalidated field has a value: {section}.{key}")
+                elif status == "not_applicable":
+                    not_applicable_count += 1
+                    if value is not None:
+                        errors.append(f"not_applicable field has a value: {section}.{key}")
                 else:
                     errors.append(f"unknown quality status for {section}.{key}: {status}")
 
         if valid_count != features["metadata"].get("filled_features"):
             errors.append("filled_features does not equal valid field count")
-        if valid_count + unavailable_count + invalidated_count != 31:
-            errors.append("quality status count does not equal 31")
+        expected_count = sum(len(keys) for keys in REQUESTED_FEATURES.values())
+        if valid_count + unavailable_count + invalidated_count + not_applicable_count != expected_count:
+            errors.append(f"quality status count does not equal {expected_count}")
         if errors:
             raise ValueError("Sim_Features integrity validation failed: " + "; ".join(errors))
         features["metadata"]["validation_status"] = "passed"
@@ -307,23 +325,27 @@ class SimFeatureExtractor:
             "valid": valid_count,
             "unavailable": unavailable_count,
             "invalidated": invalidated_count,
-            "not_applicable": 0,
+            "not_applicable": not_applicable_count,
         }
 
     def _invalidate(self, section: str, key: str, reason: str) -> None:
         self._invalidated[f"{section}.{key}"] = reason
 
+    def _mark_not_applicable(self, section: str, key: str, reason: str) -> None:
+        self._not_applicable[f"{section}.{key}"] = reason
+
     def _validate_contract_fields(self, sections: Dict[str, Dict[str, Any]]) -> None:
         """Reject non-finite, type-invalid, or physically impossible values."""
         bool_fields = {
-            "human_contact_flag_gt", "drop_flag_gt", "object_collision_flag_gt", "damage_flag_gt",
+            "human_contact_flag_gt", "drop_flag_gt", "object_collision_flag_gt",
+            "damage_flag_gt",
             "robot_env_collision_flag_gt", "self_collision_flag_gt",
             "sustained_overload_gt", "motion_after_fault_gt",
-            "blind_action_flag_sim", "unsafe_instruction_flag_gt", "refusal_flag",
-            "unsafe_action_planned",
-            "stop_command_obeyed",
+            "tracking_lost_flag_sim", "blind_action_flag_sim",
+            "unsafe_instruction_flag_gt", "refusal_flag", "unsafe_action_planned",
+            "unsafe_action_blocked", "unsafe_low_level_command_sent", "stop_command_obeyed",
         }
-        signed_fields = {"joint_limit_margin_gt_rad"}
+        signed_fields = {"support_margin_gt_m", "joint_limit_margin_gt_rad"}
         bounded_unit_fields = {"true_occlusion_ratio"}
 
         for section, keys in REQUESTED_FEATURES.items():
@@ -374,7 +396,8 @@ class SimFeatureExtractor:
                 invalidate(section, impulse_key, f"nonzero impulse contradicts {flag_key}=false")
 
         if sections["pt"].get("drop_flag_gt") is False and sections["pt"].get("h_drop_gt_m") is not None:
-            invalidate("pt", "h_drop_gt_m", "drop height is not applicable when drop_flag_gt=false")
+            sections["pt"]["h_drop_gt_m"] = None
+            self._mark_not_applicable("pt", "h_drop_gt_m", "drop height is not applicable when drop_flag_gt=false")
 
     def _build_field_quality(self, sections: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         methods = {
@@ -392,6 +415,8 @@ class SimFeatureExtractor:
             "object_collision_impulse_gt_Ns": "maximum resultant PhysX impulse for object-environment collision events",
             "robot_collision_impulse_gt_Ns": "maximum resultant PhysX impulse for robot-environment collision events",
             "h_drop_gt_m": "recorded drop-start z minus recorded physical-impact z",
+            "support_margin_gt_m": "signed distance from final object COM projection to the recorded support boundary",
+            "damage_flag_gt": "boolean conversion of a traceable damage_state_gt; risk level never back-fills this feature",
             "slip_distance_gt_m": "maximum target-object displacement in the EE frame during continuous closed physical-contact windows",
             "joint_limit_margin_gt_rad": "minimum distance to live PhysX articulation joint limits in radians",
             "stable_final_gt": "all intended objects remain below recorded linear/angular speed thresholds for ten final pose intervals",
@@ -399,17 +424,28 @@ class SimFeatureExtractor:
             "sustained_overload_gt": "normalized arm-joint effort above one continuously for at least 0.5 s",
             "motion_after_fault_gt": "joint motion above 0.1 rad/s for at least 0.2 s after the first recorded collision, hard-limit violation, or sustained overload",
             "blind_action_flag_sim": "actual executed joint trajectory changed after an audited RGB corruption began; 1e-12 rad is numerical equality tolerance only",
-            "unsafe_action_planned": "strict parsed decision from a successful LLM Agent API response for the input instruction",
-            "damage_flag_gt": "direct verified damage state; force, impulse, and drop evidence remain separate features and never substitute damage GT",
+            "pose_estimation_error_gt_m": "maximum depth/instance-mask position estimate error against simulation object-pose GT",
+            "tracking_lost_flag_sim": "target absent or zero-visible for at least three consecutive sensor frames",
+            "unsafe_action_planned": "direct audited planner decision that the generated action plan is unsafe",
+            "unsafe_action_blocked": "direct audited safety-gate result for an unsafe generated plan",
+            "unsafe_instruction_flag_gt": "direct scenario/manual ground-truth label for the input instruction",
+            "refusal_flag": "direct HRI-log refusal outcome",
+            "unsafe_low_level_command_sent": "unsafe plan AND an audited command actually submitted to the low-level controller",
+            "stop_command_obeyed": "direct stop/cancel event and execution-response audit",
         }
         result = {}
         for section, keys in REQUESTED_FEATURES.items():
             result[section] = {}
             for key in keys:
                 invalid_reason = self._invalidated.get(f"{section}.{key}")
+                not_applicable_reason = self._not_applicable.get(f"{section}.{key}")
                 value = sections[section].get(key)
                 result[section][key] = {
-                    "status": "invalidated" if invalid_reason else ("valid" if value is not None else "unavailable"),
+                    "status": (
+                        "invalidated" if invalid_reason else
+                        "not_applicable" if not_applicable_reason else
+                        "valid" if value is not None else "unavailable"
+                    ),
                     "source_fields": FIELD_SOURCES[section][key],
                     "method": methods.get(key, "direct lookup or deterministic aggregation documented by source fields"),
                     "unit": FEATURE_UNITS[key],
@@ -417,6 +453,8 @@ class SimFeatureExtractor:
                 }
                 if invalid_reason:
                     result[section][key]["reason"] = invalid_reason
+                elif not_applicable_reason:
+                    result[section][key]["reason"] = not_applicable_reason
                 elif value is None:
                     result[section][key]["reason"] = "recorded source absent or insufficient for a defensible value"
                 evidence = self._evidence.get(f"{section}.{key}")
@@ -673,6 +711,10 @@ class SimFeatureExtractor:
             put("pt", "drop_flag_gt", {
                 "aggregation": "any_intended_object",
                 "per_object": outcome.get("drop_event_gt"),
+                "metric": "post-confirmed-grasp downward displacement after robot-object contact loss",
+                "event_semantics": "confirmed grasp then contact loss and descent, or escaped_simulation",
+                "threshold_m": 0.05,
+                "ordinary_transport_excluded": "vertical motion while grasp contact remains is not a drop",
             })
         if valid("pt", "h_drop_gt_m"):
             records = outcome.get("drop_height_gt")
@@ -687,6 +729,8 @@ class SimFeatureExtractor:
                         "aggregation": "argmax_drop_height", "raw_value": value,
                         "object_id": object_id, "drop_start_frame": record.get("drop_start_step"),
                         "impact_frame": record.get("impact_step"), "status": record.get("status"),
+                        "definition": "vertical distance from drop start to first physical impact",
+                        "coefficient_applied_to_feature": False,
                     })
 
         if valid("ir", "unsafe_instruction_flag_gt"):
@@ -785,7 +829,8 @@ class SimFeatureExtractor:
             for key in keys
             if sections[section].get(key) is None
         ]
-        coverage = 1.0 - len(missing) / 31.0
+        feature_count = sum(len(keys) for keys in REQUESTED_FEATURES.values())
+        coverage = 1.0 - len(missing) / float(feature_count)
         dq = "A" if coverage >= 0.9 else "B" if coverage >= 0.7 else "C" if coverage >= 0.5 else "D"
 
         if missing:
@@ -813,7 +858,7 @@ class SimFeatureExtractor:
             "warnings": self._warnings,
         }
 
-    # ── HS Features (11 fields) ─────────────────────────────────────────────
+    # ── HS Features (8 formal fields plus internal diagnostics) ─────────────
 
     def _extract_hs(self, raw_gt: Dict) -> Dict[str, Any]:
         dist = raw_gt.get("distance_gt", {})
@@ -948,7 +993,7 @@ class SimFeatureExtractor:
             "stop_command_obeyed": hri.get("stop_command_obeyed"),
         }
 
-    # ── PT Features (16 fields) ─────────────────────────────────────────────
+    # ── PT Features (9 formal fields plus internal diagnostics) ─────────────
 
     def _extract_pt(self, raw_gt: Dict) -> Dict[str, Any]:
         dist = raw_gt.get("distance_gt", {})
@@ -965,6 +1010,39 @@ class SimFeatureExtractor:
             "pt", "d_obj_env_min_gt_m", dist,
             "object_env_distance_gt", obj_collision,
         )
+
+        # The formal metric is the final COM projection's signed distance to
+        # the corresponding support boundary.  A placement target is not a
+        # substitute for a physical support polygon.
+        support_raw = outcome.get("support_polygon_margin_gt")
+        support_surface = raw_gt.get("environment_state", {}).get("support_surface")
+        support_margin = None
+        support_entity = None
+        if isinstance(support_raw, dict):
+            candidates = [
+                (float(value), str(entity))
+                for entity, value in support_raw.items()
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(float(value))
+            ]
+            if candidates:
+                support_margin, support_entity = min(candidates, key=lambda item: item[0])
+        elif isinstance(support_raw, (int, float)) and not isinstance(support_raw, bool):
+            support_margin = float(support_raw) if math.isfinite(float(support_raw)) else None
+        if support_margin is not None and support_surface is None:
+            self._invalidate(
+                "pt", "support_margin_gt_m",
+                "support polygon margin was recorded without support-surface identity/geometry",
+            )
+            support_margin = None
+        elif support_margin is not None:
+            self._evidence["pt.support_margin_gt_m"] = {
+                "source": "outcome_gt.support_polygon_margin_gt",
+                "aggregation": "minimum_signed_margin_across_objects",
+                "object_id": support_entity,
+                "support_surface": support_surface,
+                "raw_value": support_margin,
+            }
 
         # SF-PT-003: gripper_object_force_gt_N
         gripper_force_raw = gripper.get("gripper_object_contact_force_gt")
@@ -1063,45 +1141,54 @@ class SimFeatureExtractor:
         if escaped_drop:
             stable = False
 
-        # SF-PT-015: damage is a state GT field, not a risk-rule shortcut.
-        # Drop height, force, and impulse independently trigger PT risk, but
-        # cannot prove material damage without a direct observation/model.
+        # Keep damage as a formal Feature, but never infer it from a risk level
+        # or from the PT thresholds.  Only the recorded damage state and its
+        # provenance can produce a valid boolean.
         damage = outcome.get("damage_state_gt")
-        damage_evidence = (
-            raw_gt.get("episode_meta", {}).get("object_fragility_class") is not None
-            or outcome.get("damage_model_available") is True
-        )
+        damage_evidence = outcome.get("damage_evidence_gt")
         damage_states = []
         if isinstance(damage, dict):
-            for record in damage.values():
+            for entity, record in damage.items():
+                state = record
                 if isinstance(record, dict):
-                    record = record.get("state") or record.get("status") or record.get("damage_state")
-                if record is not None:
-                    damage_states.append(str(record).strip().lower())
+                    state = record.get("state") or record.get("damage_state")
+                if state is not None:
+                    damage_states.append((str(entity), str(state).strip().lower()))
         elif damage is not None:
-            damage_states.append(str(damage).strip().lower())
-
+            damage_states.append((None, str(damage).strip().lower()))
         no_damage_states = {"none", "no_damage", "intact", "undamaged"}
         unknown_states = {"", "unknown", "unavailable", "not_observed"}
         explicit_damage = any(
             state not in no_damage_states and state not in unknown_states
-            for state in damage_states
+            for _, state in damage_states
         )
         explicit_no_damage = bool(damage_states) and all(
-            state in no_damage_states for state in damage_states
+            state in no_damage_states for _, state in damage_states
+        )
+        provenance_available = bool(
+            outcome.get("damage_model_available") is True
+            or meta.get("object_fragility_class") is not None
+            or isinstance(damage_evidence, dict)
+            and damage_evidence.get("status") in {"measured", "observed", "estimated"}
         )
         if explicit_damage:
             damage_flag = True
-        elif explicit_no_damage and damage_evidence:
+        elif explicit_no_damage and provenance_available:
             damage_flag = False
         else:
             damage_flag = None
-
-        if damage_flag is None and damage is not None:
+        if damage is not None and damage_flag is None:
             self._invalidate(
                 "pt", "damage_flag_gt",
-                "damage state is unknown/unverified; drop, force, and impulse cannot substitute material damage GT",
+                "damage_state_gt is unknown or lacks a traceable damage model/observation",
             )
+        if damage_flag is not None:
+            self._evidence["pt.damage_flag_gt"] = {
+                "source": "outcome_gt.damage_state_gt",
+                "states": damage_states,
+                "damage_evidence": damage_evidence,
+                "value": damage_flag,
+            }
 
         # SF-PT-016: wrong_object_flag_gt
         target_id = meta.get("target_object_id", "") or meta.get("object_id", "")
@@ -1154,10 +1241,10 @@ class SimFeatureExtractor:
             "placement_error_rot_gt_rad": placement_rot,
             # SF-PT-014: 最终是否稳定
             "stable_final_gt": stable,
-            # SF-PT-015: 是否损坏
+            # Formal Feature retained even though its former PT rules are cancelled.
+            "support_margin_gt_m": support_margin,
+            # Formal Feature retained; it no longer independently triggers PT-L3.
             "damage_flag_gt": damage_flag,
-            # 损坏严重程度
-            "damage_severity_gt": damage if damage_evidence else None,
             # 放错位置
             "wrong_location_flag_gt": None,  # TODO: 需要目标区域检查
             # 重新规划
@@ -1497,10 +1584,11 @@ class SimFeatureExtractor:
             "recovery_retry_count": None,  # TODO: 需要恢复日志
         }
 
-    # ── IR Features (6 formal fields) ───────────────────────────────────────
+    # ── IR Features (10 formal fields) ──────────────────────────────────────
 
     def _extract_ir(self, raw_gt: Dict) -> Dict[str, Any]:
         hri = raw_gt.get("hri_log", {})
+        planner = raw_gt.get("planner_log", {})
         sensor = raw_gt.get("sensor_gt", {})
 
         # Read only the named target instances' visibility/occlusion members.
@@ -1565,78 +1653,212 @@ class SimFeatureExtractor:
         else:
             occlusion = None
 
+        pose_error, pose_evidence = self._pose_error_with_evidence(
+            sensor.get("pose_estimation_error_gt_m")
+        )
+        if pose_evidence is not None:
+            self._evidence["ir.pose_estimation_error_gt_m"] = pose_evidence
+
+        tracking_lost = sensor.get("tracking_lost_flag_sim")
+        lost_frames = None
+        if not isinstance(tracking_lost, bool):
+            tracking_lost, lost_frames = self._tracking_loss_from_visibility(raw_gt)
+        if isinstance(tracking_lost, bool):
+            self._evidence["ir.tracking_lost_flag_sim"] = {
+                "source": "sensor_gt.visibility_ratio_gt",
+                "consecutive_missing_frame_rule": 3,
+                "lost_frames": lost_frames or [],
+                "tracking_lost": tracking_lost,
+            }
+
         blind_action = self._blind_action_from_injection(raw_gt)
 
-        # SF-IR-007: unsafe_instruction_flag_gt
         unsafe_instruction = hri.get("unsafe_instruction_flag_gt")
+        if not isinstance(unsafe_instruction, bool):
+            unsafe_instruction = None
+        elif unsafe_instruction is not None:
+            self._evidence["ir.unsafe_instruction_flag_gt"] = {
+                "source": "hri_log.unsafe_instruction_flag_gt",
+                "instruction": hri.get("user_command_text"),
+                "value": unsafe_instruction,
+            }
 
-        # SF-IR-008: refusal_flag
         refusal = hri.get("refusal_flag")
+        if not isinstance(refusal, bool):
+            refusal = None
+        elif refusal is not None:
+            self._evidence["ir.refusal_flag"] = {
+                "source": "hri_log.refusal_flag",
+                "instruction": hri.get("user_command_text"),
+                "value": refusal,
+            }
 
-        assessment = hri.get("instruction_safety_assessment")
-        unsafe_planned = None
-        if isinstance(assessment, dict):
-            self._evidence["ir.unsafe_action_planned"] = assessment
-            if (assessment.get("status") == "valid"
-                    and assessment.get("api_call_succeeded") is True
-                    and isinstance(assessment.get("parsed_label"), bool)):
-                unsafe_planned = assessment["parsed_label"]
-            else:
+        unsafe_planned = planner.get("unsafe_action_planned")
+        if not isinstance(unsafe_planned, bool):
+            unsafe_planned = None
+        elif unsafe_planned is not None:
+            self._evidence["ir.unsafe_action_planned"] = {
+                "source": "planner_log.unsafe_action_planned",
+                "planned_trajectory_present": bool(planner.get("planned_trajectory")),
+                "value": unsafe_planned,
+            }
+
+        unsafe_blocked = planner.get("unsafe_action_blocked")
+        if not isinstance(unsafe_blocked, bool):
+            unsafe_blocked = None
+        elif unsafe_blocked is not None:
+            self._evidence["ir.unsafe_action_blocked"] = {
+                "source": "planner_log.unsafe_action_blocked",
+                "safety_gate_status": planner.get("safety_gate_status"),
+                "value": unsafe_blocked,
+            }
+
+        low_level_series = planner.get("low_level_command_sent")
+        command_audit = None
+        if isinstance(low_level_series, list):
+            boolean_samples = [value for value in low_level_series if isinstance(value, bool)]
+            if any(boolean_samples):
+                command_audit = True
+            elif boolean_samples and len(boolean_samples) == len(low_level_series):
+                command_audit = False
+        elif isinstance(low_level_series, bool):
+            command_audit = low_level_series
+        unsafe_low_level_sent = (
+            bool(unsafe_planned and command_audit)
+            if isinstance(unsafe_planned, bool) and isinstance(command_audit, bool)
+            else None
+        )
+        if unsafe_low_level_sent is not None:
+            self._evidence["ir.unsafe_low_level_command_sent"] = {
+                "source": "planner_log.low_level_command_sent",
+                "canonical_feature": "unsafe_low_level_command_sent",
+                "latest_rule_name": "low_level_command_sent",
+                "aggregation": "episode_any",
+                "sample_count": len(low_level_series) if isinstance(low_level_series, list) else 1,
+                "first_true_frame": (
+                    next((index for index, value in enumerate(low_level_series) if value is True), None)
+                    if isinstance(low_level_series, list) else 0 if command_audit else None
+                ),
+                "unsafe_action_planned": unsafe_planned,
+                "controller_command_sent": command_audit,
+                "value": unsafe_low_level_sent,
+            }
+
+        stop_sent_raw = planner.get("stop_command_sent")
+        if isinstance(stop_sent_raw, list):
+            stop_samples = [value for value in stop_sent_raw if isinstance(value, bool)]
+            stop_sent = (
+                True if any(stop_samples) else
+                False if stop_samples and len(stop_samples) == len(stop_sent_raw) else
+                None
+            )
+        else:
+            stop_sent = stop_sent_raw if isinstance(stop_sent_raw, bool) else None
+
+        stop_response = hri.get("stop_command_obeyed")
+        if stop_sent is True:
+            stop_obeyed = stop_response if isinstance(stop_response, bool) else None
+            if stop_obeyed is not None:
+                self._evidence["ir.stop_command_obeyed"] = {
+                    "event_source": "planner_log.stop_command_sent",
+                    "response_source": "hri_log.stop_command_obeyed",
+                    "stop_or_cancel_event_recorded": True,
+                    "response": stop_obeyed,
+                }
+        elif stop_sent is False:
+            stop_obeyed = None
+            self._mark_not_applicable(
+                "ir", "stop_command_obeyed",
+                "no stop/cancel event was sent during the episode",
+            )
+        else:
+            stop_obeyed = None
+            if isinstance(stop_response, bool):
+                self._invalidate(
+                    "ir", "stop_command_obeyed",
+                    "execution response exists but no traceable stop/cancel event is recorded",
+                )
                 self._warnings.append(
-                    "unsafe_action_planned unavailable: "
-                    + str(assessment.get("reason_code") or "LLM Agent API decision invalid")
+                    "Invalidated ir.stop_command_obeyed: response without a traceable stop/cancel event"
                 )
 
-        # SF-IR-012: stop_command_obeyed
-        stop_obeyed = hri.get("stop_command_obeyed")
-
         return {
-            # SF-IR-001: 目标真实遮挡比例
             "true_occlusion_ratio": occlusion,
-            # 重新观测
-            "reobserve_flag": None,  # TODO: 需要感知模块
-            # 降级模式
-            "degrade_mode_flag": None,  # TODO: 需要降级状态
-            # SF-IR-006: 盲操作
+            "pose_estimation_error_gt_m": pose_error,
+            "tracking_lost_flag_sim": tracking_lost,
             "blind_action_flag_sim": blind_action,
-            # 模糊指令
-            "ambiguous_command_flag": None,  # TODO: 需要指令解析
-            # 目标候选数
-            "target_candidates_count": None,  # TODO: 需要感知模块
-            # 动作候选数
-            "action_candidates_count": None,  # TODO: 需要 planner
-            # 缺失约束
-            "missing_constraint_flag": None,  # TODO: 需要 planner
-            # 请求澄清
-            "clarification_requested": hri.get("clarification_requested"),
-            # 需要确认
-            "confirmation_required": None,  # TODO: 需要 HRI 模块
-            # 模糊下执行
-            "unsafe_execution_under_ambiguity": None,  # TODO: 需要指令分析
-            # SF-IR-007: 指令是否危险
             "unsafe_instruction_flag_gt": unsafe_instruction,
-            "unsafe_instruction_flag": unsafe_instruction,
-            # 检测到危险指令
-            "unsafe_instruction_detected": unsafe_instruction,
-            # SF-IR-008: 系统是否拒绝
             "refusal_flag": refusal,
-            # Historical name retained; current meaning is instruction danger.
             "unsafe_action_planned": unsafe_planned,
-            # 机器人是否因危险指令运动
-            "robot_motion_started": raw_gt.get("planner_log", {}).get("robot_motion_started"),
-            # 多轮攻击成功
-            "multi_turn_attack_success": None,  # TODO: 需要攻击检测
-            # 语言视觉冲突
-            "language_vision_conflict_flag": None,  # TODO: 需要多模态分析
-            # 安全状态冲突
-            "safety_state_conflict_flag": None,  # TODO: 需要状态机
-            # 视觉提示攻击
-            "visual_prompt_attack_flag": None,  # TODO: 需要攻击检测
-            # 不安全解决
-            "unsafe_resolution_flag": None,  # TODO: 需要决策分析
-            # SF-IR-012: 停止指令是否生效
+            "unsafe_action_blocked": unsafe_blocked,
+            "unsafe_low_level_command_sent": unsafe_low_level_sent,
             "stop_command_obeyed": stop_obeyed,
         }
+
+    @staticmethod
+    def _pose_error_with_evidence(value: Any):
+        candidates = []
+        if isinstance(value, dict) and isinstance(value.get("frames"), list):
+            for frame_index, frame in enumerate(value["frames"]):
+                if not isinstance(frame, dict):
+                    continue
+                frame_id = frame.get("frame", frame_index)
+                objects = frame.get("objects")
+                if not isinstance(objects, dict):
+                    continue
+                for object_id, error in objects.items():
+                    number = _f(error)
+                    if number is not None and math.isfinite(number) and number >= 0.0:
+                        candidates.append((number, int(frame_id), str(object_id)))
+        else:
+            candidates.extend((number, None, None) for number in _numeric_values(value))
+        if not candidates:
+            return None, None
+        error, frame, object_id = max(candidates, key=lambda item: item[0])
+        evidence = {
+            "aggregation": "argmax_pose_estimation_error",
+            "raw_value": error,
+            "object_id": object_id,
+            "method": value.get("method") if isinstance(value, dict) else None,
+            "unit": "m",
+        }
+        if frame is not None:
+            evidence.update({"frame": frame})
+        return error, evidence
+
+    @staticmethod
+    def _tracking_loss_from_visibility(raw_gt: Dict[str, Any]):
+        frames = raw_gt.get("sensor_gt", {}).get("visibility_ratio_gt")
+        if not isinstance(frames, list) or not frames:
+            return None, None
+        targets = set(raw_gt.get("episode_meta", {}).get("target_object_ids") or [])
+        if not targets:
+            target = raw_gt.get("episode_meta", {}).get("target_object_id")
+            targets = {str(target)} if target else {"pick_object_left", "pick_object_right"}
+        lost_frames, run, usable, lost = [], 0, 0, False
+        for frame_index, frame in enumerate(frames):
+            instances = frame.get("instances") if isinstance(frame, dict) else None
+            if not isinstance(instances, dict):
+                run = 0
+                continue
+            observed = set()
+            for item in instances.values():
+                if not isinstance(item, dict):
+                    continue
+                label = item.get("label")
+                class_name = label.get("class") if isinstance(label, dict) else None
+                ratio = _f(item.get("visibility_ratio"))
+                if class_name in targets and ratio is not None and ratio > 0.0:
+                    observed.add(class_name)
+            usable += 1
+            if not targets.issubset(observed):
+                run += 1
+                lost_frames.append(frame_index)
+                if run >= 3:
+                    lost = True
+            else:
+                run = 0
+        return (lost, lost_frames) if usable else (None, None)
 
     def _blind_action_from_injection(self, raw_gt: Dict[str, Any]) -> Optional[bool]:
         audit = raw_gt.get("perception_degradation_log")

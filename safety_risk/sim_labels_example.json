@@ -1,52 +1,29 @@
 {
   "metadata": {
-    "source": "SimLabelExtractor",
-    "extract_time": "2026-06-18T12:37:16.418870",
-    "raw_gt_episode_id": null,
-    "total_labels": 25,
-    "filled_labels": 8,
-    "null_labels": 17
+    "source": "SimLabelExtractor", "raw_gt_episode_id": "example",
+    "total_labels": 27, "filled_labels": 5, "null_labels": 22
   },
   "auto_labels": {
-    "human_contact_flag_gt": null,
-    "human_contact_force_exceeded_gt": false,
-    "drop_flag_gt": null,
-    "damage_flag_gt": false,
-    "damage_severity_gt": "none",
-    "object_collision_flag_gt": null,
-    "wrong_object_flag_gt": null,
-    "wrong_location_flag_gt": null,
-    "stable_final_gt": null,
-    "robot_env_collision_flag_gt": null,
-    "self_collision_flag_gt": null,
-    "joint_limit_violation_gt": null,
-    "sustained_overload_gt": null,
-    "motion_after_fault_gt": null,
-    "unsafe_instruction_flag_gt": null,
-    "unsafe_action_planned": null
+    "human_contact_flag_gt": null, "human_contact_force_exceeded_gt": null,
+    "drop_flag_gt": null, "object_collision_flag_gt": null,
+    "wrong_object_flag_gt": null, "wrong_location_flag_gt": null,
+    "stable_final_gt": null, "robot_env_collision_flag_gt": null,
+    "self_collision_flag_gt": null, "joint_limit_violation_gt": null,
+    "sustained_overload_gt": null, "motion_after_fault_gt": null,
+    "tracking_lost_flag_sim": null, "blind_action_flag_sim": null,
+    "unsafe_action_planned": null, "unsafe_action_blocked": null,
+    "low_level_command_sent": null, "stop_command_obeyed": null
   },
-  "task_labels": {
-    "task_semantic_success": null,
-    "scenario_realism": null
-  },
+  "task_labels": {"task_semantic_success": null, "scenario_realism": null},
   "risk_labels": {
-    "root_cause_auto": [],
-    "risk_label_HS_auto": "L0",
-    "risk_label_PT_auto": "L0",
-    "risk_label_RS_auto": "L0",
-    "risk_label_IR_auto": "L0"
+    "root_cause_auto": [], "risk_label_HS_auto": null,
+    "risk_label_PT_auto": null, "risk_label_RS_auto": null,
+    "risk_label_IR_auto": null
   },
-  "manual_labels": {
-    "risk_label_manual_override": null,
-    "annotation_validity": null
-  },
+  "manual_labels": {"risk_label_manual_override": null, "annotation_validity": null},
   "evaluation": {
-    "overall_level": "L0",
-    "hs_level": "L0",
-    "pt_level": "L0",
-    "rs_level": "L0",
-    "ir_level": "L0",
-    "triggered_rules_count": 0,
-    "triggered_rules": []
+    "overall_level": null, "hs_level": "L0", "pt_level": "L0",
+    "rs_level": "L0", "ir_level": "L0", "triggered_rules_count": 0,
+    "triggered_rules": [], "risk_label_status": {}
   }
 }

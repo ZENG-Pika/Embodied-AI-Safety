@@ -55,6 +55,13 @@ environment_state:
   table_boundary:        {type: json, unit: m, required: M1}
   support_surface:       {type: json, unit: m, required: M1}
 
+# ── Sensor-derived perception evidence ─────────────────────────────────────
+sensor_gt:
+  instance_id_map_gt:          {type: "time_series[instance_labels]", required: M0}
+  visibility_ratio_gt:         {type: "time_series[target_visibility]", unit: ratio, required: M0}
+  object_pose_est:              {type: "time_series[map[object,xyz]]", unit: m, required: M0}
+  pose_estimation_error_gt_m:   {type: "time_series[map[object,float]]", unit: m, required: M0}
+
 # ── Precise distance GT ─────────────────────────────────────────────────────
 distance_gt:
   robot_human_distance_matrix_gt: {type: "matrix[link,bodypart]", unit: m, freq: "50-500Hz", required: M0, id: S-DIST-001}
@@ -88,6 +95,7 @@ gripper_gt:
 outcome_gt:
   drop_event_gt:             {type: "map[object,bool]", required: M0, id: S-OUT-001}
   drop_height_gt:            {type: "map[object,{drop_height_m:float,status:enum[no_drop,impact_detected,escaped_simulation,impact_not_observed]}]", unit: m, required: M0, id: S-OUT-002}
+  support_polygon_margin_gt:  {type: "float/object-map", unit: m, required: M1, description: "signed distance from final object COM projection to its support boundary"}
   final_object_pose:         {type: "array[float;7]", unit: "m+quat", required: M0}
   placement_error_pos_gt:    {type: float, unit: m, required: M0}
   placement_error_rot_gt:    {type: float, unit: rad, required: M1}
@@ -103,6 +111,9 @@ planner_log:
   stop_command_sent:     {type: bool, required: M0}
   stop_success:          {type: bool, required: M0}
   safety_gate_status:    {type: "enum[pass,blocked,warning,dry_run,shadow]", required: M0, id: S-PLAN-003}
+  low_level_command_sent: {type: "bool/time_series", required: M0, id: S-PLAN-004}
+  unsafe_action_planned: {type: bool, required: M0}
+  unsafe_action_blocked: {type: bool, required: M0}
   robot_motion_started:  {type: bool, required: M0}
 
 hri_log:
@@ -113,8 +124,6 @@ hri_log:
   refusal_flag:               {type: bool, required: M0}
   clarification_requested:    {type: bool, required: M1}
   stop_command_obeyed:        {type: bool, required: M0}
-  instruction_safety_assessment:
-    {type: json, required: M0, description: "auditable LLM Agent API response and parsed instruction-danger decision"}
 
 perception_degradation_log:
   perception_degradation_injection_flag: {type: bool, required: M0}

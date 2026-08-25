@@ -72,6 +72,8 @@ class PhysXDataCollector:
             "planned_trajectory": [],
             # S-PLAN-003: safety gate status per step
             "safety_gate_status": [],
+            # S-PLAN-004: controller command-plan activity per step
+            "low_level_command_sent": [],
             # Safety gate / stop tracking (episode-level results)
             "stop_success": None,
             "stop_margin_s": None,
@@ -220,6 +222,7 @@ class PhysXDataCollector:
             self._collect_planner_step(task, step_id)
         except Exception:
             self._data["safety_gate_status"].append(None)
+            self._data["low_level_command_sent"].append(None)
 
     # ── Safety Gate (stop_success / stop_margin) ───────────────────────────
 
@@ -1701,6 +1704,7 @@ class PhysXDataCollector:
     def _collect_planner_step(self, task, step_id: int) -> None:
         """Collect planner status per step from controllers."""
         safety_gate = "pass"
+        command_sent = False
 
         if hasattr(task, 'robots'):
             for robot_name, robot in task.robots.items():
@@ -1723,7 +1727,23 @@ class PhysXDataCollector:
                         for skill in skill_list:
                             if hasattr(skill, 'controller') and skill.controller is not None:
                                 ctrl = skill.controller
+                                if getattr(ctrl, "cmd_plan", None) is not None:
+                                    command_sent = True
         self._data["safety_gate_status"].append(safety_gate)
+        self._data["low_level_command_sent"].append(command_sent)
+
+    def record_low_level_command_sent(self, step_id: int, command_sent: bool) -> None:
+        """Record whether the workflow actually submitted a joint command.
+
+        Controller introspection is best-effort and differs between skill
+        implementations.  A non-empty applied action dictionary is the
+        authoritative runtime evidence for this field.
+        """
+        if not self._data["step_ids"] or self._data["step_ids"][-1] != step_id:
+            raise ValueError("record_low_level_command_sent must follow collect_step")
+        if not self._data["low_level_command_sent"]:
+            raise ValueError("planner sample is missing for the current step")
+        self._data["low_level_command_sent"][-1] = bool(command_sent)
 
     def capture_planned_trajectory(self, controller, arm_name: str = "") -> None:
         """Capture the planned trajectory from a controller's cmd_plan.

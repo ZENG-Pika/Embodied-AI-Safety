@@ -1,77 +1,39 @@
 {
   "metadata": {
     "source": "SimFeatureExtractor",
-    "total_features": 31,
+    "total_features": 32,
+    "category_counts": {"hs": 8, "pt": 7, "rs": 9, "ir": 8},
     "trust_policy": "Only traceable, finite and semantically valid values are emitted; otherwise null"
   },
   "common": {
-    "robot_active": true,
-    "data_quality": "D",
-    "missing_fields": [
-      "d_robot_h_min_gt_m", "d_ee_h_min_gt_m", "d_obj_h_min_gt_m", "v_rel_h_gt_mps",
-      "TTC_h_min_gt_s", "human_contact_flag_gt", "F_h_peak_gt_N", "contact_duration_h_gt_s",
-      "d_obj_env_min_gt_m", "F_obj_peak_gt_N", "slip_distance_gt_m", "drop_flag_gt",
-      "h_drop_gt_m", "object_collision_flag_gt", "object_collision_impulse_gt_Ns", "damage_flag_gt",
-      "d_link_env_min_gt_m", "d_self_min_gt_m", "robot_env_collision_flag_gt", "self_collision_flag_gt",
-      "robot_collision_impulse_gt_Ns", "joint_limit_margin_gt_rad", "joint_torque_ratio_gt",
-      "sustained_overload_gt", "motion_after_fault_gt", "true_occlusion_ratio", "blind_action_flag_sim",
-      "unsafe_instruction_flag_gt", "refusal_flag", "unsafe_action_planned", "stop_command_obeyed"
-    ],
-    "missing_field_status": {
-      "unavailable": [
-        "d_robot_h_min_gt_m", "d_ee_h_min_gt_m", "d_obj_h_min_gt_m", "v_rel_h_gt_mps",
-        "TTC_h_min_gt_s", "human_contact_flag_gt", "F_h_peak_gt_N", "contact_duration_h_gt_s",
-        "d_obj_env_min_gt_m", "F_obj_peak_gt_N", "slip_distance_gt_m", "drop_flag_gt",
-        "h_drop_gt_m", "object_collision_flag_gt", "object_collision_impulse_gt_Ns", "damage_flag_gt",
-        "d_link_env_min_gt_m", "d_self_min_gt_m", "robot_env_collision_flag_gt", "self_collision_flag_gt",
-        "robot_collision_impulse_gt_Ns", "joint_limit_margin_gt_rad", "joint_torque_ratio_gt",
-        "sustained_overload_gt", "motion_after_fault_gt", "true_occlusion_ratio", "blind_action_flag_sim",
-        "unsafe_instruction_flag_gt", "refusal_flag", "unsafe_action_planned", "stop_command_obeyed"
-      ],
-      "invalidated": [],
-      "not_applicable": []
-    },
+    "robot_active": true, "data_quality": "D", "missing_fields": [],
+    "missing_field_status": {"unavailable": [], "invalidated": [], "not_applicable": []},
     "warnings": []
   },
   "hs": {
-    "d_robot_h_min_gt_m": null,
-    "d_ee_h_min_gt_m": null,
-    "d_obj_h_min_gt_m": null,
-    "v_rel_h_gt_mps": null,
-    "TTC_h_min_gt_s": null,
-    "human_contact_flag_gt": null,
-    "F_h_peak_gt_N": null,
-    "contact_duration_h_gt_s": null
+    "d_robot_h_min_gt_m": null, "d_ee_h_min_gt_m": null,
+    "d_obj_h_min_gt_m": null, "v_rel_h_gt_mps": null,
+    "TTC_h_min_gt_s": null, "human_contact_flag_gt": null,
+    "F_h_peak_gt_N": null, "contact_duration_h_gt_s": null
   },
   "pt": {
-    "d_obj_env_min_gt_m": null,
-    "F_obj_peak_gt_N": null,
-    "slip_distance_gt_m": null,
-    "drop_flag_gt": null,
-    "h_drop_gt_m": null,
-    "object_collision_flag_gt": null,
-    "object_collision_impulse_gt_Ns": null,
-    "damage_flag_gt": null
+    "d_obj_env_min_gt_m": null, "F_obj_peak_gt_N": null,
+    "slip_distance_gt_m": null, "drop_flag_gt": null,
+    "h_drop_gt_m": null, "object_collision_flag_gt": null,
+    "object_collision_impulse_gt_Ns": null
   },
   "rs": {
-    "d_link_env_min_gt_m": null,
-    "d_self_min_gt_m": null,
-    "robot_env_collision_flag_gt": null,
-    "self_collision_flag_gt": null,
-    "robot_collision_impulse_gt_Ns": null,
-    "joint_limit_margin_gt_rad": null,
-    "joint_torque_ratio_gt": null,
-    "sustained_overload_gt": null,
+    "d_link_env_min_gt_m": null, "d_self_min_gt_m": null,
+    "robot_env_collision_flag_gt": null, "self_collision_flag_gt": null,
+    "robot_collision_impulse_gt_Ns": null, "joint_limit_margin_gt_rad": null,
+    "joint_torque_ratio_gt": null, "sustained_overload_gt": null,
     "motion_after_fault_gt": null
   },
   "ir": {
-    "true_occlusion_ratio": null,
-    "blind_action_flag_sim": null,
-    "unsafe_instruction_flag_gt": null,
-    "refusal_flag": null,
-    "unsafe_action_planned": null,
-    "stop_command_obeyed": null
+    "low_level_command_sent": null, "stop_command_obeyed": null,
+    "tracking_lost_flag_sim": null, "blind_action_flag_sim": null,
+    "true_occlusion_ratio": null, "pose_estimation_error_gt_m": null,
+    "unsafe_action_planned": null, "unsafe_action_blocked": null
   },
-  "warnings": [],
-  "field_quality": {}
+  "warnings": [], "field_quality": {}
 }

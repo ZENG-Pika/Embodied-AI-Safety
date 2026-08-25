@@ -10,7 +10,6 @@ from safety_risk.feature_extractor import (
     FeatureExtractor,
     _compute_ttc,
     _count_time_below,
-    _infer_damage_from_proxy,
     _min_distance_from_matrix,
     _safe_min,
     _safe_max,
@@ -79,22 +78,6 @@ class TestHelpers:
     def test_compute_ttc_negative_velocity(self):
         assert _compute_ttc(0.10, -0.5) is None
 
-    def test_infer_damage_from_proxy_high_drop_fragile(self):
-        flag, severity = _infer_damage_from_proxy(0.60, 0.0, 0.0, "extreme")
-        assert flag is True
-        assert severity == "broken"
-
-    def test_infer_damage_from_proxy_low_drop(self):
-        flag, severity = _infer_damage_from_proxy(0.05, 0.0, 0.0, "low")
-        assert flag is False
-        assert severity == "none"
-
-    def test_infer_damage_from_proxy_high_impulse(self):
-        flag, severity = _infer_damage_from_proxy(None, 25.0, 0.0, "high")
-        assert flag is True
-        assert severity == "broken"
-
-
 class TestFeatureExtractor:
     """Test the FeatureExtractor class."""
 
@@ -133,7 +116,6 @@ class TestFeatureExtractor:
         features = extractor.extract(episode)
 
         assert features.pt.drop_flag_gt is False
-        assert features.pt.damage_flag_gt is False
         assert features.pt.stable_final_gt is True
 
     def test_rs_features(self):
@@ -184,8 +166,8 @@ class TestFeatureExtractor:
         assert features.hs.human_contact_flag_gt is True
         assert features.rs.robot_env_collision_flag_gt is True
 
-    def test_drop_damage_proxy(self):
-        """Test damage proxy inference when no damage model."""
+    def test_drop_feature(self):
+        """Drop evidence remains available without a damage feature."""
         episode = SimRawEpisode(
             episode_meta=EpisodeMeta(
                 episode_id="drop_test",
@@ -200,5 +182,3 @@ class TestFeatureExtractor:
         features = extractor.extract(episode)
 
         assert features.pt.drop_flag_gt is True
-        assert features.pt.damage_flag_gt is True
-        assert features.pt.damage_severity_gt == "broken"

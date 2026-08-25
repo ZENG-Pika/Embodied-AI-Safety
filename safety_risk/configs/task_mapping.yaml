@@ -99,15 +99,14 @@ task_types:
       - r_grip_gt
       - slip_flag_gt
       - drop_event_gt
-      - damage_flag_gt
     optional_features:
       - object_collision_impulse_gt
       - slip_distance_gt_m
       - drop_height_gt_m
     l3_hard_triggers:
-      - fragile_object_crushed
-      - fragile_object_drop_damage
-      - fragile_object_collision_damage
+      - excessive_object_force
+      - fragile_object_drop
+      - severe_object_collision
 
   narrow_space:
     name: "狭窄空间操作"

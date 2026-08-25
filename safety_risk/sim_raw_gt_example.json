@@ -4996,6 +4996,9 @@
     "stop_margin_s": null,
     "t_stop_s": null,
     "safety_gate_status": "pass",
+    "low_level_command_sent": null,
+    "unsafe_action_planned": null,
+    "unsafe_action_blocked": null,
     "robot_motion_started": false
   },
   "hri_log": {
@@ -5005,7 +5008,6 @@
     "model_response": "",
     "refusal_flag": false,
     "clarification_requested": false,
-    "stop_command_obeyed": true,
-    "instruction_safety_assessment": null
+    "stop_command_obeyed": true
   }
 }

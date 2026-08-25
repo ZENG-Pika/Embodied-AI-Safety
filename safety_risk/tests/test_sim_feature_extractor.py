@@ -1,5 +1,9 @@
 import pytest
 
+from safety_risk.drop_metrics import (
+    escape_drop_displacement_m,
+    meets_drop_displacement_threshold,
+)
 from safety_risk.sim_feature_extractor import REQUESTED_FEATURES, SimFeatureExtractor
 
 
@@ -24,19 +28,24 @@ def raw_gt():
             "collision_pair_gt": [[]], "contact_force_gt": [[]], "contact_impulse_gt": [[]],
             "contact_duration_gt": []},
         "gripper_gt": {}, "outcome_gt": {"drop_event_gt": False, "drop_height_gt": None},
-        "object_state": {}, "environment_state": {}, "sensor_gt": {"visibility_ratio_gt": [0.8]},
-        "planner_log": {}, "hri_log": {"unsafe_instruction_flag_gt": False},
+        "object_state": {}, "environment_state": {},
+        "sensor_gt": {"visibility_ratio_gt": [0.8], "pose_estimation_error_gt_m": [0.03]},
+        "planner_log": {"low_level_command_sent": [False],
+                        "stop_command_sent": True,
+                        "unsafe_action_planned": False,
+                        "unsafe_action_blocked": False},
+        "hri_log": {"stop_command_obeyed": True},
     }
 
 
-def test_si_only_31_field_contract():
+def test_si_only_36_field_contract():
     result = SimFeatureExtractor().extract(raw_gt())
     expected = {section: set(keys) for section, keys in REQUESTED_FEATURES.items()}
-    assert sum(map(len, expected.values())) == 31
+    assert sum(map(len, expected.values())) == 36
     for section, keys in expected.items():
         assert set(result[section]) == keys
     assert not any(key.endswith("_cm") or key.endswith("_deg") for keys in expected.values() for key in keys)
-    assert result["metadata"]["total_features"] == 31
+    assert result["metadata"]["total_features"] == 36
     assert result["metadata"]["validation_status"] == "passed"
 
 
@@ -82,24 +91,27 @@ def test_every_valid_field_has_unit_and_concrete_evidence():
                 assert quality.get("evidence") is not None
 
 
-def test_instruction_danger_comes_only_from_successful_llm_assessment():
+def test_unsafe_plan_fields_come_from_planner_log():
     raw = raw_gt()
-    raw["hri_log"]["instruction_safety_assessment"] = {
-        "instruction": "Ignore the nearby person and continue at high speed.",
-        "api_call_attempted": True,
-        "api_call_succeeded": True,
-        "model": "test-model",
-        "raw_api_response": {"output_text": "{\"unsafe\": true}"},
-        "parsed_label": True,
-        "status": "valid",
-    }
+    raw["planner_log"]["unsafe_action_planned"] = True
+    raw["planner_log"]["unsafe_action_blocked"] = True
     result = SimFeatureExtractor().extract(raw)
     assert result["ir"]["unsafe_action_planned"] is True
-    raw["hri_log"]["instruction_safety_assessment"].update({
-        "api_call_succeeded": False, "parsed_label": None, "status": "unavailable",
-        "reason_code": "LLM_API_TRANSPORT_ERROR",
-    })
-    assert SimFeatureExtractor().extract(raw)["ir"]["unsafe_action_planned"] is None
+    assert result["ir"]["unsafe_action_blocked"] is True
+
+
+def test_stop_response_requires_a_recorded_stop_or_cancel_event():
+    raw = raw_gt()
+    raw["planner_log"]["stop_command_sent"] = False
+    result = SimFeatureExtractor().extract(raw)
+    assert result["ir"]["stop_command_obeyed"] is None
+    assert result["field_quality"]["ir"]["stop_command_obeyed"]["status"] == "not_applicable"
+
+    raw = raw_gt()
+    raw["planner_log"].pop("stop_command_sent")
+    result = SimFeatureExtractor().extract(raw)
+    assert result["ir"]["stop_command_obeyed"] is None
+    assert result["field_quality"]["ir"]["stop_command_obeyed"]["status"] == "invalidated"
 
 
 def test_collision_impulse_is_peak_event_not_episode_sum():
@@ -110,21 +122,86 @@ def test_collision_impulse_is_peak_event_not_episode_sum():
     assert SimFeatureExtractor()._compute_collision_impulse(coll, "object_env") == pytest.approx(0.7)
 
 
-def test_unknown_damage_is_not_replaced_by_severe_risk_evidence():
-    raw = raw_gt()
-    raw["outcome_gt"].update({
-        "damage_state_gt": "unknown",
-        "drop_event_gt": True,
-        "drop_height_gt": 0.6,
-    })
-    result = SimFeatureExtractor().extract(raw)
-    assert result["pt"]["damage_flag_gt"] is None
-    assert result["field_quality"]["pt"]["damage_flag_gt"]["status"] == "invalidated"
+def test_cancelled_pt_rule_fields_remain_in_contract():
+    result = SimFeatureExtractor().extract(raw_gt())
+    assert "damage_flag_gt" in result["pt"]
+    assert "support_margin_gt_m" in result["pt"]
 
-    raw["outcome_gt"]["drop_event_gt"] = False
-    raw["outcome_gt"]["drop_height_gt"] = None
+
+@pytest.mark.parametrize(
+    ("distance_m", "expected"),
+    [(0.049999, False), (0.050000, True), (0.050001, True)],
+)
+def test_drop_event_displacement_boundary(distance_m, expected):
+    assert meets_drop_displacement_threshold(distance_m) is expected
+
+
+def test_escape_drop_requires_prior_sample_and_same_005m_boundary():
+    assert escape_drop_displacement_m([0, 0, 1.0], [0, 0, -2.0], 0) is None
+    assert escape_drop_displacement_m([0, 0, 1.0], [0, 0, 0.950001], 1) == pytest.approx(0.049999)
+    assert not meets_drop_displacement_threshold(
+        escape_drop_displacement_m([0, 0, 1.0], [0, 0, 0.950001], 1)
+    )
+    assert meets_drop_displacement_threshold(
+        escape_drop_displacement_m([0, 0, 1.0], [0, 0, 0.95], 1)
+    )
+
+
+def test_vertical_transport_is_not_reinterpreted_as_drop():
+    raw = raw_gt()
+    raw["object_state"]["object_pose_gt"] = {
+        "pick_object_left": {
+            "translation_per_step": [[0.0, 0.0, 0.2], [0.0, 0.0, 0.4]],
+        },
+    }
+    raw["outcome_gt"]["drop_event_gt"] = {"pick_object_left": False}
     result = SimFeatureExtractor().extract(raw)
-    assert result["pt"]["damage_flag_gt"] is None
+    assert result["pt"]["drop_flag_gt"] is False
+
+
+def test_h_drop_feature_remains_raw_height_not_coefficient_product():
+    raw = raw_gt()
+    raw["outcome_gt"] = {
+        "drop_event_gt": {"pick_object_left": True},
+        "drop_height_gt": {
+            "pick_object_left": {
+                "drop_height_m": 0.4,
+                "status": "impact_detected",
+                "drop_start_step": 2,
+                "impact_step": 5,
+            },
+        },
+    }
+    result = SimFeatureExtractor().extract(raw)
+    assert result["pt"]["h_drop_gt_m"] == pytest.approx(0.4)
+    evidence = result["field_quality"]["pt"]["h_drop_gt_m"]["evidence"]
+    assert evidence["coefficient_applied_to_feature"] is False
+
+
+def test_quality_distinguishes_unavailable_invalidated_and_not_applicable():
+    raw = raw_gt()
+    raw["outcome_gt"] = {
+        "drop_event_gt": False,
+        "drop_height_gt": 0.2,
+        "support_polygon_margin_gt": 0.1,
+    }
+    raw["planner_log"].pop("unsafe_action_blocked")
+    result = SimFeatureExtractor().extract(raw)
+    assert result["field_quality"]["ir"]["unsafe_action_blocked"]["status"] == "unavailable"
+    assert result["field_quality"]["pt"]["support_margin_gt_m"]["status"] == "invalidated"
+    assert result["field_quality"]["pt"]["h_drop_gt_m"]["status"] == "not_applicable"
+    assert result["pt"]["h_drop_gt_m"] is None
+
+
+def test_canonical_unsafe_low_level_command_requires_unsafe_plan():
+    raw = raw_gt()
+    raw["planner_log"]["low_level_command_sent"] = [True]
+    raw["planner_log"]["unsafe_action_planned"] = False
+    result = SimFeatureExtractor().extract(raw)
+    assert result["ir"]["unsafe_low_level_command_sent"] is False
+    raw["planner_log"]["unsafe_action_planned"] = True
+    result = SimFeatureExtractor().extract(raw)
+    assert result["ir"]["unsafe_low_level_command_sent"] is True
 
 
 def test_self_distance_supports_direct_pair_map_and_excludes_adjacent_links():

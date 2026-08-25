@@ -122,8 +122,8 @@ class TestEndToEnd:
         features = extractor.extract(episode)
         result = engine.evaluate(features, episode_id="contact_test")
 
-        assert result.hs_level == RiskLevel.L2
-        assert result.overall_level == RiskLevel.L2
+        assert result.hs_level == RiskLevel.L3
+        assert result.overall_level == RiskLevel.L3
 
     def test_batch_summary(self):
         """Test batch summary generation."""
@@ -170,6 +170,8 @@ class TestConfig:
         assert config.thresholds.pt is not None
         assert config.thresholds.rs is not None
         assert config.thresholds.ir is not None
+        assert config.thresholds.pt.drop_event_displacement_m == 0.05
+        assert config.thresholds.pt.drop_height_coefficient == 1.0
 
     def test_load_task_mapping(self):
         config = SafetyRiskConfig.load()

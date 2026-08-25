@@ -203,6 +203,9 @@ class PlannerLog(BaseModel):
     stop_margin_s: Optional[float] = None
     t_stop_s: Optional[float] = None
     safety_gate_status: str = "pass"  # SafetyGateStatus
+    low_level_command_sent: Optional[Any] = None
+    unsafe_action_planned: Optional[bool] = None
+    unsafe_action_blocked: Optional[bool] = None
     robot_motion_started: bool = False
 
 
@@ -216,7 +219,6 @@ class HRILog(BaseModel):
     refusal_flag: bool = False
     clarification_requested: bool = False
     stop_command_obeyed: Optional[bool] = None
-    instruction_safety_assessment: Optional[Dict[str, Any]] = None
 
 
 class SimRawEpisode(BaseModel):
@@ -261,13 +263,13 @@ class HSFeatures(BaseModel):
     v_rel_h_gt_mps: Optional[float] = None
     TTC_h_min_gt_s: Optional[float] = None
     # Internal diagnostics for the generic extractor; not emitted by the
-    # minimal 31-field Sim_Features contract.
+    # formal 36-field Sim_Features contract.
     time_d_h_below_0_15m_s: float = 0.0
     time_d_h_below_0_10m_s: float = 0.0
     time_d_h_below_0_05m_s: float = 0.0
-    human_contact_flag_gt: bool = False
-    F_h_peak_gt_N: float = 0.0
-    contact_duration_h_gt_s: float = 0.0
+    human_contact_flag_gt: Optional[bool] = None
+    F_h_peak_gt_N: Optional[float] = None
+    contact_duration_h_gt_s: Optional[float] = None
 
 
 class PTFeatures(BaseModel):
@@ -277,10 +279,10 @@ class PTFeatures(BaseModel):
     d_obj_env_eff_m: Optional[float] = None
     d_obj_edge_gt_m: Optional[float] = None
     d_obj_target_gt_m: Optional[float] = None
-    object_collision_flag_gt: bool = False
-    object_collision_impulse_gt_Ns: float = 0.0
+    object_collision_flag_gt: Optional[bool] = None
+    object_collision_impulse_gt_Ns: Optional[float] = None
     gripper_object_force_gt_N: float = 0.0
-    F_obj_peak_gt_N: float = 0.0
+    F_obj_peak_gt_N: Optional[float] = None
     r_grip_gt: Optional[float] = None
     over_grip_flag: Optional[bool] = None
     grasp_success_flag: bool = False
@@ -289,11 +291,12 @@ class PTFeatures(BaseModel):
     wrong_object_flag_gt: Optional[bool] = None
     slip_flag_gt: bool = False
     slip_distance_gt_m: Optional[float] = None
-    drop_flag_gt: bool = False
+    drop_flag_gt: Optional[bool] = None
     h_drop_gt_m: Optional[float] = None
     placement_error_pos_gt_m: Optional[float] = None
     placement_error_rot_gt_rad: Optional[float] = None
     stable_final_gt: Optional[bool] = None
+    support_margin_gt_m: Optional[float] = None
     damage_flag_gt: Optional[bool] = None
     damage_severity_gt: Optional[str] = None
     wrong_location_flag_gt: bool = False
@@ -309,9 +312,9 @@ class RSFeatures(BaseModel):
     d_ee_env_min_gt_m: Optional[float] = None
     d_self_min_gt_m: Optional[float] = None
     d_link_env_eff_m: Optional[float] = None
-    robot_env_collision_flag_gt: bool = False
-    self_collision_flag_gt: bool = False
-    robot_collision_impulse_gt_Ns: float = 0.0
+    robot_env_collision_flag_gt: Optional[bool] = None
+    self_collision_flag_gt: Optional[bool] = None
+    robot_collision_impulse_gt_Ns: Optional[float] = None
     joint_limit_margin_gt_rad: Optional[float] = None
     joint_limit_violation: bool = False
     joint_torque_ratio_gt: Optional[float] = None
@@ -332,9 +335,17 @@ class IRFeatures(BaseModel):
     """Input Robustness risk features (SF-IR-*)."""
 
     true_occlusion_ratio: Optional[float] = None
+    pose_estimation_error_gt_m: Optional[float] = None
+    tracking_lost_flag_sim: Optional[bool] = None
+    blind_action_flag_sim: Optional[bool] = None
+    unsafe_instruction_flag_gt: Optional[bool] = None
+    refusal_flag: Optional[bool] = None
+    unsafe_action_planned: Optional[bool] = None
+    unsafe_action_blocked: Optional[bool] = None
+    unsafe_low_level_command_sent: Optional[bool] = None
+    stop_command_obeyed: Optional[bool] = None
     reobserve_flag: bool = False
     degrade_mode_flag: bool = False
-    blind_action_flag_sim: Optional[bool] = None
     ambiguous_command_flag: bool = False
     target_candidates_count: int = 0
     action_candidates_count: int = 0
@@ -342,17 +353,13 @@ class IRFeatures(BaseModel):
     clarification_requested: bool = False
     confirmation_required: bool = False
     unsafe_execution_under_ambiguity: bool = False
-    unsafe_instruction_flag_gt: bool = False
     unsafe_instruction_detected: bool = False
-    refusal_flag: bool = False
-    unsafe_action_planned: Optional[bool] = None
     robot_motion_started: bool = False
     multi_turn_attack_success: bool = False
     language_vision_conflict_flag: bool = False
     safety_state_conflict_flag: bool = False
     visual_prompt_attack_flag: bool = False
     unsafe_resolution_flag: bool = False
-    stop_command_obeyed: Optional[bool] = None
 
 
 class RiskFeatures(BaseModel):

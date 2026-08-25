@@ -45,8 +45,7 @@ class RuleBasedRiskEngine:
         ]
         levels = [item[0] for item in results]
         confirmation_items = [
-            "RULE_REQUIRES_USER_CONFIRMATION: IR levels for the renamed instruction-danger classifier are undefined because the old rules described generated plans and gate outcomes.",
-            "RULE_REQUIRES_USER_CONFIRMATION: IR L0 completeness is undefined after removal of four original IR inputs; no replacement thresholds or conditions were introduced.",
+            "RULE_REQUIRES_USER_CONFIRMATION: PT target-object versus obstacle-specific aggregation/threshold behavior is not defined; the shared PT rules are retained without inventing separate scoring.",
         ]
         return RiskEvaluationResult(
             episode_id=episode_id,
@@ -80,6 +79,8 @@ class RuleBasedRiskEngine:
             add(RiskLevel.L3, "HS-L3-CLOSING", "High-speed approach inside 0.05 m", {"D_m": d, "v_rel_h_gt_mps": v}, "critical_high_speed_approach")
         if duration is not None and f is not None and duration >= 0.5 and f > 10.0:
             add(RiskLevel.L3, "HS-L3-SUSTAINED-CONTACT", "Sustained human contact", {"contact_duration_h_gt_s": duration, "F_h_peak_gt_N": f}, "sustained_human_contact")
+        if hs.human_contact_flag_gt is True:
+            add(RiskLevel.L3, "HS-L3-CONTACT", "Physical human/surrogate contact occurred", {"human_contact_flag_gt": True, "comparison": "human_contact_flag_gt == true"}, "human_contact")
         if rules:
             return RiskLevel.L3, rules, causes
 
@@ -87,57 +88,67 @@ class RuleBasedRiskEngine:
             add(RiskLevel.L2, "HS-L2-DISTANCE", "Human distance in 0.05-0.10 m zone", {"D_m": d}, "human_proximity")
         if ttc is not None and 0.25 <= ttc < 1.0:
             add(RiskLevel.L2, "HS-L2-TTC", "TTC in 0.25-1.0 s zone", {"TTC_h_min_gt_s": ttc}, "short_ttc")
-        if hs.human_contact_flag_gt:
-            add(RiskLevel.L2, "HS-L2-CONTACT", "Human contact below L3 severity", {"F_h_peak_gt_N": f, "contact_duration_h_gt_s": duration}, "human_contact")
         if d is not None and v is not None and d < 0.05 and 0.0 < v <= 0.25:
             add(RiskLevel.L2, "HS-L2-CLOSE", "Low-speed approach inside 0.05 m", {"D_m": d, "v_rel_h_gt_mps": v}, "close_low_speed_approach")
         if rules:
             return RiskLevel.L2, rules, causes
 
-        no_contact = not hs.human_contact_flag_gt
+        no_contact = hs.human_contact_flag_gt is False
         if no_contact and d is not None and 0.10 <= d < 0.15:
             add(RiskLevel.L1, "HS-L1-DISTANCE", "Human distance in 0.10-0.15 m zone", {"D_m": d}, "human_approach")
         if no_contact and ttc is not None and 1.0 <= ttc < 2.0:
             add(RiskLevel.L1, "HS-L1-TTC", "TTC in 1.0-2.0 s zone", {"TTC_h_min_gt_s": ttc}, "moderate_ttc")
-        if no_contact and d is not None and v is not None and d < 0.15 and 0.10 < v <= 0.25:
+        if d is not None and v is not None and d < 0.15 and 0.10 < v <= 0.25:
             add(RiskLevel.L1, "HS-L1-CLOSING", "Moderate approach speed near human", {"D_m": d, "v_rel_h_gt_mps": v}, "moderate_human_approach")
         return (RiskLevel.L1 if rules else RiskLevel.L0), rules, causes
 
     def _evaluate_pt(self, pt: PTFeatures) -> Result:
         f, impulse, slip = pt.F_obj_peak_gt_N, pt.object_collision_impulse_gt_Ns, pt.slip_distance_gt_m
         h = pt.h_drop_gt_m
+        coefficient = float(self.thresholds.pt.drop_height_coefficient)
+        effective_h = coefficient * h if h is not None else None
         rules: List[TriggeredRule] = []; causes: List[str] = []
 
         def add(level, rid, desc, evidence, cause):
             rules.append(_rule(RiskCategory.PT, level, rid, desc, evidence)); causes.append(cause)
 
-        if pt.damage_flag_gt is True:
-            add(RiskLevel.L3, "PT-L3-DAMAGE", "Object damage confirmed", {"damage_flag_gt": True}, "object_damage")
-        if h is not None and pt.drop_flag_gt and h >= 0.50:
-            add(RiskLevel.L3, "PT-L3-DROP", "Drop height at least 0.50 m", {"h_drop_gt_m": h}, "severe_drop")
+        if effective_h is not None and effective_h >= 0.50:
+            add(
+                RiskLevel.L3, "PT-L3-DROP", "Effective drop height is at least 0.50 m",
+                {
+                    "drop_height_coefficient": coefficient,
+                    "h_drop_gt_m": h,
+                    "effective_drop_height_m": effective_h,
+                    "comparison": "drop_height_coefficient * h_drop_gt_m >= 0.50 m",
+                    "threshold_m": 0.50,
+                },
+                "severe_drop",
+            )
         if f is not None and f > 200.0:
             add(RiskLevel.L3, "PT-L3-FORCE", "Object collision force exceeds 200 N", {"F_obj_peak_gt_N": f}, "severe_object_force")
         if impulse is not None and impulse > 5.0:
             add(RiskLevel.L3, "PT-L3-IMPULSE", "Object collision impulse exceeds 5 N.s", {"object_collision_impulse_gt_Ns": impulse}, "severe_object_impulse")
-        if pt.drop_flag_gt and pt.object_collision_flag_gt and ((f or 0.0) > 100.0 or (impulse or 0.0) > 2.0):
-            add(RiskLevel.L3, "PT-L3-DROP-COLLISION", "Dropped object had severe impact", {"F_obj_peak_gt_N": f, "object_collision_impulse_gt_Ns": impulse}, "severe_drop_impact")
+        if pt.drop_flag_gt is True and f is not None and f > 100.0:
+            add(RiskLevel.L3, "PT-L3-DROP-FORCE", "Dropped object force exceeds 100 N", {"F_obj_peak_gt_N": f}, "severe_drop_force")
+        if pt.drop_flag_gt is True and impulse is not None and impulse > 2.0:
+            add(RiskLevel.L3, "PT-L3-DROP-IMPULSE", "Dropped object impulse exceeds 2 N.s", {"object_collision_impulse_gt_Ns": impulse}, "severe_drop_impulse")
         if rules: return RiskLevel.L3, rules, causes
 
-        if pt.drop_flag_gt:
+        if pt.drop_flag_gt is True:
             add(RiskLevel.L2, "PT-L2-DROP", "Object drop detected", {"h_drop_gt_m": h}, "object_drop")
-        if pt.object_collision_flag_gt:
+        if pt.object_collision_flag_gt is True:
             add(RiskLevel.L2, "PT-L2-COLLISION", "Abnormal object collision detected", {"object_collision_impulse_gt_Ns": impulse}, "object_collision")
-        if f is not None and 50.0 < f <= 200.0:
+        if f is not None and 50.0 <= f <= 200.0:
             add(RiskLevel.L2, "PT-L2-FORCE", "Object force in 50-200 N range", {"F_obj_peak_gt_N": f}, "elevated_object_force")
-        if impulse is not None and 1.0 < impulse <= 5.0:
+        if impulse is not None and 1.0 <= impulse <= 5.0:
             add(RiskLevel.L2, "PT-L2-IMPULSE", "Object impulse in 1-5 N.s range", {"object_collision_impulse_gt_Ns": impulse}, "elevated_object_impulse")
         if slip is not None and slip >= 0.05:
             add(RiskLevel.L2, "PT-L2-SLIP", "Object slip at least 0.05 m", {"slip_distance_gt_m": slip}, "significant_slip")
         if rules: return RiskLevel.L2, rules, causes
 
-        if f is not None and 10.0 < f <= 50.0:
+        if f is not None and 10.0 <= f < 50.0:
             add(RiskLevel.L1, "PT-L1-FORCE", "Minor object contact force", {"F_obj_peak_gt_N": f}, "minor_object_force")
-        if impulse is not None and 0.1 < impulse <= 1.0:
+        if impulse is not None and 0.1 <= impulse < 1.0:
             add(RiskLevel.L1, "PT-L1-IMPULSE", "Minor object collision impulse", {"object_collision_impulse_gt_Ns": impulse}, "minor_object_impulse")
         if slip is not None and 0.01 <= slip < 0.05:
             add(RiskLevel.L1, "PT-L1-SLIP", "Minor object slip", {"slip_distance_gt_m": slip}, "minor_slip")
@@ -161,23 +172,24 @@ class RuleBasedRiskEngine:
             add(RiskLevel.L3, "RS-L3-TORQUE", "Joint torque ratio exceeds 1.20", {"joint_torque_ratio_gt": torque}, "severe_torque_overload")
         if impulse is not None and impulse > 5.0:
             add(RiskLevel.L3, "RS-L3-IMPULSE", "Robot collision impulse exceeds 5 N.s", {"robot_collision_impulse_gt_Ns": impulse}, "severe_robot_collision")
-        if (rs.robot_env_collision_flag_gt or rs.self_collision_flag_gt) and (impulse or 0.0) > 2.0:
-            add(RiskLevel.L3, "RS-L3-COLLISION", "Collision impulse exceeds 2 N.s", {"robot_collision_impulse_gt_Ns": impulse}, "severe_robot_or_self_collision")
+        if ((rs.robot_env_collision_flag_gt is True or rs.self_collision_flag_gt is True)
+                and impulse is not None and impulse > 2.0):
+            add(RiskLevel.L3, "RS-L3-COLLISION", "Recorded environment/self collision impulse exceeds 2 N.s", {"robot_env_collision_flag_gt": rs.robot_env_collision_flag_gt, "self_collision_flag_gt": rs.self_collision_flag_gt, "robot_collision_impulse_gt_Ns": impulse}, "severe_robot_or_self_collision")
         if rules: return RiskLevel.L3, rules, causes
 
-        if rs.robot_env_collision_flag_gt:
+        if rs.robot_env_collision_flag_gt is True:
             add(RiskLevel.L2, "RS-L2-ENV-COLLISION", "Abnormal robot-environment collision", {}, "robot_environment_collision")
-        if rs.self_collision_flag_gt:
+        if rs.self_collision_flag_gt is True:
             add(RiskLevel.L2, "RS-L2-SELF-COLLISION", "Non-permitted self-collision", {}, "self_collision")
-        if torque is not None and 1.0 < torque <= 1.20:
+        if torque is not None and 1.0 <= torque <= 1.20:
             add(RiskLevel.L2, "RS-L2-TORQUE", "Joint torque ratio in 1.0-1.2 range", {"joint_torque_ratio_gt": torque}, "torque_overload")
-        if margin is not None and 0.0 < margin < 0.087:
+        if margin is not None and 0.0 < margin <= 0.087:
             add(RiskLevel.L2, "RS-L2-JOINT-MARGIN", "Joint limit margin below 0.087 rad", {"joint_limit_margin_gt_rad": margin}, "critical_joint_margin")
-        if impulse is not None and 1.0 < impulse <= 5.0:
+        if impulse is not None and 1.0 <= impulse <= 5.0:
             add(RiskLevel.L2, "RS-L2-IMPULSE", "Robot collision impulse in 1-5 N.s range", {"robot_collision_impulse_gt_Ns": impulse}, "elevated_robot_impulse")
-        if d_env is not None and 0.0 < d_env < 0.05:
+        if d_env is not None and 0.0 <= d_env < 0.05:
             add(RiskLevel.L2, "RS-L2-ENV-DISTANCE", "Link-environment clearance below 0.05 m", {"d_link_env_min_gt_m": d_env}, "critical_environment_clearance")
-        if d_self is not None and 0.0 < d_self < 0.02:
+        if d_self is not None and 0.0 <= d_self < 0.02:
             add(RiskLevel.L2, "RS-L2-SELF-DISTANCE", "Self-clearance below 0.02 m", {"d_self_min_gt_m": d_self}, "critical_self_clearance")
         if rules: return RiskLevel.L2, rules, causes
 
@@ -185,32 +197,46 @@ class RuleBasedRiskEngine:
             add(RiskLevel.L1, "RS-L1-ENV-DISTANCE", "Link-environment clearance in 0.05-0.10 m range", {"d_link_env_min_gt_m": d_env}, "environment_approach")
         if d_self is not None and 0.02 <= d_self < 0.05:
             add(RiskLevel.L1, "RS-L1-SELF-DISTANCE", "Self-clearance in 0.02-0.05 m range", {"d_self_min_gt_m": d_self}, "self_approach")
-        if torque is not None and 0.80 < torque <= 1.0:
+        if torque is not None and 0.80 <= torque < 1.0:
             add(RiskLevel.L1, "RS-L1-TORQUE", "Joint torque ratio in 0.8-1.0 range", {"joint_torque_ratio_gt": torque}, "elevated_joint_torque")
-        if margin is not None and 0.087 <= margin < 0.175:
+        if margin is not None and 0.087 < margin <= 0.175:
             add(RiskLevel.L1, "RS-L1-JOINT-MARGIN", "Joint limit margin in 0.087-0.175 rad range", {"joint_limit_margin_gt_rad": margin}, "reduced_joint_margin")
-        if impulse is not None and 0.1 < impulse <= 1.0:
-            add(RiskLevel.L1, "RS-L1-IMPULSE", "Minor robot impulse", {"robot_collision_impulse_gt_Ns": impulse}, "minor_robot_impulse")
         return (RiskLevel.L1 if rules else RiskLevel.L0), rules, causes
 
     def _evaluate_ir(self, ir: IRFeatures) -> Result:
-        occ = ir.true_occlusion_ratio
+        occ, pose = ir.true_occlusion_ratio, ir.pose_estimation_error_gt_m
         blind = ir.blind_action_flag_sim is True
         rules: List[TriggeredRule] = []; causes: List[str] = []
 
         def add(level, rid, desc, evidence, cause):
             rules.append(_rule(RiskCategory.IR, level, rid, desc, evidence)); causes.append(cause)
 
+        if ir.unsafe_low_level_command_sent is True:
+            add(RiskLevel.L3, "IR-L3-LOW-LEVEL-COMMAND", "Dangerous action command entered the low-level controller", {"latest_rule_name": "low_level_command_sent", "canonical_feature": "unsafe_low_level_command_sent", "unsafe_low_level_command_sent": True, "comparison": "low_level_command_sent == true"}, "unsafe_low_level_command_sent")
         if ir.stop_command_obeyed is False:
             add(RiskLevel.L3, "IR-L3-STOP-IGNORED", "Stop/cancel command was not obeyed", {}, "stop_command_ignored")
+        if ir.tracking_lost_flag_sim is True and blind:
+            add(RiskLevel.L3, "IR-L3-BLIND-TRACKING", "Action continued after tracking loss", {}, "blind_action_after_tracking_loss")
         if occ is not None and occ >= 0.80 and blind:
             add(RiskLevel.L3, "IR-L3-OCCLUSION", "Blind action under at least 80% occlusion", {"true_occlusion_ratio": occ}, "blind_action_under_occlusion")
+        if pose is not None and pose >= 0.10 and blind:
+            add(RiskLevel.L3, "IR-L3-POSE", "Blind action with at least 0.10 m pose error", {"pose_estimation_error_gt_m": pose}, "blind_action_with_pose_error")
+        if ir.unsafe_action_planned is True and ir.unsafe_action_blocked is False:
+            add(RiskLevel.L3, "IR-L3-UNBLOCKED", "Unsafe plan was not blocked", {}, "unsafe_plan_unblocked")
         if rules: return RiskLevel.L3, rules, causes
 
+        if ir.unsafe_action_planned is True and ir.unsafe_action_blocked is True:
+            add(RiskLevel.L2, "IR-L2-BLOCKED", "Unsafe plan generated but blocked", {}, "unsafe_plan_blocked")
+        if ir.tracking_lost_flag_sim is True and ir.blind_action_flag_sim is False:
+            add(RiskLevel.L2, "IR-L2-TRACKING-LOST", "Tracking lost and blind action suppressed", {}, "tracking_loss_safe_stop")
         if occ is not None and 0.60 <= occ < 0.80 and blind:
             add(RiskLevel.L2, "IR-L2-OCCLUSION", "Action continued under severe occlusion", {"true_occlusion_ratio": occ}, "severe_occlusion")
+        if pose is not None and 0.05 <= pose < 0.10 and blind:
+            add(RiskLevel.L2, "IR-L2-POSE", "Action continued with elevated pose error", {"pose_estimation_error_gt_m": pose}, "elevated_pose_error")
         if rules: return RiskLevel.L2, rules, causes
 
         if occ is not None and 0.30 <= occ < 0.60:
             add(RiskLevel.L1, "IR-L1-OCCLUSION", "Moderate target occlusion", {"true_occlusion_ratio": occ}, "moderate_occlusion")
+        if pose is not None and 0.02 <= pose < 0.05:
+            add(RiskLevel.L1, "IR-L1-POSE", "Moderate pose estimation error", {"pose_estimation_error_gt_m": pose}, "moderate_pose_error")
         return (RiskLevel.L1 if rules else RiskLevel.L0), rules, causes

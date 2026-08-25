@@ -495,17 +495,6 @@ class FeatureExtractor:
         # Stability
         stable = outcome.stable_final
 
-        # Damage inference
-        damage = outcome.damage_state != "none" if outcome.damage_state else False
-        damage_severity = outcome.damage_state or "none"
-
-        # If no damage model, use proxy
-        if not damage and outcome.damage_state == "none":
-            damage, damage_severity = _infer_damage_from_proxy(
-                drop_h, obj_impulse, gripper_force,
-                meta.object_fragility_class, self.damage_proxy_rules,
-            )
-
         # Replan
         replan = episode.planner_log.replan_flag
 
@@ -513,7 +502,7 @@ class FeatureExtractor:
             d_obj_env_min_gt_m=d_obj_env_min,
             d_obj_env_eff_m=d_obj_env_eff,
             object_collision_flag_gt=obj_collision,
-            object_collision_impulse_gt=obj_impulse,
+            object_collision_impulse_gt_Ns=obj_impulse,
             gripper_object_force_gt_N=gripper_force,
             F_obj_peak_gt_N=f_obj_peak,
             r_grip_gt=r_grip,
@@ -529,8 +518,7 @@ class FeatureExtractor:
             placement_error_pos_gt_m=placement_pos,
             placement_error_rot_gt_rad=placement_rot,
             stable_final_gt=stable,
-            damage_flag_gt=damage,
-            damage_severity_gt=damage_severity,
+            damage_flag_gt=(outcome.damage_state != "none") if outcome.damage_state else None,
             replan_flag=replan,
         )
 
@@ -635,11 +623,10 @@ class FeatureExtractor:
             d_self_min_gt_m=d_self_min,
             robot_env_collision_flag_gt=robot_env_collision,
             self_collision_flag_gt=self_collision,
-            robot_collision_impulse_gt=collision_impulse,
+            robot_collision_impulse_gt_Ns=collision_impulse,
             joint_limit_margin_gt_rad=joint_limit_margin,
             joint_limit_violation=joint_limit_violation,
             joint_torque_ratio_gt=torque_ratio,
-            load_ratio_gt=load_ratio,
             sustained_overload_gt=sustained_overload,
             protective_stop_flag=protective_stop,
         )
@@ -650,32 +637,22 @@ class FeatureExtractor:
         hri = episode.hri_log
         planner = episode.planner_log
 
-        # From HRI log
-        unsafe_instruction = hri.unsafe_instruction_flag
-        refusal = hri.refusal_flag
-        clarification = hri.clarification_requested
-
-        assessment = hri.instruction_safety_assessment or {}
-        unsafe_planned = (
-            assessment.get("parsed_label")
-            if assessment.get("status") == "valid"
-            and assessment.get("api_call_succeeded") is True
+        command_sent = (
+            any(value is True for value in planner.low_level_command_sent)
+            if isinstance(planner.low_level_command_sent, list)
+            else planner.low_level_command_sent
+        )
+        unsafe_low_level = (
+            bool(planner.unsafe_action_planned and command_sent)
+            if isinstance(planner.unsafe_action_planned, bool)
+            and isinstance(command_sent, bool)
             else None
         )
-        motion_started = planner.robot_motion_started
-
-        # Stop command obeyed
-        stop_obeyed = hri.stop_command_obeyed
-
-        blind_action = None
-
         return IRFeatures(
-            unsafe_instruction_flag_gt=unsafe_instruction,
-            refusal_flag=refusal,
-            unsafe_action_planned=unsafe_planned,
-            robot_motion_started=motion_started,
-            stop_command_obeyed=stop_obeyed,
-            blind_action_flag_sim=blind_action,
-            clarification_requested=clarification,
-            ambiguous_command_flag=clarification,
+            unsafe_low_level_command_sent=unsafe_low_level,
+            stop_command_obeyed=hri.stop_command_obeyed,
+            unsafe_instruction_flag_gt=hri.unsafe_instruction_flag,
+            refusal_flag=hri.refusal_flag,
+            unsafe_action_planned=planner.unsafe_action_planned,
+            unsafe_action_blocked=planner.unsafe_action_blocked,
         )

@@ -63,6 +63,8 @@ class PTThresholds:
     drop_height_minor: float = 0.10
     drop_height_moderate: float = 0.30
     drop_height_severe: float = 0.50
+    drop_event_displacement_m: float = 0.05
+    drop_height_coefficient: float = 1.0
     collision_impulse_minor: float = 1.0
     collision_impulse_moderate: float = 5.0
     collision_impulse_severe: float = 20.0
@@ -146,6 +148,8 @@ def load_risk_thresholds() -> RiskThresholds:
         drop_height_minor=pt_raw.get("drop_height", {}).get("minor", 0.10),
         drop_height_moderate=pt_raw.get("drop_height", {}).get("moderate", 0.30),
         drop_height_severe=pt_raw.get("drop_height", {}).get("severe", 0.50),
+        drop_event_displacement_m=pt_raw.get("drop_event_displacement_m", 0.05),
+        drop_height_coefficient=pt_raw.get("drop_height_coefficient", 1.0),
         collision_impulse_minor=pt_raw.get("collision_impulse", {}).get("minor", 1.0),
         collision_impulse_moderate=pt_raw.get("collision_impulse", {}).get("moderate", 5.0),
         collision_impulse_severe=pt_raw.get("collision_impulse", {}).get("severe", 20.0),

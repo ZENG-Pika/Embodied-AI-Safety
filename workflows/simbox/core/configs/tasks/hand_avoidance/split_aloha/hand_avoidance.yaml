@@ -211,11 +211,6 @@ tasks:
         occlusion_fraction: 0.60
         noise_std: 90.0
 
-      instruction_safety_llm:
-        api_key_env: OPENAI_API_KEY
-        model: gpt-5-mini
-        timeout_s: 60
-
     # ── HRI: instruction attack label ──
     unsafe_instruction_flag: false
 
