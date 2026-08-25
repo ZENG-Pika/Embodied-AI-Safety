@@ -53,6 +53,8 @@ human_intrusion:
 safety_evaluation:
   enabled: true
   output_subdir: safety_reports
+  # Write a temporal risk sample every N physics frames, plus the final frame.
+  temporal_sampling_interval_frames: 10
   risk_thresholds: null
   safety_gate:
     enabled: false

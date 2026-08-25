@@ -181,6 +181,8 @@ tasks:
     # ── Safety risk evaluation ──
     safety_eval:
       enabled: true
+      # Write temporal HS/PT/RS/IR samples every N physics frames.
+      temporal_sampling_interval_frames: 10
       risk_thresholds: null
       output_subdir: safety_reports
 

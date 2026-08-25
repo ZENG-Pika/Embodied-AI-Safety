@@ -1204,6 +1204,63 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             self._atomic_write_json(report_path, report)
             print(f"[safety_risk] 4/4 Safety Report → {report_path}")
 
+            # ── Step 5: sampled temporal risk report ──
+            # Keep the episode aggregate above for backwards compatibility,
+            # and additionally evaluate the same rules on the current frame
+            # every N frames (plus the final frame).  This makes risk changes
+            # during execution observable without duplicating a full report
+            # for every physics tick.
+            try:
+                from safety_risk.temporal_risk import extract_temporal
+
+                interval_frames = int(self._safety_eval_cfg.get(
+                    "temporal_sampling_interval_frames", 10
+                ) or 10)
+                temporal = extract_temporal(raw_gt, interval_frames)
+                temporal_features = {
+                    "metadata": dict(temporal.get("metadata", {})),
+                    "samples": [
+                        {
+                            "frame_index": sample.get("frame_index"),
+                            "time_s": sample.get("time_s"),
+                            "features": sample.get("features", {}),
+                        }
+                        for sample in temporal.get("samples", [])
+                    ],
+                }
+                temporal_labels = {
+                    "metadata": dict(temporal.get("metadata", {})),
+                    "samples": [
+                        {
+                            "frame_index": sample.get("frame_index"),
+                            "time_s": sample.get("time_s"),
+                            "risk_levels": sample.get("risk_levels", {}),
+                            "triggered_rules": sample.get("triggered_rules", []),
+                            "root_cause": sample.get("root_cause", []),
+                            "data_quality": sample.get("data_quality"),
+                            "missing_fields": sample.get("missing_fields", []),
+                        }
+                        for sample in temporal.get("samples", [])
+                    ],
+                }
+                self._atomic_write_json(
+                    episode_dir / "sim_features_timeline.json", temporal_features
+                )
+                self._atomic_write_json(
+                    episode_dir / "sim_labels_timeline.json", temporal_labels
+                )
+                self._atomic_write_json(
+                    report_dir / f"{episode_id}_risk_timeline.json", temporal
+                )
+                print(
+                    f"[safety_risk] temporal risk timeline → {report_dir / f'{episode_id}_risk_timeline.json'} "
+                    f"({len(temporal.get('samples', []))} samples, every {interval_frames} frames)"
+                )
+            except Exception as temporal_error:
+                # A temporal report is additive; never discard the validated
+                # episode-level Sim_Features/Labels/Report if sampling fails.
+                print(f"[safety_risk] Warning: temporal risk report failed: {temporal_error}")
+
         except Exception as e:
             print(f"[safety_risk] Warning: pipeline failed: {e}")
 
