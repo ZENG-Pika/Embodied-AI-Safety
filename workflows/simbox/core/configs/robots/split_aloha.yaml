@@ -7,8 +7,9 @@ path: "split_aloha_mid_360/robot.usd"
 
 # CuRobo file
 robot_file:
-  - workflows/simbox/curobo/src/curobo/content/configs/robot/piper100_left_arm.yml
-  - workflows/simbox/curobo/src/curobo/content/configs/robot/piper100_right_arm.yml
+  # Isaac Sim 5 bundles CuRobo without the upstream repository's submodule layout.
+  - workflows/simbox/isaac50_curobo_configs/piper100_left_arm.yml
+  - workflows/simbox/isaac50_curobo_configs/piper100_right_arm.yml
 
 # Gripper parameters
 gripper_max_width: 0.10

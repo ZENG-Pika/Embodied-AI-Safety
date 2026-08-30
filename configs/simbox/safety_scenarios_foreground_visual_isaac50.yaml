@@ -1,0 +1,101 @@
+version: 1
+
+# Foreground validation view for the original model-policy task.  It keeps the
+# same robot, target object, MANO hand, and obstacle as the NuRec variant, but
+# does not render the reconstructed room volume over the task workspace.
+selection:
+  all_tasks: true
+  include: []
+  globs: []
+  exclude_globs: []
+
+runtime:
+  launcher_template: configs/simbox/de_plan_with_render_template.yaml
+  generated_dir: .generated/safety_scenarios_foreground_visual_isaac50
+  isaac_python: scripts/isaac50/python.sh
+  curobo_root: InternDataAssets/curobo
+  asset_root_override: InternDataAssets/assets
+  isaac5_compat: true
+  random_num: 1
+  strict_mode: false
+  max_attempts: 1
+  headless: false
+  output_root: output/safety_scenarios_foreground_visual_isaac50
+  failure_output_root: failure_output/safety_scenarios_foreground_visual_isaac50
+  simulator_overrides:
+    physics_dt: 1/30
+    rendering_dt: 1/30
+    stage_units_in_meters: 1.0
+    renderer: RayTracedLighting
+    anti_aliasing: 0
+    multi_gpu: false
+    portable_root: /tmp/isaac50_safety_scenarios_foreground_visual
+    disable_metrics_assembler: true
+
+overview_camera:
+  enabled: true
+  name: franka_nurec_overview
+  translation: [1.3, 0.7, 2.7]
+  # USD camera looks along local -Z with local +Y as image up. This is the
+  # quaternion for eye [1.3, 0.7, 2.7] looking at [0.0, 0.0, 1.5].
+  orientation: [0.463030, 0.220347, 0.368909, 0.775213]
+  camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+human_intrusion:
+  enabled: true
+  object_name: obstacle_1
+  asset_path: workflows/simbox/example_assets/task/hand_model/mano_hand_fixed.usda
+  prim_path_child: mano
+  scale: [1.25, 1.25, 1.25]
+  physical_params:
+    friction: {static: 0.5, dynamic: 0.5}
+  spawn:
+    support_object: table
+    position_min_m: [0.38, 0.05, 0.0]
+    position_max_m: [0.38, 0.05, 0.0]
+    yaw_range_deg: [0.0, 0.0]
+  motion:
+    enabled: false
+    target_m: [-0.10, -0.40, 0.80]
+    speed_m_per_step: 0.0035
+    fixed_z_m: 0.80
+    mode: round_trip
+
+worldcomposer_background:
+  enabled: false
+  name: native_nurec_background
+  asset_path: assets/worldcomposer/3DGS_usdz/3DGS_isaac50_nurec.usdz
+  # Maps an upright room view (+X forward, -Y up in this capture) onto
+  # SimBox's unchanged viewport (eye [1.3, 0.7, 2.7], target [0, 0, 1.5]).
+  translation: [-0.525141, 1.608039, 1.130879]
+  euler: [-90.0, 39.102229, -151.699244]
+  scale: [0.475657, 0.475657, 0.475657]
+
+# MESH.zip was unpacked into assets/worldcomposer/839875.  It is used as a
+# NuRec matte proxy, so foreground simulation objects depth-compose correctly.
+worldcomposer_mesh:
+  enabled: false
+  name: native_nurec_mesh
+  asset_path: assets/worldcomposer/839875/839875_collision_mesh_source.usd
+  translation: [-0.525141, 1.608039, 1.130879]
+  euler: [-90.0, 39.102229, -151.699244]
+  scale: [0.475657, 0.475657, 0.475657]
+  visible: true
+  # Preserve the original policy task physics: this is a registered background
+  # mesh, not an additional collidable obstacle.
+  disable_collision: true
+  # The mesh is a hidden reconstruction layer, not a policy class.  Excluding
+  # it also avoids semantic annotator work on its 372 source meshes.
+  semantic_label: false
+  nurec_proxy: true
+  # NuRec accepts actual Mesh prims as depth proxies, not their Xform parent.
+  # This room-floorplan mesh matches the 3DGS capture's static surfaces.
+  nurec_proxy_meshes: [SM_floorplan]
+
+safety_evaluation:
+  enabled: true
+  output_subdir: safety_reports
+  risk_thresholds: null
+  safety_gate: {enabled: false, distance_threshold_m: 0.30, stop_verify_steps: 5}
+  enable_depth_segmentation: true
+  depth_seg_camera_file: workflows/simbox/core/configs/cameras/astra_with_depth_seg.yaml

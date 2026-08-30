@@ -1,0 +1,30 @@
+name: hand_avoidance_isaac50
+load_stage:
+  scene_loader:
+    type: env_loader
+    args:
+      workflow_type: SimBoxDualWorkFlow
+      cfg_path: workflows/simbox/core/configs/tasks/hand_avoidance/split_aloha/hand_avoidance.yaml
+      simulator:
+        physics_dt: 1/30
+        rendering_dt: 1/30
+        stage_units_in_meters: 1.0
+        headless: true
+        anti_aliasing: 0
+        multi_gpu: false
+        portable_root: output/.isaac50_portable
+        disable_metrics_assembler: true
+  layout_random_generator:
+    type: env_randomizer
+    args:
+      random_num: 1
+      strict_mode: false
+plan_with_render_stage:
+  plan_with_render:
+    type: plan_with_render
+store_stage:
+  writer:
+    type: env_writer
+    args:
+      batch_async: false
+      output_dir: output/${name}/

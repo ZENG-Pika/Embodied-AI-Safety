@@ -5,13 +5,46 @@ import pickle
 from pathlib import Path
 
 import cv2
-import imageio
 import lmdb
 import numpy as np
 from core.loggers import BaseLogger
 from tqdm import tqdm
 
 DEFAULT_RGB_SCALE_FACTOR = 256000.0
+
+
+def write_rgb_video(path, frames, fps=15):
+    """Write RGB/RGBA frames without relying on imageio's optional ffmpeg plugin."""
+    if not frames:
+        return
+    first_frame = np.asarray(frames[0])
+    if first_frame.ndim != 3 or first_frame.shape[2] not in (3, 4):
+        raise ValueError(f"Unsupported video frame shape: {first_frame.shape}")
+    height, width = first_frame.shape[:2]
+    writer = cv2.VideoWriter(
+        str(path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        float(fps),
+        (int(width), int(height)),
+    )
+    if not writer.isOpened():
+        raise RuntimeError(f"OpenCV could not open MP4 writer for {path}")
+    try:
+        for frame in frames:
+            frame = np.asarray(frame, dtype=np.uint8)
+            if frame.shape[:2] != (height, width):
+                raise ValueError(
+                    f"Inconsistent video frame size: {frame.shape[:2]} "
+                    f"!= {(height, width)}"
+                )
+            color_code = (
+                cv2.COLOR_RGBA2BGR
+                if frame.shape[2] == 4
+                else cv2.COLOR_RGB2BGR
+            )
+            writer.write(cv2.cvtColor(frame, color_code))
+    finally:
+        writer.release()
 
 def float_array_to_uint16_png(float_array):
     array = np.nan_to_num(float_array, nan=0.0, posinf=0.0, neginf=0.0)
@@ -170,7 +203,7 @@ class LmdbLogger(BaseLogger):
                         )
                         meta_info["keys"][key].append(f"{key}/{step_id}".encode("utf-8"))
 
-                    imageio.mimsave(os.path.join(root_img_path, "demo.mp4"), value, fps=15)
+                    write_rgb_video(root_img_path / "demo.mp4", value, fps=15)
 
                 for key, value in self.depth_image_logger.get(robot_name, {}).items():
                     root_img_path = save_dir / f"{key}"

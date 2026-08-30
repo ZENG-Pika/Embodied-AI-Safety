@@ -1,0 +1,85 @@
+tasks:
+  -
+    name: franka_single_pick_banana
+    asset_root: InternDataAssets/assets
+    task: BananaBaseTask
+    task_id: 0
+    offset: null
+    render: true
+    arena_file: workflows/simbox/core/configs/arenas/pick_randomized_arena.yaml
+    neglect_collision_names: ["table"]
+    env_map:
+      envmap_lib: envmap_lib
+      apply_randomization: false
+      intensity_range: [4000, 4000]
+      rotation_range: [0, 0]
+    robots:
+      -
+        name: franka
+        robot_config_file: configs/simbox/fr3_isaac50.yaml
+        euler: [0.0, 0.0, 90.0]
+        left_joint_home: [0.0, -0.143, 0.0, -2.435, 0.0, 2.235, 0.789]
+        left_joint_home_std: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    objects:
+      -
+        name: pick_object_left
+        path: pick_and_place/pre-train-pick/assets/omniobject3d-banana/omniobject3d-banana_001/Aligned_obj.usd
+        target_class: RigidObject
+        dataset: oo3d
+        category: omniobject3d-banana
+        prim_path_child: Aligned
+        translation: [0.0, 0.0, 0.0]
+        euler: [0.0, 0.0, 0.0]
+        scale: [0.001, 0.001, 0.001]
+        apply_randomization: false
+        orientation_mode: suggested
+    regions:
+      -
+        object: pick_object_left
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [[-0.12, -0.02, 0.0], [-0.12, -0.02, 0.0]]
+          yaw_rotation: [0.0, 0.0]
+      -
+        object: franka
+        target: table
+        random_type: A_on_B_region_sampler
+        random_config:
+          pos_range: [[0.0, -0.47, 0.0], [0.0, -0.47, 0.0]]
+          yaw_rotation: [0.0, 0.0]
+    cameras:
+      -
+        name: franka_head
+        translation: [0.0, 0.65, 1.24]
+        orientation: [0.000, 0.000, -0.466, -0.885]
+        camera_axes: usd
+        camera_file: workflows/simbox/core/configs/cameras/realsense_d455_v3.yaml
+        parent: ""
+        apply_randomization: false
+    data:
+      task_dir: single_pick/franka/omniobject3d-banana/trained_dp
+      language_instruction: Pick up the banana.
+      detailed_language_instruction: Pick up the banana and lift it.
+      collect_info: trained Franka Diffusion Policy rollout
+      version: isaacsim5-trained-dp
+      update: true
+      max_episode_length: 200
+    skills: []
+    policy:
+      enabled: true
+      type: trained_diffusion
+      checkpoint: models/dp_franka_100k_delivery/checkpoint
+      model_root: models/dp_franka_100k_delivery
+      python_executable: models/dp_franka_100k_delivery/.venv/bin/python
+      device: cuda
+      seed: 7
+      max_episode_steps: 200
+      replan_steps: 32
+      camera_name: franka_head
+      success_lift_m: 0.02
+      # Require a short stable lift window, then freeze the measured joints.
+      # This prevents the diffusion action horizon from continuing after pick success.
+      stop_on_success: true
+      success_hold_steps: 5
+      post_success_hold_steps: 2

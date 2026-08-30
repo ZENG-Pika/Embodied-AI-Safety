@@ -198,12 +198,7 @@ def update_articulated_objs(cfg):
 def update_rigid_objs(cfg):
     for obj_cfg in cfg["objects"]:
         apply_randomization = obj_cfg.get("apply_randomization", False)
-        reload_each_episode = obj_cfg.get("reload_each_episode", True)
-        if (
-            apply_randomization
-            and reload_each_episode
-            and obj_cfg["target_class"] == "RigidObject"
-        ):
+        if apply_randomization and obj_cfg["target_class"] == "RigidObject":
             scope = obj_cfg.get("randomization_scope", "category")
             if isinstance(scope, str):
                 if scope == "category":

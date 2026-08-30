@@ -213,16 +213,17 @@ def set_distractors(
     ]
     target_mesh = mesh_from_usd_data(recursive_parse_new(target.prim))
 
+    # Get pcs
     num_points = 10000
     objects_pcds = [get_pcd_from_mesh(mesh, num_points) for mesh in objects_meshes]
     objects_pcds = [pcd for pcd in objects_pcds if pcd is not None]
     target_pcd = get_pcd_from_mesh(target_mesh, num_points)
     if target_pcd is None:
-        raise RuntimeError('Target object has no valid triangle mesh for distractor placement')
+        raise RuntimeError("Target object has no valid triangle mesh for distractor placement")
 
     valid_distractors = []
     distractors_pcds = []
-    fallback_z = distractor_cfg.get('fallback_z', -5.0)
+    fallback_z = distractor_cfg.get("fallback_z", -5.0)
     for (name, distractor), mesh, cfg_item in zip(distractor_items, distractor_meshes, cfgs):
         pcd = get_pcd_from_mesh(mesh, num_points)
         if pcd is None:
@@ -230,7 +231,7 @@ def set_distractors(
             trans = np.asarray(trans, dtype=float)
             trans[2] = fallback_z
             distractor.set_local_pose(translation=trans, orientation=ori)
-            print(f'[distractor] skipping {name}: USD subtree has no triangles')
+            print(f"[distractor] skipping {name}: USD subtree has no triangles")
             continue
         valid_distractors.append((name, distractor, cfg_item))
         distractors_pcds.append(pcd)

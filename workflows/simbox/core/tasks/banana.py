@@ -16,9 +16,10 @@ from core.utils.layout import optimize_2d_manip_layout
 from core.utils.region_sampler import RandomRegionSampler
 from core.utils.scene_utils import deactivate_selected_prims
 from core.utils.transformation_utils import get_orientation
+from core.utils.usd_geom_utils import compute_bbox
 from core.utils.visual_distractor import set_distractors
 from omegaconf import DictConfig
-from isaacsim.core.api.materials import PreviewSurface
+from omni.isaac.core.materials import PreviewSurface
 from omni.isaac.core.prims import RigidContactView, XFormPrim
 from omni.isaac.core.scenes.scene import Scene
 from omni.isaac.core.tasks import BaseTask
@@ -29,7 +30,7 @@ from omni.isaac.core.utils.prims import (
 )
 from omni.isaac.core.utils.stage import get_current_stage
 from omni.physx.scripts import particleUtils
-from pxr import Gf, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, UsdShade, Vt
+from pxr import Gf, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade, Vt
 from scipy.spatial.transform import Rotation as R
 
 
@@ -53,7 +54,16 @@ class BananaBaseTask(BaseTask):
         self.visuals = {}
         self.stage = get_current_stage()
         self.random_region_list = self.cfg.get("random_region_list", [])
+        self._region_poses = {}
+        self._region_pose_frames = {}
+        self._region_bottom_offsets = {}
         self.current_id = 0
+        alignment = self.cfg.get("worldcomposer_task_alignment", {}) or {}
+        self._worldcomposer_task_translation = np.asarray(
+            alignment.get("translation", [0.0, 0.0, 0.0]), dtype=np.float64
+        )
+        if self._worldcomposer_task_translation.shape != (3,):
+            raise ValueError("worldcomposer_task_alignment.translation must contain three values")
 
         self.first_set_fluid = True
         self.particleSystemPath = None
@@ -93,8 +103,10 @@ class BananaBaseTask(BaseTask):
 
     def set_up_scene(self, scene: Scene) -> None:
         super().set_up_scene(scene)
+        self._apply_worldcomposer_task_alignment()
         self._set_envmap()
         self.cfg = update_scenes(self.cfg)
+        self._apply_worldcomposer_scene_table_config()
         for cfg in self.cfg["arena"]["fixtures"]:
             self.fixtures[cfg["name"]] = self._load_obj(cfg)
             if cfg["target_class"] == "ConveyorObject":
@@ -106,6 +118,12 @@ class BananaBaseTask(BaseTask):
         for cfg in self.cfg["objects"]:
             self.objects[cfg["name"]] = self._load_obj(cfg)
 
+        # NuRec backgrounds do not provide a reliable depth buffer to regular
+        # RTX geometry by themselves.  A registered reconstruction mesh can
+        # supply that depth through the native Volume.proxy relationship.
+        # This is visual-only: collision stays disabled in _load_obj above.
+        self._configure_nurec_proxy_meshes()
+
         # Some PM articulated assets contain malformed face-varying UV arrays.
         # Block only the invalid visual primvars before the first PhysX reset;
         # collision meshes, joints, and keypoint metadata remain unchanged.
@@ -114,9 +132,18 @@ class BananaBaseTask(BaseTask):
         # MANO assets ship with RigidBodyAPI on both the articulation root and
         # child links.  Fix this before the first PhysX stage parse/reset.
         self._fix_obstacle_physics_hierarchy()
+        if os.environ.get("INTERNDATA_ISAAC5_COMPAT") == "1":
+            for cfg in self.cfg["objects"]:
+                if (
+                    cfg["target_class"] in ("RigidObject", "ArticulatedObject")
+                    and cfg.get("scene_register", True)
+                ):
+                    scene.add(self.objects[cfg["name"]])
 
         for cfg in self.cfg["robots"]:
             self._load_robot(cfg)
+            if os.environ.get("INTERNDATA_ISAAC5_COMPAT") == "1":
+                scene.add(self.robots[cfg["name"]])
         for cfg in self.cfg["cameras"]:
             self._load_camera(cfg)
             if cfg.get("apply_randomization", False):
@@ -196,27 +223,41 @@ class BananaBaseTask(BaseTask):
                     self.fixtures[cfg["name"]] = self._load_obj(cfg)
                     self._task_objects[cfg["name"]] = self.fixtures[cfg["name"]]
 
-        # Update objects
-        self.cfg = update_rigid_objs(self.cfg)
-        reload_articulated = any(
-            obj_cfg.get("target_class") == "ArticulatedObject"
-            and obj_cfg.get("reload_each_episode", True)
-            for obj_cfg in self.cfg["objects"]
-        )
-        if reload_articulated:
-            self.cfg = update_articulated_objs(self.cfg)
-        for cfg in self.cfg["objects"]:
-            if self._should_reload_object(cfg):
+        # Isaac Sim 5 tensor/contact views cannot survive deleting and
+        # recreating registered prims. Isaac Sim 4.5 preserves the upstream
+        # per-episode asset reload behavior, including reload_each_episode.
+        if os.environ.get("INTERNDATA_ISAAC5_COMPAT") != "1":
+            self.cfg = update_rigid_objs(self.cfg)
+            reload_articulated = any(
+                obj_cfg.get("target_class") == "ArticulatedObject"
+                and obj_cfg.get("reload_each_episode", True)
+                for obj_cfg in self.cfg["objects"]
+            )
+            if reload_articulated:
+                self.cfg = update_articulated_objs(self.cfg)
+            for cfg in self.cfg["objects"]:
+                if self._should_reload_object(cfg):
+                    print(
+                        f"[object_reset] name={cfg['name']} action=reload "
+                        f"path={cfg.get('path', '<unknown>')}"
+                    )
+                    delete_prim(os.path.dirname(self.objects[cfg["name"]].prim_path))
+                    self.objects[cfg["name"]] = self._load_obj(cfg)
+                    self._task_objects[cfg["name"]] = self.objects[cfg["name"]]
+                else:
+                    print(
+                        f"[object_reset] name={cfg['name']} action=reuse "
+                        f"path={cfg.get('path', '<unknown>')}"
+                    )
+                    obj = self.objects.get(cfg["name"])
+                    if obj is not None:
+                        self._reset_object_velocity(obj, cfg)
+        else:
+            # Isaac Sim 5 keeps tensor/contact views stable by reusing prims.
+            # This mirrors upstream's reuse branch without invalidating views.
+            for cfg in self.cfg["objects"]:
                 print(
-                    f"[object_reset] name={cfg['name']} action=reload "
-                    f"path={cfg.get('path', '<unknown>')}"
-                )
-                delete_prim(os.path.dirname(self.objects[cfg["name"]].prim_path))
-                self.objects[cfg["name"]] = self._load_obj(cfg)
-                self._task_objects[cfg["name"]] = self.objects[cfg["name"]]
-            else:
-                print(
-                    f"[object_reset] name={cfg['name']} action=reuse "
+                    f"[object_reset] name={cfg['name']} action=reuse_isaac50 "
                     f"path={cfg.get('path', '<unknown>')}"
                 )
                 obj = self.objects.get(cfg["name"])
@@ -237,18 +278,28 @@ class BananaBaseTask(BaseTask):
                 self._task_objects[cfg["name"]] = self.fixtures[cfg["name"]]
 
         # Update objects
-        for cfg in self.cfg["objects"]:
-            if self._should_reload_object(cfg):
+        if os.environ.get("INTERNDATA_ISAAC5_COMPAT") != "1":
+            for cfg in self.cfg["objects"]:
+                if self._should_reload_object(cfg):
+                    print(
+                        f"[object_reset] name={cfg['name']} action=reload "
+                        f"path={cfg.get('path', '<unknown>')}"
+                    )
+                    delete_prim(os.path.dirname(self.objects[cfg["name"]].prim_path))
+                    self.objects[cfg["name"]] = self._load_obj(cfg)
+                    self._task_objects[cfg["name"]] = self.objects[cfg["name"]]
+                else:
+                    print(
+                        f"[object_reset] name={cfg['name']} action=reuse "
+                        f"path={cfg.get('path', '<unknown>')}"
+                    )
+                    obj = self.objects.get(cfg["name"])
+                    if obj is not None:
+                        self._reset_object_velocity(obj, cfg)
+        else:
+            for cfg in self.cfg["objects"]:
                 print(
-                    f"[object_reset] name={cfg['name']} action=reload "
-                    f"path={cfg.get('path', '<unknown>')}"
-                )
-                delete_prim(os.path.dirname(self.objects[cfg["name"]].prim_path))
-                self.objects[cfg["name"]] = self._load_obj(cfg)
-                self._task_objects[cfg["name"]] = self.objects[cfg["name"]]
-            else:
-                print(
-                    f"[object_reset] name={cfg['name']} action=reuse "
+                    f"[object_reset] name={cfg['name']} action=reuse_isaac50 "
                     f"path={cfg.get('path', '<unknown>')}"
                 )
                 obj = self.objects.get(cfg["name"])
@@ -307,11 +358,35 @@ class BananaBaseTask(BaseTask):
         self.language_instruction, self.detailed_language_instruction = update_language(self.cfg)
 
     def post_reset(self):
-        for _, robot in self.robots.items():
-            robot.initialize()
-        for cfg in self.cfg["objects"]:
-            if cfg["target_class"] == "ArticulatedObject":
-                self.objects[cfg["name"]].initialize()
+        if os.environ.get("INTERNDATA_ISAAC5_COMPAT") != "1":
+            for _, robot in self.robots.items():
+                robot.initialize()
+            for cfg in self.cfg["objects"]:
+                if cfg["target_class"] == "ArticulatedObject":
+                    self.objects[cfg["name"]].initialize()
+
+        # PhysX can restore authored poses while creating Isaac Sim 5 handles.
+        # Reapply the sampled pose without resampling, preserving seed semantics.
+        for object_name, pose in self._region_poses.items():
+            obj = self._task_objects.get(object_name)
+            if obj is None:
+                continue
+            if self._region_pose_frames.get(object_name) == "world":
+                obj.set_world_pose(position=pose[0], orientation=pose[1])
+            else:
+                obj.set_local_pose(*pose)
+            if object_name in self.objects and hasattr(obj, "set_linear_velocity"):
+                from pxr import UsdPhysics
+
+                kinematic_attr = UsdPhysics.RigidBodyAPI(
+                    obj.prim
+                ).GetKinematicEnabledAttr()
+                is_kinematic = bool(
+                    kinematic_attr and kinematic_attr.Get()
+                )
+                if not is_kinematic:
+                    obj.set_linear_velocity(np.zeros(3))
+                    obj.set_angular_velocity(np.zeros(3))
 
         all_views = [
             contact_view
@@ -391,8 +466,13 @@ class BananaBaseTask(BaseTask):
             name=cfg["name"],
         )
 
+        translation = np.asarray(cfg["translation"], dtype=np.float64)
+        if cfg.get("fixed_world_view", False):
+            # Cameras live below the task root. Compensate only the overview
+            # camera so it remains in the registered WorldComposer frame.
+            translation = translation - self._worldcomposer_task_translation
         camera.set_local_pose(
-            translation=cfg["translation"],
+            translation=translation,
             orientation=cfg["orientation"],
             camera_axes=cfg["camera_axes"],
         )
@@ -402,6 +482,43 @@ class BananaBaseTask(BaseTask):
             "translation": deepcopy(camera.get_local_pose()[0]),
             "orientation": deepcopy(camera.get_local_pose()[1]),
         }
+
+    def _apply_worldcomposer_task_alignment(self):
+        """Map physical task content into the calibrated WorldComposer view."""
+        if np.allclose(self._worldcomposer_task_translation, 0.0):
+            return
+        root = XFormPrim(prim_path=self.root_prim_path)
+        root.set_local_pose(
+            translation=self._worldcomposer_task_translation,
+            orientation=np.array([1.0, 0.0, 0.0, 0.0]),
+        )
+        print(
+            "[worldcomposer] applied task/world alignment translation: "
+            f"{self._worldcomposer_task_translation.tolist()}"
+        )
+
+    def _apply_worldcomposer_scene_table_config(self):
+        """Hide the legacy table mesh while retaining its PhysX support shape.
+
+        The reconstructed table is a visual NuRec/MESH asset whose local axes
+        are not the simulation gravity frame.  The existing table collision
+        geometry remains as an invisible, horizontal support so objects still
+        settle through PhysX exactly as before, while the rendered scene table
+        is the only visible table.
+        """
+        config = self.cfg.get("worldcomposer_scene_table", {}) or {}
+        if not config.get("enabled", False) or not config.get("hide_virtual_surface", True):
+            return
+        fixture_name = config.get("fixture_name", "table")
+        for fixture in self.cfg["arena"]["fixtures"]:
+            if fixture.get("name") == fixture_name:
+                fixture["visible"] = False
+                print(
+                    "[worldcomposer] hid legacy table visual while preserving "
+                    f"its PhysX support: {fixture_name}"
+                )
+                return
+        raise ValueError(f"worldcomposer scene-table fixture not found: {fixture_name}")
 
     def _load_obj(self, cfg: DictConfig):
         """Create and initialize any object based on cfg['target_class']."""
@@ -432,6 +549,22 @@ class BananaBaseTask(BaseTask):
         obj.set_local_scale(cfg.get("scale", [1.0, 1.0, 1.0]))
         obj.set_visibility(cfg.get("visible", True))
 
+        # WorldComposer reconstruction meshes are scene registration assets,
+        # not task obstacles.  Disable their authored collision shapes in the
+        # composed stage so they cannot alter the benchmark's original physics.
+        if cfg.get("disable_collision", False):
+            disabled_collision_count = 0
+            root_prim = get_prim_at_path(obj.prim_path)
+            if root_prim and root_prim.IsValid():
+                for prim in Usd.PrimRange(root_prim):
+                    if prim.HasAPI(UsdPhysics.CollisionAPI):
+                        UsdPhysics.CollisionAPI(prim).CreateCollisionEnabledAttr().Set(False)
+                        disabled_collision_count += 1
+            print(
+                f"[worldcomposer] disabled collision on {disabled_collision_count} "
+                f"mesh prim(s): {obj.name}"
+            )
+
         # Extra behavior per type
         if target_class == "ArticulatedObject":
             obj.get_joint_position(self.stage)
@@ -439,6 +572,16 @@ class BananaBaseTask(BaseTask):
             material = PreviewSurface(
                 prim_path="/World/Materials/Red",
                 color=np.array(cfg.get("color", np.array([1, 0, 0]))),
+            )
+            obj.apply_visual_material(material)
+        elif cfg.get("color") is not None:
+            # Rigid task assets such as the dish and the MANO hand can be
+            # visually lost in a bright reconstructed room.  This material
+            # override is render-only; all physics authored on the referenced
+            # asset remains intact.
+            material = PreviewSurface(
+                prim_path=f"/World/Materials/{obj.name}_display",
+                color=np.asarray(cfg["color"], dtype=np.float32),
             )
             obj.apply_visual_material(material)
 
@@ -449,6 +592,90 @@ class BananaBaseTask(BaseTask):
             )
 
         return obj
+
+    def _configure_nurec_proxy_meshes(self):
+        """Bind registered MESH geometry as native NuRec depth proxies.
+
+        The NuRec USDZ owns a ``Volume`` prim with a standard USD ``proxy``
+        relationship.  Referencing the reconstruction mesh through that
+        relationship lets RTX use the mesh depth for compositing normal
+        simulation geometry in front of the 3DGS background.  The mesh itself
+        is marked matte, so it contributes depth but not a second opaque room
+        render.
+        """
+        proxy_configs = [cfg for cfg in self.cfg["objects"] if cfg.get("nurec_proxy", False)]
+        if not proxy_configs:
+            return
+
+        settings = None
+        try:
+            import carb
+            settings = carb.settings.get_settings()
+            settings.set("/rtx/matteObject/enabled", True)
+            settings.set("/rtx/matteObject/visibility/secondaryRays", True)
+        except Exception as exc:
+            print(f"[worldcomposer] could not enable RTX matte objects: {exc}")
+
+        for cfg in proxy_configs:
+            # A reconstruction mesh can provide NuRec depth, but a physical
+            # task fixture is a better proxy when its geometry shares the
+            # hand/object coordinate frame.  This is rendering-only: fixture
+            # collision and physics settings are left untouched.
+            proxy_source_name = str(cfg.get("nurec_proxy_source", cfg["name"]))
+            mesh_obj = self.objects.get(proxy_source_name) or self.fixtures.get(proxy_source_name)
+            background_name = str(cfg.get("nurec_proxy_for", ""))
+            background_obj = self.objects.get(background_name)
+            if mesh_obj is None or background_obj is None:
+                print(
+                    f"[worldcomposer] skipped NuRec proxy {proxy_source_name}: "
+                    f"mesh or background {background_name!r} was not loaded"
+                )
+                continue
+
+            volume_prims = [
+                prim for prim in Usd.PrimRange(get_prim_at_path(background_obj.prim_path))
+                if prim.GetTypeName() == "Volume"
+            ]
+            if not volume_prims:
+                print(
+                    f"[worldcomposer] skipped NuRec proxy {cfg['name']}: "
+                    "no Volume prim found under background"
+                )
+                continue
+
+            requested_names = set(cfg.get("nurec_proxy_meshes", []) or [])
+            mesh_prims = [
+                prim for prim in Usd.PrimRange(get_prim_at_path(mesh_obj.prim_path))
+                if prim.IsA(UsdGeom.Mesh)
+                and (not requested_names or prim.GetName() in requested_names)
+            ]
+            if requested_names:
+                found_names = {prim.GetName() for prim in mesh_prims}
+                missing_names = sorted(requested_names - found_names)
+                if missing_names:
+                    print(
+                        f"[worldcomposer] NuRec proxy mesh names not found: "
+                        f"{', '.join(missing_names)}"
+                    )
+            if not mesh_prims:
+                print(f"[worldcomposer] skipped NuRec proxy {cfg['name']}: no Mesh prim selected")
+                continue
+
+            targets = [prim.GetPath() for prim in mesh_prims]
+            for mesh_prim in mesh_prims:
+                mesh_prim.CreateAttribute(
+                    "primvars:isMatteObject", Sdf.ValueTypeNames.Bool
+                ).Set(True)
+
+            for volume_prim in volume_prims:
+                volume_prim.CreateRelationship("proxy", custom=False).SetTargets(targets)
+                volume_prim.CreateAttribute(
+                    "omni:nurec:useProxyTransform", Sdf.ValueTypeNames.Bool
+                ).Set(True)
+            print(
+                f"[worldcomposer] bound {len(mesh_prims)} MESH prim(s) as NuRec "
+                f"depth proxy for {background_name}"
+            )
 
     # Set
     def _set_artcontact_view(self, cfg):
@@ -838,9 +1065,14 @@ class BananaBaseTask(BaseTask):
             prim = get_prim_at_path(obj.prim_path)
             if not prim or not prim.IsValid():
                 continue
-            if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            child_rigid_bodies = [
+                child
+                for child in Usd.PrimRange(prim)
+                if child != prim and child.HasAPI(UsdPhysics.RigidBodyAPI)
+            ]
+            if child_rigid_bodies and prim.HasAPI(UsdPhysics.RigidBodyAPI):
                 prim.RemoveAPI(UsdPhysics.RigidBodyAPI)
-            if prim.HasAPI(UsdPhysics.MassAPI):
+            if child_rigid_bodies and prim.HasAPI(UsdPhysics.MassAPI):
                 prim.RemoveAPI(UsdPhysics.MassAPI)
             for child in Usd.PrimRange(prim):
                 if child == prim or not child.HasAPI(UsdPhysics.CollisionAPI):
@@ -858,6 +1090,28 @@ class BananaBaseTask(BaseTask):
         for cfg in self.cfg["regions"]:
             obj = self._task_objects[cfg["object"]]
             tgt = self._task_objects[cfg["target"]]
+            random_type = cfg.get("random_type")
+
+            def sampler_kwargs(random_config):
+                kwargs = dict(random_config)
+                if random_type == "A_on_B_region_sampler":
+                    object_name = cfg["object"]
+                    if "object_bottom_offset" in kwargs:
+                        self._region_bottom_offsets[object_name] = float(
+                            kwargs["object_bottom_offset"]
+                        )
+                    else:
+                        if object_name not in self._region_bottom_offsets:
+                            bbox = compute_bbox(obj.prim)
+                            object_z = float(obj.get_world_pose()[0][2])
+                            self._region_bottom_offsets[object_name] = (
+                                object_z - float(bbox.min[2])
+                            )
+                        kwargs["object_bottom_offset"] = self._region_bottom_offsets[
+                            object_name
+                        ]
+                return kwargs
+
             if "sub_tgt_prim" in cfg:
                 tgt = XFormPrim(prim_path=tgt.prim_path + cfg["sub_tgt_prim"])
             if "priority" in cfg:
@@ -867,8 +1121,7 @@ class BananaBaseTask(BaseTask):
                     idx = random.randint(0, len(random_region_list) - 1)
                 random_config = (random_region_list.pop(idx))["random_config"]
                 sampler_fn = getattr(RandomRegionSampler, cfg["random_type"])
-                pose = sampler_fn(obj, tgt, **random_config)
-                obj.set_local_pose(*pose)
+                pose = sampler_fn(obj, tgt, **sampler_kwargs(random_config))
             elif "container" in cfg:
                 container = self._task_objects[cfg["container"]]
                 obj_trans = container.get_local_pose()[0]
@@ -876,16 +1129,30 @@ class BananaBaseTask(BaseTask):
                 obj_trans[0] += x_bias
                 obj_trans[2] += cfg["z_init"]
                 obj_ori = obj.get_local_pose()[1]
-                obj.set_local_pose(obj_trans, obj_ori)
+                pose = (obj_trans, obj_ori)
             elif "target2" in cfg:
                 tgt2 = self._task_objects[cfg["target2"]]
                 sampler_fn = getattr(RandomRegionSampler, cfg["random_type"])
-                pose = sampler_fn(obj, tgt, tgt2, **cfg["random_config"])
-                obj.set_local_pose(*pose)
+                pose = sampler_fn(
+                    obj, tgt, tgt2, **sampler_kwargs(cfg["random_config"])
+                )
             else:
                 sampler_fn = getattr(RandomRegionSampler, cfg["random_type"])
-                pose = sampler_fn(obj, tgt, **cfg["random_config"])
+                pose = sampler_fn(
+                    obj, tgt, **sampler_kwargs(cfg["random_config"])
+                )
+
+            pose_frame = (
+                "world" if random_type == "A_on_B_region_sampler" else "local"
+            )
+            if pose_frame == "world":
+                obj.set_world_pose(position=pose[0], orientation=pose[1])
+            else:
                 obj.set_local_pose(*pose)
+            self._region_poses[cfg["object"]] = tuple(
+                np.asarray(value).copy() for value in pose
+            )
+            self._region_pose_frames[cfg["object"]] = pose_frame
 
     def _set_fixture_textures(self):
         """Apply or randomize textures for arena fixtures (table, floor, background)."""
@@ -1116,9 +1383,15 @@ class BananaBaseTask(BaseTask):
 
             filtered_distractors.append(path)
 
-        num_samples = random.randint(
-            distractors_cfg["min_num"], min(distractors_cfg["max_num"], len(filtered_distractors))
-        )
+        # A partial asset checkout may contain fewer distractors than the
+        # source task requests.  Keep the requested distribution when enough
+        # assets exist, otherwise use every available candidate.
+        available = len(filtered_distractors)
+        if available == 0:
+            return []
+        min_samples = min(int(distractors_cfg["min_num"]), available)
+        max_samples = min(int(distractors_cfg["max_num"]), available)
+        num_samples = random.randint(min_samples, max_samples)
         filtered_distractors = random.sample(filtered_distractors, num_samples)
 
         cfgs = []

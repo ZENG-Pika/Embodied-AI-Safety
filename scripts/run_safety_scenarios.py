@@ -193,9 +193,101 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
             "euler": [0.0, 0.0, 0.0],
             "scale": intrusion.get("scale", [1.25, 1.25, 1.25]),
             "apply_randomization": False,
-            "reload_each_episode": False,
             "physical_params": intrusion.get("physical_params", {}),
         })
+
+    # Rendering-only overrides make small task entities identifiable against a
+    # reconstructed background.  They do not alter object scale, pose, mass,
+    # collision geometry, policy observations, or region sampling.
+    object_visuals = config.get("task_object_visuals", {}) or {}
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        visual = object_visuals.get(obj.get("name"))
+        if isinstance(visual, dict) and "color" in visual:
+            color = list(visual["color"])
+            if len(color) != 3:
+                raise ValueError(f"task_object_visuals color for {obj.get('name')} must contain three values")
+            obj["color"] = [float(value) for value in color]
+
+    # The reconstructed room and the policy task use independent source
+    # coordinate frames. Keep the registered room fixed while moving the
+    # complete task into the foreground with one translation-only transform.
+    # A translation preserves all robot/object relative poses and therefore
+    # does not change the policy task's internal physics.
+    alignment = config.get("worldcomposer_task_alignment", {}) or {}
+    alignment_translation = list(alignment.get("translation", [0.0, 0.0, 0.0]))
+    if len(alignment_translation) != 3:
+        raise ValueError("worldcomposer_task_alignment.translation must contain three values")
+    alignment_translation = [float(value) for value in alignment_translation]
+    result["worldcomposer_task_alignment"] = {"translation": alignment_translation}
+    scene_table = config.get("worldcomposer_scene_table", {}) or {}
+    result["worldcomposer_scene_table"] = {
+        "enabled": bool(scene_table.get("enabled", False)),
+        "fixture_name": str(scene_table.get("fixture_name", "table")),
+        "hide_virtual_surface": bool(scene_table.get("hide_virtual_surface", True)),
+    }
+
+    def _room_translation(value: Any) -> List[float]:
+        source = list(value)
+        if len(source) != 3:
+            raise ValueError("WorldComposer translation must contain three values")
+        return [float(source[index]) - alignment_translation[index] for index in range(3)]
+
+    # WorldComposer backgrounds are visual-only.  Keep them outside regions
+    # and explicitly ignore them in CuRobo so the original task physics,
+    # motion plan, and policy inputs retain their behavior.
+    background = config.get("worldcomposer_background", {}) or {}
+    background_name = str(background.get("name", "worldcomposer_background"))
+    if background.get("enabled", False):
+        background_path = _repo_path(str(background["asset_path"])).resolve()
+        if not background_path.is_file():
+            raise FileNotFoundError(f"WorldComposer background not found: {background_path}")
+        if not any(isinstance(obj, dict) and obj.get("name") == background_name for obj in objects):
+            objects.append({
+                "name": background_name,
+                "path": str(background_path),
+                "target_class": "GeometryObject",
+                # Compensate for the task-root translation so the calibrated
+                # NuRec background remains fixed in world space.
+                "translation": _room_translation(background.get("translation", [0.0, 0.0, 0.0])),
+                "euler": background.get("euler", [0.0, 0.0, 0.0]),
+                "scale": background.get("scale", [1.0, 1.0, 1.0]),
+                "apply_randomization": False,
+                "optimize_2d_layout": False,
+                "visible": True,
+            })
+
+    # Keep the matching WorldComposer mesh in the stage for registration and
+    # later inspection.  It defaults to invisible because rendering it over
+    # the coincident NuRec volume causes depth fighting and visual artifacts.
+    mesh = config.get("worldcomposer_mesh", {}) or {}
+    mesh_name = str(mesh.get("name", "worldcomposer_mesh"))
+    if mesh.get("enabled", False):
+        mesh_path = _repo_path(str(mesh["asset_path"])).resolve()
+        if not mesh_path.is_file():
+            raise FileNotFoundError(f"WorldComposer mesh not found: {mesh_path}")
+        if not any(isinstance(obj, dict) and obj.get("name") == mesh_name for obj in objects):
+            objects.append({
+                "name": mesh_name,
+                "path": str(mesh_path),
+                "target_class": "GeometryObject",
+                # Keep the ICP-calibrated MESH registered to NuRec in world
+                # space while the robot task moves as one physical group.
+                "translation": _room_translation(mesh.get("translation", background.get("translation", [0.0, 0.0, 0.0]))),
+                "euler": mesh.get("euler", background.get("euler", [0.0, 0.0, 0.0])),
+                "scale": mesh.get("scale", background.get("scale", [1.0, 1.0, 1.0])),
+                "apply_randomization": False,
+                "optimize_2d_layout": False,
+                "visible": bool(mesh.get("visible", False)),
+                "disable_collision": bool(mesh.get("disable_collision", True)),
+                "semantic_label": bool(mesh.get("semantic_label", False)),
+                # NuRec proxy fields are consumed by BananaBaseTask after all
+                # scene references have been composed into the USD stage.
+                "nurec_proxy": bool(mesh.get("nurec_proxy", False)),
+                "nurec_proxy_for": str(mesh.get("nurec_proxy_for", background_name)),
+                "nurec_proxy_meshes": list(mesh.get("nurec_proxy_meshes", []) or []),
+            })
 
     spawn = intrusion.get("spawn", {})
     regions = result.setdefault("regions", [])
@@ -211,11 +303,83 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
             },
         })
 
+    # Keep the benchmark's original table but allow a reproducible, camera-
+    # friendly tabletop layout. This changes only region-sampler inputs; the
+    # existing table support, robot, policy, and object assets are untouched.
+    tabletop_layout = config.get("tabletop_layout", {}) or {}
+    if tabletop_layout.get("enabled", False):
+        placements = tabletop_layout.get("placements", {}) or {}
+        for region in regions:
+            name = region.get("object")
+            position = placements.get(name)
+            if position is None and isinstance(name, str) and name.startswith("${tasks."):
+                # The source task keeps this OmegaConf interpolation unresolved
+                # until launcher load; resolve the common robot-name reference
+                # against the copied task document for deterministic placement.
+                robot_index = 0
+                if ".robots." in name:
+                    try:
+                        robot_index = int(name.split(".robots.", 1)[1].split(".", 1)[0])
+                    except (IndexError, ValueError):
+                        robot_index = 0
+                robots = result.get("robots", []) or []
+                if robot_index < len(robots):
+                    position = placements.get(robots[robot_index].get("name"))
+            if position is None:
+                continue
+            if len(position) != 2:
+                raise ValueError(f"tabletop_layout placement for {name} must contain [x_m, y_m]")
+            random_config = region.setdefault("random_config", {})
+            fixed_position = [float(position[0]), float(position[1]), 0.0]
+            random_config["pos_range"] = [fixed_position, list(fixed_position)]
+            yaw = tabletop_layout.get("yaw_deg", {}).get(name)
+            if yaw is not None:
+                random_config["yaw_rotation"] = [float(yaw), float(yaw)]
+
+    # A fixed single-object layout must not be repopulated with random
+    # distractors, otherwise its free-space guarantee is lost at scene load.
+    if tabletop_layout.get("disable_distractors", False):
+        result.pop("distractors", None)
+
+    # Scenario configurations may refine a copied task skill without editing
+    # the source task YAML. This is useful when a fixed demo layout needs a
+    # trajectory-valid grasp candidate instead of the source task's broader
+    # IK-only candidate filter.
+    for override in config.get("skill_overrides", []) or []:
+        if not isinstance(override, dict):
+            raise ValueError("skill_overrides entries must be mappings")
+        match = override.get("match", {}) or {}
+        updates = override.get("set", {}) or {}
+        if not isinstance(match, dict) or not isinstance(updates, dict):
+            raise ValueError("skill_overrides entries require mapping match and set values")
+        matched = 0
+        for skill_group in result.get("skills", []) or []:
+            if not isinstance(skill_group, dict):
+                continue
+            for robot_sequences in skill_group.values():
+                for arm_group in robot_sequences or []:
+                    if not isinstance(arm_group, dict):
+                        continue
+                    for sequence in arm_group.values():
+                        for skill in sequence or []:
+                            if not isinstance(skill, dict):
+                                continue
+                            if all(skill.get(key) == value for key, value in match.items()):
+                                skill.update(copy.deepcopy(updates))
+                                matched += 1
+        if matched == 0:
+            raise ValueError(f"skill_overrides matched no skills: {match}")
+
+    planner_ignored = ["obstacle", "mano"]
+    if background.get("enabled", False):
+        planner_ignored.append(background_name)
+    if mesh.get("enabled", False):
+        planner_ignored.append(mesh_name)
     for robot in result.get("robots", []) or []:
         if not isinstance(robot, dict):
             continue
         ignored = list(robot.get("ignore_substring", []) or [])
-        for token in ("obstacle", "mano"):
+        for token in planner_ignored:
             if token not in ignored:
                 ignored.append(token)
         robot["ignore_substring"] = ignored
@@ -299,6 +463,9 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
             ),
             "parent": None,
             "apply_randomization": False,
+            # This overview is expressed in the reconstructed room frame,
+            # rather than the moving task-root frame.
+            "fixed_world_view": True,
         })
     return result
 
@@ -373,6 +540,10 @@ def _prepare(source: Path, config: Dict[str, Any]) -> tuple[str, Path, Path]:
         for task in task_document.get("tasks", []) or []:
             if isinstance(task, dict):
                 task["asset_root"] = str(_repo_path(str(asset_root_override)).resolve())
+                if runtime.get("isaac5_compat", False):
+                    for robot in task.get("robots", []) or []:
+                        if str(robot.get("robot_config_file", "")).endswith("/fr3.yaml"):
+                            robot["robot_config_file"] = "configs/simbox/fr3_isaac50.yaml"
     if config.get("policy", {}).get("enabled", False):
         _validate_random_policy_task(task_document, source, asset_root_override)
     task_document["tasks"] = [
@@ -386,6 +557,7 @@ def _prepare(source: Path, config: Dict[str, Any]) -> tuple[str, Path, Path]:
     scene_args["cfg_path"] = str(task_output.resolve())
     simulator = scene_args.setdefault("simulator", {})
     simulator["headless"] = bool(runtime.get("headless", True))
+    simulator.update(runtime.get("simulator_overrides", {}) or {})
     randomizer = launcher["load_stage"]["layout_random_generator"]["args"]
     randomizer["random_num"] = int(runtime.get("random_num", 1))
     randomizer["strict_mode"] = bool(runtime.get("strict_mode", True))
@@ -460,6 +632,7 @@ def main() -> int:
             "enabled": True,
             "type": "random_diffusion",
             "seed": args.policy_seed,
+            "skip_curobo_controllers": True,
             "action_horizon": 8,
             "diffusion_steps": 10,
             "hidden_dim": 128,
@@ -483,9 +656,13 @@ def main() -> int:
             "type": "trained_diffusion",
             "checkpoint": str(_repo_path(args.checkpoint).resolve()),
             "model_root": str(_repo_path(args.model_root).resolve()),
-            "python_executable": str(_repo_path(args.policy_python).resolve()),
+            # Do not resolve this path: virtualenv ``python`` is commonly a
+            # symlink to its base interpreter.  Resolving it bypasses the
+            # virtualenv site-packages when the child policy service starts.
+            "python_executable": str(_repo_path(args.policy_python).absolute()),
             "device": args.policy_device,
             "seed": args.policy_seed,
+            "skip_curobo_controllers": True,
             "max_episode_steps": args.max_episode_steps,
             "replan_steps": args.policy_replan_steps,
             "camera_name": "franka_head",
@@ -572,10 +749,16 @@ def main() -> int:
     if not (curobo_root / "src/curobo").is_dir():
         raise FileNotFoundError(f"CuRobo source directory does not exist: {curobo_root / 'src/curobo'}")
     child_env = os.environ.copy()
-    child_env["PYTHONPATH"] = os.pathsep.join(
-        [str(curobo_root / "src"), child_env.get("PYTHONPATH", "")]
-    ).rstrip(os.pathsep)
-    child_env.pop("INTERNDATA_ISAAC5_COMPAT", None)
+    if config.get("runtime", {}).get("isaac5_compat", False):
+        # Isaac Sim 5 bundles a Python 3.11-compatible CuRobo.  The upstream
+        # source checkout targets Isaac Sim 4.5 and shadows that package with
+        # dataclass definitions incompatible with Python 3.11.
+        child_env["INTERNDATA_ISAAC5_COMPAT"] = "1"
+    else:
+        child_env["PYTHONPATH"] = os.pathsep.join(
+            [str(curobo_root / "src"), child_env.get("PYTHONPATH", "")]
+        ).rstrip(os.pathsep)
+        child_env.pop("INTERNDATA_ISAAC5_COMPAT", None)
     for scenario_id, _, launcher_path in prepared:
         print(f"Running {scenario_id}", flush=True)
         subprocess.run(

@@ -1,0 +1,139 @@
+version: 1
+
+# Native 3DGS.usdz + calibrated MESH.zip provenance configuration.
+# Calibration provenance: assets/worldcomposer/839875/3DGS.usdz and MESH.zip.
+# The complete proxy binding is saved separately by
+# scripts/isaac50/validate_registered_nurec_compositing.py.  It is disabled
+# here because Isaac Sim 5.0 renders this particular 3DGS+MESH pair black when
+# Volume.proxy is enabled; do not present an unverified visual as a benchmark.
+selection:
+  all_tasks: true
+  include: []
+  globs: []
+  exclude_globs: []
+
+runtime:
+  launcher_template: configs/simbox/de_plan_with_render_template.yaml
+  generated_dir: .generated/safety_scenarios_3dgs_registered_compositing_isaac50_visual
+  isaac_python: scripts/isaac50/python.sh
+  curobo_root: InternDataAssets/curobo
+  asset_root_override: InternDataAssets/assets
+  isaac5_compat: true
+  random_num: 1
+  strict_mode: false
+  max_attempts: 1
+  headless: false
+  output_root: output/safety_scenarios_3dgs_registered_compositing_isaac50_visual
+  failure_output_root: failure_output/safety_scenarios_3dgs_registered_compositing_isaac50_visual
+  simulator_overrides:
+    physics_dt: 1/30
+    rendering_dt: 1/30
+    stage_units_in_meters: 1.0
+    renderer: RayTracedLighting
+    anti_aliasing: 0
+    multi_gpu: false
+    portable_root: /tmp/isaac50_safety_scenarios_3dgs_registered_compositing
+    disable_metrics_assembler: true
+    extra_args:
+      - --enable
+      - omni.usd.schema.omni_nurec_types
+      - --/rtx/post/registeredCompositing/enabled=true
+      - --/rtx/post/registeredCompositing/invertColorCorrection=true
+      - --/rtx/post/registeredCompositing/invertToneMap=true
+      - --/rtx/post/tonemap/op=2
+      - --/rtx/post/histogram/enabled=false
+    nurec: {enabled: true}
+
+overview_camera:
+  enabled: true
+  name: franka_nurec_registered_overview
+  translation: [1.75, -2.10, 1.90]
+  orientation: [0.783245, 0.520228, 0.188349, 0.283574]
+  camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+# The task remains in Isaac's Z-up frame.  The calibrated MESH central table
+# plane is at z=0.730 m, which is exactly the support height of table0.
+worldcomposer_task_alignment:
+  translation: [0.0, 0.0, 0.0]
+
+# Real table0 collision stays active; its visual is hidden to avoid a second
+# table render over the registered NuRec background.
+worldcomposer_scene_table:
+  enabled: true
+  fixture_name: table
+  hide_virtual_surface: true
+
+# Source-task coordinates in metres.  They are mutually separated and retain
+# the original task's reachable layout, but are not an accepted final physical
+# placement until native NuRec compositing renders correctly for this asset.
+tabletop_layout:
+  enabled: true
+  disable_distractors: true
+  placements:
+    franka: [0.00, -0.47]
+    pick_object_left: [-0.12, -0.02]
+    obstacle_1: [0.18, -0.02]
+  yaw_deg:
+    franka: 0.0
+    pick_object_left: 0.0
+    obstacle_1: 0.0
+
+task_object_visuals:
+  pick_object_left: {color: [0.10, 0.75, 0.15]}
+  obstacle_1: {color: [0.90, 0.12, 0.12]}
+
+human_intrusion:
+  enabled: true
+  object_name: obstacle_1
+  asset_path: workflows/simbox/example_assets/task/hand_model/mano_hand_fixed.usda
+  prim_path_child: mano
+  scale: [1.25, 1.25, 1.25]
+  physical_params:
+    friction: {static: 0.5, dynamic: 0.5}
+  spawn:
+    support_object: table
+    position_min_m: [0.18, -0.02, 0.0]
+    position_max_m: [0.18, -0.02, 0.0]
+    yaw_range_deg: [0.0, 0.0]
+  motion:
+    enabled: false
+    target_m: [-0.10, -0.40, 0.80]
+    speed_m_per_step: 0.0035
+    fixed_z_m: 0.80
+    mode: round_trip
+
+# MESH.zip is horizontal in the benchmark world.  Its central panel top is
+# source z=0.770, so 0.364 + 0.475657 * 0.770 = 0.730 m.
+worldcomposer_mesh:
+  enabled: true
+  name: native_nurec_mesh
+  asset_path: assets/worldcomposer/839875/839875_collision_mesh_source.usd
+  translation: [1.293, 2.778, 0.364]
+  euler: [0.0, 0.0, 0.0]
+  scale: [0.475657, 0.475657, 0.475657]
+  visible: false
+  disable_collision: true
+  semantic_label: false
+  # Do not enable this until a renderer/version-specific visual validation
+  # proves the proxy does not black out the NuRec volume.
+  nurec_proxy: false
+  nurec_proxy_for: native_nurec_background
+  nurec_proxy_meshes: []
+
+# Derived MESH-to-NuRec conversion in the source WorldComposer export:
+# x_nurec = R * x_mesh + [-0.33616649, -0.00778918, 2.27848405].
+worldcomposer_background:
+  enabled: true
+  name: native_nurec_background
+  asset_path: assets/worldcomposer/839875/3DGS.usdz
+  translation: [2.376777, 2.937900, 0.360295]
+  euler: [-90.0, 0.0, 90.0]
+  scale: [0.475657, 0.475657, 0.475657]
+
+safety_evaluation:
+  enabled: true
+  output_subdir: safety_reports
+  risk_thresholds: null
+  safety_gate: {enabled: false, distance_threshold_m: 0.30, stop_verify_steps: 5}
+  enable_depth_segmentation: true
+  depth_seg_camera_file: workflows/simbox/core/configs/cameras/astra_with_depth_seg.yaml

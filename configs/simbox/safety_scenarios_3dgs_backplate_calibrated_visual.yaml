@@ -1,0 +1,122 @@
+version: 1
+
+# Stable visual-validation mode.  The background is the fixed camera render
+# exported from the supplied 3DGS asset.  It is intentionally a backplate,
+# not a claim of metric native-NuRec depth registration.
+selection:
+  all_tasks: true
+  include: []
+  globs: []
+  exclude_globs: []
+
+runtime:
+  launcher_template: configs/simbox/de_plan_with_render_template.yaml
+  generated_dir: .generated/safety_scenarios_3dgs_backplate_calibrated_visual
+  isaac_python: scripts/isaac50/python.sh
+  curobo_root: InternDataAssets/curobo
+  asset_root_override: InternDataAssets/assets
+  isaac5_compat: true
+  random_num: 1
+  strict_mode: false
+  max_attempts: 1
+  headless: false
+  output_root: output/safety_scenarios_3dgs_backplate_calibrated_visual
+  failure_output_root: failure_output/safety_scenarios_3dgs_backplate_calibrated_visual
+  simulator_overrides:
+    physics_dt: 1/30
+    rendering_dt: 1/30
+    stage_units_in_meters: 1.0
+    anti_aliasing: 0
+    multi_gpu: false
+    portable_root: /tmp/isaac50_safety_scenarios_3dgs_usdz_visual
+    disable_metrics_assembler: true
+
+# This camera looks at the unrotated physical table center.  The table support
+# is Z-up in Isaac, so it is exactly horizontal with gravity.
+overview_camera:
+  enabled: true
+  name: franka_3dgs_backplate_overview
+  translation: [2.8, -3.2, 2.6]
+  orientation: [0.780351, 0.517050, 0.194274, 0.293205]
+  camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+worldcomposer_task_alignment:
+  translation: [0.0, 0.0, 0.0]
+
+worldcomposer_scene_table:
+  enabled: false
+  fixture_name: table
+  hide_virtual_surface: false
+
+# Fixed source-policy layout.  The red MANO hand is kept to the right of the
+# green banana, and both stay in the overview for every rollout frame.
+tabletop_layout:
+  enabled: true
+  placements:
+    franka: [0.00, -0.47]
+    pick_object_left: [-0.12, -0.02]
+    obstacle_1: [0.22, -0.02]
+  yaw_deg:
+    franka: 0.0
+    pick_object_left: 0.0
+    obstacle_1: 0.0
+
+task_object_visuals:
+  pick_object_left:
+    color: [0.10, 0.75, 0.15]
+  obstacle_1:
+    color: [0.90, 0.12, 0.12]
+
+human_intrusion:
+  enabled: true
+  object_name: obstacle_1
+  asset_path: workflows/simbox/example_assets/task/hand_model/mano_hand_fixed.usda
+  prim_path_child: mano
+  scale: [1.25, 1.25, 1.25]
+  physical_params:
+    friction: {static: 0.5, dynamic: 0.5}
+  spawn:
+    support_object: table
+    position_min_m: [0.22, -0.02, 0.0]
+    position_max_m: [0.22, -0.02, 0.0]
+    yaw_range_deg: [0.0, 0.0]
+  motion:
+    enabled: false
+    target_m: [-0.10, -0.40, 0.80]
+    speed_m_per_step: 0.0035
+    fixed_z_m: 0.80
+    mode: round_trip
+
+# Do not load the 372-submesh reconstruction in this backplate mode.  It is
+# retained in the native-NuRec calibration config, but loading an invisible
+# copy here forces RTX to compile all of its materials and prevents a useful
+# visual validation on the 6 GB GPU.
+worldcomposer_mesh:
+  enabled: false
+  name: registered_worldcomposer_mesh
+  asset_path: assets/worldcomposer/839875/839875_collision_mesh_source.usd
+  translation: [1.293, 2.778, 0.364]
+  euler: [0.0, 0.0, 0.0]
+  scale: [0.475657, 0.475657, 0.475657]
+  visible: false
+  disable_collision: true
+  semantic_label: false
+  nurec_proxy: false
+  nurec_proxy_for: gaussian_3dgs_backplate
+  nurec_proxy_meshes: []
+
+worldcomposer_background:
+  enabled: true
+  name: gaussian_3dgs_backplate
+  asset_path: assets/worldcomposer/3DGS_usdz/task_camera_backplate.usda
+  translation: [0.0, 0.0, 0.0]
+  euler: [0.0, 0.0, 0.0]
+  scale: [1.0, 1.0, 1.0]
+
+safety_evaluation:
+  enabled: true
+  output_subdir: safety_reports
+  risk_thresholds: null
+  safety_gate: {enabled: false, distance_threshold_m: 0.30, stop_verify_steps: 5}
+  enable_depth_segmentation: true
+  depth_seg_camera_file: workflows/simbox/core/configs/cameras/astra_with_depth_seg.yaml

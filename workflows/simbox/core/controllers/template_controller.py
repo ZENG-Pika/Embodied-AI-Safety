@@ -5,6 +5,7 @@ Common functionality extracted from FR3, FrankaRobotiq85, Genie1, Lift2, SplitAl
 Subclasses implement _get_default_ignore_substring() and _configure_joint_indices().
 """
 
+import os
 import random
 import time
 from copy import deepcopy
@@ -41,6 +42,7 @@ from omni.isaac.core.utils.prims import get_prim_at_path
 from omni.isaac.core.utils.transformations import (
     get_relative_transform,
     pose_from_tf_matrix,
+    tf_matrix_from_pose,
 )
 from omni.isaac.core.utils.types import ArticulationAction
 
@@ -101,7 +103,11 @@ class TemplateController(BaseController):
         self.cmd_idx = 0
         self._step_idx = 0
         self.num_last_cmd = 0
+        self._last_arm_target = None
         self.ds_ratio = 1
+        self._isaac5_xform_views = {}
+        self._preplanned_paths = {}
+        self.last_preplanned_final_positions = None
 
     def _get_default_ignore_substring(self) -> List[str]:
         return ["material", "Plane", "conveyor", "scene", "table"]
@@ -261,6 +267,9 @@ class TemplateController(BaseController):
         self.cmd_plan = None
         self.cmd_idx = 0
         self.num_plan_failed = 0
+        self._isaac5_xform_views.clear()
+        self._preplanned_paths.clear()
+        self.last_preplanned_final_positions = None
         if self.lr_name == "left":
             self._gripper_state = 1.0 if self.robot.left_gripper_state == 1.0 else -1.0
         elif self.lr_name == "right":
@@ -271,14 +280,23 @@ class TemplateController(BaseController):
         else:
             self.robot_ee_path = self.robot.fr_ee_path
             self.robot_base_path = self.robot.fr_base_path
-        self.T_base_ee_init = get_relative_transform(
-            get_prim_at_path(self.robot_ee_path), get_prim_at_path(self.robot_base_path)
-        )
-        self.T_world_base_init = get_relative_transform(
-            get_prim_at_path(self.robot_base_path), get_prim_at_path(self.task.root_prim_path)
-        )
-        self.T_world_ee_init = self.T_world_base_init @ self.T_base_ee_init
         self._ee_trans, self._ee_ori = self.get_ee_pose()
+        self._last_arm_target = np.asarray(
+            self.robot.get_joints_state().positions[self.arm_indices]
+        ).copy()
+        if os.environ.get("INTERNDATA_ISAAC5_COMPAT") == "1":
+            # Isaac Sim 5 keeps live articulation poses in Fabric. USD relative
+            # transforms can therefore be stale after the physics scene starts.
+            self.T_world_base_init = self.get_prim_world_transform(self.robot_base_path)
+            self.T_base_ee_init = tf_matrix_from_pose(self._ee_trans, self._ee_ori)
+        else:
+            self.T_base_ee_init = get_relative_transform(
+                get_prim_at_path(self.robot_ee_path), get_prim_at_path(self.robot_base_path)
+            )
+            self.T_world_base_init = get_relative_transform(
+                get_prim_at_path(self.robot_base_path), get_prim_at_path(self.task.root_prim_path)
+            )
+        self.T_world_ee_init = self.T_world_base_init @ self.T_base_ee_init
         self._ee_trans = self.tensor_args.to_device(self._ee_trans)
         self._ee_ori = self.tensor_args.to_device(self._ee_ori)
         self.update_pose_cost_metric()
@@ -356,6 +374,8 @@ class TemplateController(BaseController):
             method(**params)
             return self.ee_forward(ee_trans, ee_ori, eps)
 
+
+
     def ee_forward(
         self,
         ee_trans: torch.Tensor | np.ndarray,
@@ -376,8 +396,36 @@ class TemplateController(BaseController):
                 self.cmd_idx = 0
                 self._step_idx = 0
                 self.num_last_cmd = 0
-                result = self.plan(ee_trans, ee_ori, sim_js, js_names)
-                if self.use_batch:
+                # Never continue an old trajectory when replanning a new goal.
+                # Isaac Sim 5 exposes this race more often because the two arm
+                # controllers are evaluated sequentially in one physics step.
+                self.cmd_plan = None
+                preplanned = None
+                if os.environ.get("INTERNDATA_ISAAC5_COMPAT") == "1":
+                    cache_key = self._preplan_cache_key(ee_trans, ee_ori)
+                    cached = self._preplanned_paths.pop(cache_key, None)
+                    if cached is not None:
+                        start_positions, cached_plan = cached
+                        current_positions = np.asarray(
+                            sim_js.positions[self.arm_indices]
+                        )
+                        start_error = float(
+                            np.max(np.abs(current_positions - start_positions))
+                        )
+                        if start_error < 0.05:
+                            preplanned = cached_plan
+
+                if preplanned is not None:
+                    self._ee_trans = ee_trans
+                    self._ee_ori = ee_ori
+                    self.idx_list = self.arm_indices.tolist()
+                    self.cmd_plan = preplanned
+                    self.num_plan_failed = 0
+                else:
+                    result = self.plan(ee_trans, ee_ori, sim_js, js_names)
+                if preplanned is not None:
+                    pass
+                elif self.use_batch:
                     if result.success.any():
                         self._ee_trans = ee_trans
                         self._ee_ori = ee_ori
@@ -397,7 +445,7 @@ class TemplateController(BaseController):
                         weights_arg = self.tensor_args.to_device(sort_weights) if sort_weights is not None else None
                         sorted_indices = sort_by_difference_js(filtered_paths, weights=weights_arg)
                         cmd_plan = self.motion_gen.get_full_js(paths[sorted_indices[0]])
-                        self.idx_list = list(range(len(self.raw_js_names)))
+                        self.idx_list = self.arm_indices.tolist()
                         self.cmd_plan = cmd_plan.get_ordered_joint_state(self.raw_js_names)
                         self.num_plan_failed = 0
                     else:
@@ -409,7 +457,7 @@ class TemplateController(BaseController):
                         self._ee_trans = ee_trans
                         self._ee_ori = ee_ori
                         cmd_plan = result.get_interpolated_plan()
-                        self.idx_list = list(range(len(self.raw_js_names)))
+                        self.idx_list = self.arm_indices.tolist()
                         self.cmd_plan = cmd_plan.get_ordered_joint_state(self.raw_js_names)
                         self.num_plan_failed = 0
                     else:
@@ -422,13 +470,25 @@ class TemplateController(BaseController):
                     cmd_state.velocity.cpu().numpy() * 0.0,
                     joint_indices=self.idx_list,
                 )
+                self._last_arm_target = np.asarray(
+                    art_action.joint_positions
+                ).copy()
                 self.cmd_idx += self.ds_ratio
                 if self.cmd_idx >= len(self.cmd_plan):
                     self.cmd_idx = 0
                     self.cmd_plan = None
             else:
                 self.num_last_cmd += 1
-                art_action = ArticulationAction(joint_positions=sim_js.positions[self.arm_indices])
+                hold_positions = sim_js.positions[self.arm_indices]
+                if (
+                    os.environ.get("INTERNDATA_ISAAC5_COMPAT") == "1"
+                    and self._last_arm_target is not None
+                ):
+                    # Isaac Sim 5 articulation drives can lag the final CuRobo
+                    # sample by several physics frames. Keep the commanded goal
+                    # active while the skill performs its convergence check.
+                    hold_positions = self._last_arm_target
+                art_action = ArticulationAction(joint_positions=hold_positions)
         else:
             art_action = ArticulationAction(joint_positions=sim_js.positions[self.arm_indices])
         self._step_idx += 1
@@ -453,10 +513,71 @@ class TemplateController(BaseController):
         ee_pose = self.kin_model.get_state(q_state)
         return ee_pose.ee_position[0].cpu().numpy(), ee_pose.ee_quaternion[0].cpu().numpy()
 
-    def get_armbase_pose(self):
-        armbase_pose = get_relative_transform(
-            get_prim_at_path(self.robot_base_path), get_prim_at_path(self.task.root_prim_path)
+    def get_prim_world_transform(self, prim_path: str):
+        """Return a live prim transform in the world frame."""
+        if os.environ.get("INTERNDATA_ISAAC5_COMPAT") != "1":
+            return get_relative_transform(
+                get_prim_at_path(prim_path), get_prim_at_path("/World")
+            )
+
+        # XFormPrim reads Fabric transforms for ordinary scene prims, but this
+        # imported dual-arm asset does not always publish its articulation link
+        # state back through that view.  Prefer the PhysX tensor state for
+        # links in the controlled articulation; it is the state that contacts
+        # and joint drives actually use.
+        articulation_view = getattr(self.robot, "_articulation_view", None)
+        physics_view = getattr(articulation_view, "_physics_view", None)
+        if physics_view is not None and prim_path in {
+            self.robot_ee_path,
+            self.robot_base_path,
+        }:
+            try:
+                link_paths = list(physics_view.link_paths)
+                link_index = next(
+                    index
+                    for index, link_path in enumerate(link_paths)
+                    if str(link_path).rstrip("/") == prim_path.rstrip("/")
+                )
+                transforms = physics_view.get_link_transforms()
+                if hasattr(transforms, "numpy"):
+                    transforms = transforms.numpy()
+                transform = np.asarray(transforms).reshape(
+                    int(physics_view.count), int(physics_view.max_links), 7
+                )[0, link_index]
+                # PhysX tensors store xyzw, while the project transformation
+                # helper accepts the Isaac convention wxyz.
+                quaternion_wxyz = np.array(
+                    [transform[6], transform[3], transform[4], transform[5]],
+                    dtype=np.float64,
+                )
+                return tf_matrix_from_pose(transform[:3], quaternion_wxyz)
+            except (AttributeError, IndexError, StopIteration, TypeError, ValueError):
+                # Some legacy asset wrappers expose no tensor link metadata;
+                # retain the Fabric path for those tasks.
+                pass
+
+        from isaacsim.core.prims import XFormPrim
+
+        view = self._isaac5_xform_views.get(prim_path)
+        if view is None:
+            view = XFormPrim(
+                prim_paths_expr=prim_path,
+                name=f"isaac5_xform_{len(self._isaac5_xform_views)}",
+                reset_xform_properties=False,
+            )
+            self._isaac5_xform_views[prim_path] = view
+        positions, orientations = view.get_world_poses(usd=False)
+        return tf_matrix_from_pose(
+            np.asarray(positions)[0], np.asarray(orientations)[0]
         )
+
+    def get_armbase_pose(self):
+        if os.environ.get("INTERNDATA_ISAAC5_COMPAT") == "1":
+            armbase_pose = self.get_prim_world_transform(self.robot_base_path)
+        else:
+            armbase_pose = get_relative_transform(
+                get_prim_at_path(self.robot_base_path), get_prim_at_path(self.task.root_prim_path)
+            )
         return pose_from_tf_matrix(armbase_pose)
 
     def forward_kinematic(self, q_state: np.ndarray):
@@ -470,7 +591,6 @@ class TemplateController(BaseController):
 
     def open_gripper(self):
         self._gripper_state = 1.0
-
     def attach_obj(self, obj_prim_path: str, link_name="attached_object"):
         sim_js = self.robot.get_joints_state()
         js_names = self.robot.dof_names
@@ -519,17 +639,57 @@ class TemplateController(BaseController):
 
         return result
 
-    def test_single_forward(self, ee_trans: np.ndarray, ee_ori: np.ndarray):
+    def test_single_forward(
+        self,
+        ee_trans: np.ndarray,
+        ee_ori: np.ndarray,
+        expected_js: Optional[np.ndarray] = None,
+    ):
         assert ee_trans is not None and ee_ori is not None
         sim_js = self.robot.get_joints_state()
         js_names = self.robot.dof_names
+        if expected_js is not None:
+            sim_js.positions[self.arm_indices] = expected_js
         result = self.plan(ee_trans, ee_ori, sim_js, js_names)
         succ = result.success.item()
+        self.last_preplanned_final_positions = None
         if succ:
+            if os.environ.get("INTERNDATA_ISAAC5_COMPAT") == "1":
+                cmd_plan = result.get_interpolated_plan().get_ordered_joint_state(
+                    self.raw_js_names
+                )
+                start_positions = np.asarray(
+                    sim_js.positions[self.arm_indices]
+                ).copy()
+                self.last_preplanned_final_positions = np.asarray(
+                    cmd_plan[-1].position.cpu()
+                ).copy()
+                self._preplanned_paths[
+                    self._preplan_cache_key(ee_trans, ee_ori)
+                ] = (start_positions, cmd_plan)
             print("Success")
             return 1
         print("Plan did not converge to a solution.")
         return 0
+
+    @staticmethod
+    def _preplan_cache_key(ee_trans, ee_ori):
+        def as_numpy(value):
+            if torch.is_tensor(value):
+                value = value.detach().cpu().numpy()
+            return np.asarray(value, dtype=np.float64).reshape(-1)
+
+        translation = as_numpy(ee_trans)
+        orientation = as_numpy(ee_ori)
+        orientation_norm = np.linalg.norm(orientation)
+        if orientation_norm > 0.0:
+            orientation = orientation / orientation_norm
+        nonzero = np.flatnonzero(np.abs(orientation) > 1e-12)
+        if len(nonzero) and orientation[nonzero[0]] < 0.0:
+            # Unit quaternions q and -q encode the same rotation. Canonicalize
+            # their sign so planning and execution APIs share one cache key.
+            orientation = -orientation
+        return tuple(np.round(np.concatenate([translation, orientation]), 7))
 
     def pre_forward(self, ee_trans: np.ndarray, ee_ori: np.ndarray, expected_js=None, ds_ratio=1):
         assert ee_trans is not None and ee_ori is not None

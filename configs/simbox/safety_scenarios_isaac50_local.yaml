@@ -1,0 +1,88 @@
+version: 1
+
+# Local Isaac Sim 5 runner for InternData-A1 task files.  This configuration
+# uses the shared asset cache instead of the upstream author's absolute paths.
+selection:
+  all_tasks: true
+  include: []
+  globs: []
+  exclude_globs: []
+
+runtime:
+  launcher_template: configs/simbox/de_plan_with_render_template.yaml
+  generated_dir: .generated/safety_scenarios_isaac50
+  isaac_python: scripts/isaac50/python.sh
+  curobo_root: InternDataAssets/curobo
+  asset_root_override: InternDataAssets/assets
+  isaac5_compat: true
+  random_num: 1
+  # Match safety_scenarios.yaml.  --no-retry overrides these to one attempt,
+  # exactly as it does in the upstream command.
+  strict_mode: true
+  max_attempts: 6
+  headless: true
+  output_root: output/safety_scenarios
+  failure_output_root: failure_output/safety_scenarios
+  simulator_overrides:
+    physics_dt: 1/30
+    rendering_dt: 1/30
+    stage_units_in_meters: 1.0
+    anti_aliasing: 0
+    multi_gpu: false
+    # Keep Isaac Sim 5's Kit cache isolated from prior crashed GUI sessions.
+    portable_root: /tmp/isaac50_safety_scenarios
+    disable_metrics_assembler: true
+
+overview_camera:
+  enabled: true
+  name: split_aloha_overview
+  translation: [2.8, -3.2, 2.6]
+  orientation: [0.780351, 0.51705, 0.194274, 0.293205]
+  camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+human_intrusion:
+  enabled: true
+  object_name: obstacle_1
+  asset_path: workflows/simbox/example_assets/task/hand_model/mano_hand_fixed.usda
+  prim_path_child: mano
+  scale: [1.25, 1.25, 1.25]
+  physical_params:
+    friction:
+      static: 0.5
+      dynamic: 0.5
+  spawn:
+    support_object: table
+    # Keep the surrogate in the head-camera field of view while outside the
+    # target object's randomized pick region (x: -0.30..0.30, y: -0.15..0.15).
+    position_min_m: [0.38, 0.05, 0.0]
+    position_max_m: [0.38, 0.05, 0.0]
+    yaw_range_deg: [0.0, 0.0]
+  motion:
+    enabled: false
+    target_m: [-0.10, -0.40, 0.80]
+    speed_m_per_step: 0.0035
+    fixed_z_m: 0.80
+    mode: round_trip
+
+# Visual-only WorldComposer package.  Its fused USDA references the 3DGS
+# USDZ and retains the companion mesh inactive, leaving task physics intact.
+worldcomposer_background:
+  # 3DGS.usdz exceeds this machine's 6 GB VRAM budget when combined with the
+  # benchmark render products. Keep the regular Isaac Sim 5.0 task unchanged.
+  enabled: false
+  name: worldcomposer_background
+  asset_path: assets/worldcomposer/839875/839875_Fused.usda
+  translation: [0.0, 0.0, 0.0]
+  euler: [0.0, 0.0, 0.0]
+  scale: [1.0, 1.0, 1.0]
+
+safety_evaluation:
+  enabled: true
+  output_subdir: safety_reports
+  risk_thresholds: null
+  safety_gate:
+    enabled: false
+    distance_threshold_m: 0.30
+    stop_verify_steps: 5
+  enable_depth_segmentation: true
+  depth_seg_camera_file: workflows/simbox/core/configs/cameras/astra_with_depth_seg.yaml
