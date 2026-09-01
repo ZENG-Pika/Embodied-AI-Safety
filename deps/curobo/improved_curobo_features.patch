@@ -1,0 +1,257 @@
+--- a/src/curobo/util/usd_helper.py
++++ b/src/curobo/util/usd_helper.py
+@@ -10,6 +10,7 @@
+ #
+ 
+ # Standard Library
++import os
+ import math
+ from typing import Dict, List, Optional, Union
+ 
+@@ -300,24 +301,71 @@
+ 
+ 
+ def get_cube_attrs(prim, cache=None, transform=None) -> Cuboid:
+-    # read cube size:
++    # Read the authored Cube size.
+     size = prim.GetAttribute("size").Get()
+     if size is None:
+         size = 1.0
+-    dims = list(prim.GetAttribute("xformOp:scale").Get())
+-    # scale is 0.5 -> length of 1 will become 0.5,
+-    dims = [d * size for d in dims]
+-    if any([x <= 0 for x in dims]):
+-        raise ValueError("Negative or zero dimension")
+-    # dims = [x*2 for x in dims]
++
++    local_scale = prim.GetAttribute("xformOp:scale").Get()
++    if local_scale is None:
++        local_scale = [1.0, 1.0, 1.0]
++
++    # get_prim_world_pose returns the rigid world pose with scale removed
++    # and the cumulative Local-to-World scale separately as t_scale.
+     mat, t_scale = get_prim_world_pose(cache, prim)
++
++    use_world_scale = (
++        os.environ.get("CUROBO_USE_WORLD_CUBE_SCALE", "1") == "1"
++    )
++
++    if use_world_scale:
++        # t_scale already contains this prim's scale and all ancestor scales.
++        # Do not multiply by local_scale again.
++        dims = [
++            abs(float(value)) * float(size)
++            for value in t_scale
++        ]
++    else:
++        # Historical behavior: only use the Cube prim's local scale.
++        dims = [
++            abs(float(value)) * float(size)
++            for value in local_scale
++        ]
++
++    if any(value <= 0 for value in dims):
++        raise ValueError(
++            f"Negative or zero dimension: path={prim.GetPath()} dims={dims}"
++        )
++
++    if (
++        "safety_wall" in str(prim.GetPath())
++        and os.environ.get("DEBUG_CUROBO_CUBE_SCALE", "0") == "1"
++    ):
++        print(
++            "[CUROBO_CUBE_SCALE] "
++            f"path={str(prim.GetPath())} "
++            f"use_world_scale={use_world_scale} "
++            f"local_scale={list(local_scale)} "
++            f"world_scale={list(t_scale)} "
++            f"size={size} "
++            f"dims={dims}",
++            flush=True,
++        )
+ 
+     if transform is not None:
+         mat = transform @ mat
+-    # compute position and orientation on cuda:
+-    tensor_mat = torch.as_tensor(mat, device=torch.device("cuda", 0))
++
++    tensor_mat = torch.as_tensor(
++        mat,
++        device=torch.device("cuda", 0),
++    )
+     pose = Pose.from_matrix(tensor_mat).tolist()
+-    return Cuboid(name=str(prim.GetPath()), pose=pose, dims=dims)
++
++    return Cuboid(
++        name=str(prim.GetPath()),
++        pose=pose,
++        dims=dims,
++    )
+ 
+ 
+ def get_sphere_attrs(prim, cache=None, transform=None) -> Sphere:
+
+--- a/src/curobo/wrap/reacher/trajopt.py
++++ b/src/curobo/wrap/reacher/trajopt.py
+@@ -28,6 +28,7 @@
+ 
+ # Standard Library
+ import math
++import os
+ import time
+ from dataclasses import dataclass
+ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+@@ -1681,6 +1682,51 @@
+         if n_seeds["linear"] > 0:
+             linear_seed = self.get_linear_seed(start_state, goal_state)
+ 
++            # Experiment: customize the middle of the linear trajopt seed.
++            # This implements a seed-level interpolation idea:
++            # q_start -> q_mid + joint-space bump -> q_goal.
++            #
++            # Env:
++            #   CUROBO_MID_SEED_ENABLE=1
++            #   CUROBO_MID_SEED_JOINT=1
++            #   CUROBO_MID_SEED_AMP=0.25
++            #
++            # The bump is zero at start/end and largest in the middle.
++            if os.environ.get("CUROBO_MID_SEED_ENABLE", "1") == "1":
++                try:
++                    _joint = int(os.environ.get("CUROBO_MID_SEED_JOINT", "1"))
++                    _amp = float(os.environ.get("CUROBO_MID_SEED_AMP", "0.25"))
++
++                    if 0 <= _joint < self.dof:
++                        _h = linear_seed.shape[-2]
++                        _t = torch.linspace(
++                            0.0,
++                            1.0,
++                            _h,
++                            device=linear_seed.device,
++                            dtype=linear_seed.dtype,
++                        )
++                        _bump = torch.sin(torch.pi * _t) * _amp
++                        linear_seed[..., _joint] = linear_seed[..., _joint] + _bump
++
++                        if os.environ.get("CUROBO_MID_SEED_DEBUG", "0") == "1":
++                            print(
++                                f"[CUROBO_MID_SEED] enabled joint={_joint} amp={_amp} "
++                                f"horizon={_h} dof={self.dof}",
++                                flush=True,
++                            )
++                    else:
++                        if os.environ.get("CUROBO_MID_SEED_DEBUG", "0") == "1":
++                            print(
++                                f"[CUROBO_MID_SEED] invalid joint={_joint}, dof={self.dof}",
++                                flush=True,
++                            )
++                except Exception as _e:
++                    if os.environ.get("CUROBO_MID_SEED_DEBUG", "0") == "1":
++                        print(f"[CUROBO_MID_SEED] error={_e}", flush=True)
++
++
++
+             linear_seeds = linear_seed.view(1, -1, self.action_horizon, self.dof).repeat(
+                 1, n_seeds["linear"], 1, 1
+             )
+
+--- a/src/curobo/curobolib/cpp/helper_math.h
++++ b/src/curobo/curobolib/cpp/helper_math.h
+@@ -1127,19 +1127,19 @@
+ // - linear interpolation between a and b, based on value t in [0, 1] range
+ ////////////////////////////////////////////////////////////////////////////////
+ 
+-inline __device__ __host__ float lerp(float a, float b, float t)
++inline __device__ __host__ float curobo_lerp(float a, float b, float t)
+ {
+     return a + t*(b-a);
+ }
+-inline __device__ __host__ float2 lerp(float2 a, float2 b, float t)
++inline __device__ __host__ float2 curobo_lerp(float2 a, float2 b, float t)
+ {
+     return a + t*(b-a);
+ }
+-inline __device__ __host__ float3 lerp(float3 a, float3 b, float t)
++inline __device__ __host__ float3 curobo_lerp(float3 a, float3 b, float t)
+ {
+     return a + t*(b-a);
+ }
+-inline __device__ __host__ float4 lerp(float4 a, float4 b, float t)
++inline __device__ __host__ float4 curobo_lerp(float4 a, float4 b, float t)
+ {
+     return a + t*(b-a);
+ }
+
+--- a/src/curobo/types/math.py
++++ b/src/curobo/types/math.py
+@@ -507,25 +507,40 @@
+ class OrientationError(Function):
+     @staticmethod
+     def geodesic_distance(goal_quat, current_quat, quat_res):
+-        quat_grad, rot_error = geodesic_distance(goal_quat, current_quat, quat_res)
+-        return quat_grad, rot_error
++        conjugate_quat = current_quat.clone()
++        conjugate_quat[..., 1:] *= -1.0
++        quat_res = quat_multiply(goal_quat, conjugate_quat, quat_res)
++
++        quat_res = -1.0 * quat_res * torch.sign(quat_res[..., 0]).unsqueeze(-1)
++        quat_res[..., 0] = 0.0
++        # quat_res = conjugate_quat * 0.0
++        return quat_res
+ 
+     @staticmethod
+     def forward(ctx, goal_quat, current_quat, quat_res):
+-        quat_grad, rot_error = OrientationError.geodesic_distance(goal_quat, current_quat, quat_res)
+-        ctx.save_for_backward(quat_grad)
++        quat_res = OrientationError.geodesic_distance(goal_quat, current_quat, quat_res)
++        rot_error = torch.norm(quat_res, dim=-1, keepdim=True)
++        ctx.save_for_backward(quat_res, rot_error)
+         return rot_error
+ 
+     @staticmethod
+     def backward(ctx, grad_out):
+-        grad_mul = grad_mul1 = None
+-        (quat_grad,) = ctx.saved_tensors
+-
++        grad_mul = None
+         if ctx.needs_input_grad[1]:
+-            grad_mul = grad_out * quat_grad
+-        if ctx.needs_input_grad[0]:
+-            grad_mul1 = -1.0 * grad_out * quat_grad
+-        return grad_mul1, grad_mul, None
++            (quat_error, r_err) = ctx.saved_tensors
++            scale = 1 / r_err
++            scale = torch.nan_to_num(scale, 0, 0, 0)
++
++            grad_mul = grad_out * scale * quat_error
++            # print(grad_out.shape)
++            # if grad_out.shape[0] == 6:
++            #    #print(grad_out.view(-1))
++            #    #print(grad_mul.view(-1)[-6:])
++            #    #exit()
++        return None, grad_mul, None
++
++
++
+ 
+ 
+ @get_torch_jit_decorator()
+@@ -537,19 +552,3 @@
+     # normalize quaternion
+     in_q = k2 * in_quaternion
+     return in_q
+-
+-
+-@get_torch_jit_decorator()
+-def geodesic_distance(goal_quat, current_quat, quat_res):
+-    conjugate_quat = current_quat.detach().clone()
+-    conjugate_quat[..., 1:] *= -1.0
+-    quat_res = quat_multiply(goal_quat, conjugate_quat, quat_res)
+-    sign = torch.sign(quat_res[..., 0])
+-    sign = torch.where(sign == 0, 1.0, sign)
+-    quat_res = -1.0 * quat_res * sign.unsqueeze(-1)
+-    quat_res[..., 0] = 0.0
+-    rot_error = torch.norm(quat_res, dim=-1, keepdim=True)
+-    scale = 1.0 / rot_error
+-    scale = torch.nan_to_num(scale, 0.0, 0.0, 0.0)
+-    quat_res = quat_res * scale
+-    return quat_res, rot_error
