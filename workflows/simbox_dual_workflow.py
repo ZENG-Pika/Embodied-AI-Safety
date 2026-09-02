@@ -9,6 +9,7 @@ import time
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -851,6 +852,14 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
     def save(self, save_path: str) -> int:
         os.makedirs(save_path, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H_%M_%S_%f")
+        self._last_saved_episode_dirs = [
+            Path(save_path)
+            / str(robot_name)
+            / str(self.logger.task_dir)
+            / str(self.logger.collect_info)
+            / timestamp
+            for robot_name in self.logger.proprio_data_logger.keys()
+        ]
         self.logger.save(save_path, timestamp, save_img=True)
 
         # ── Safety risk pipeline (optional) ──
