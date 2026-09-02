@@ -1,0 +1,137 @@
+version: 1
+
+# Run any task in the repository with a selectable WorldComposer background.
+# scene1 is the default; use --background-scene scene2/scene3/scene4 to select
+# another calibrated visual-only room without changing task assets or physics.
+# The selected task YAML, robot/object assets, physics, and collision geometry
+# remain unchanged. scene1 is loaded as a visual-only NuRec background.
+selection:
+  include: []
+  globs: []
+  exclude_globs: []
+  all_tasks: true
+
+runtime:
+  launcher_template: configs/simbox/de_plan_with_render_template.yaml
+  generated_dir: .generated/safety_scenarios_scene1
+  isaac_python: scripts/isaac50/python.sh
+  curobo_root: /home/pika/Workspace/pika/InternDataEngine/InternDataAssets/curobo
+  asset_root_override: /home/pika/Workspace/pika/InternDataEngine/InternDataAssets/assets
+  isaac5_compat: true
+  random_num: 1
+  strict_mode: true
+  max_attempts: 1
+  headless: true
+  output_root: output/safety_scenarios_scene1
+  failure_output_root: failure_output/safety_scenarios_scene1
+  simulator_overrides:
+    physics_dt: 1/30
+    rendering_dt: 1/30
+    stage_units_in_meters: 1.0
+    renderer: RayTracedLighting
+    anti_aliasing: 0
+    multi_gpu: false
+    portable_root: output/.isaac50_portable_scene1
+    disable_metrics_assembler: true
+    extra_args:
+      - --enable
+      - omni.usd.schema.omni_nurec_types
+      - --/rtx/post/dlss/execMode=2
+      - --/rtx/post/registeredCompositing/enabled=true
+      - --/rtx/post/registeredCompositing/invertColorCorrection=true
+      - --/rtx/post/registeredCompositing/invertToneMap=true
+      - --/rtx/post/histogram/enabled=false
+    nurec:
+      enabled: true
+
+overview_camera:
+  enabled: true
+  name: scene1_overview
+  translation: [2.8, -3.2, 2.6]
+  orientation: [0.780351, 0.51705, 0.194274, 0.293205]
+  camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+human_intrusion:
+  enabled: true
+  object_name: obstacle_1
+  asset_path: workflows/simbox/example_assets/task/hand_model/mano_hand_fixed.usda
+  prim_path_child: mano
+  scale: [1.25, 1.25, 1.25]
+  physical_params:
+    friction:
+      static: 0.5
+      dynamic: 0.5
+  spawn:
+    support_object: table
+    position_min_m: [0.30, 0.30, 0.0]
+    position_max_m: [0.35, 0.35, 0.0]
+    yaw_range_deg: [0.0, 0.0]
+  motion:
+    enabled: false
+    target_m: [-0.10, -0.40, 0.80]
+    speed_m_per_step: 0.0035
+    fixed_z_m: 0.80
+    mode: round_trip
+
+# scene1/calibration.json keeps the reconstruction in its calibrated frame.
+# Keep /World/task_0 at the original task origin; only the background is moved.
+worldcomposer_task_alignment:
+  translation: [0.0, 0.0, 0.0]
+
+worldcomposer_background:
+  enabled: true
+  name: scene1_nurec_background
+  asset_path: /home/pika/Workspace/pika/scene1/3DGS.usdz
+  translation: [-2.2066973081511017, -2.8452922428660687, -0.01707070010811572]
+  euler: [267.87855983162495, 2.4614118605072974, 93.2001966657291]
+  scale: [1.0, 1.0, 1.0]
+
+# scene1 has no collision mesh or NuRec proxy. It remains visual-only, so it
+# cannot change task physics, CuRobo planning, or GT collision measurements.
+
+
+# Selectable visual-only WorldComposer backgrounds. Each transform comes from
+# the corresponding scene*/calibration.json. Use --background-scene scene2 (or
+# scene3/scene4) to override the default scene1 without changing task assets.
+worldcomposer_scene: scene1
+worldcomposer_scenes:
+  scene1:
+    enabled: true
+    name: scene1_nurec_background
+    asset_path: /home/pika/Workspace/pika/scene1/3DGS.usdz
+    translation: [-2.2066973081511017, -2.8452922428660687, -0.01707070010811572]
+    euler: [267.87855983162495, 2.4614118605072974, 93.2001966657291]
+    scale: [1.0, 1.0, 1.0]
+  scene2:
+    enabled: true
+    name: scene2_nurec_background
+    asset_path: /home/pika/Workspace/pika/scene2/3DGS.usdz
+    translation: [-3.4348207575935747, -2.5148533211324513, -0.06706372818140804]
+    euler: [269.6906738488918, 1.2857363724203594, -454.04015798976593]
+    scale: [1.0, 1.0, 1.0]
+  scene3:
+    enabled: true
+    name: scene3_nurec_background
+    asset_path: /home/pika/Workspace/pika/scene3/3DGS.usdz
+    translation: [-2.4314294115221995, -2.2876993853005736, -0.015683162723335357]
+    euler: [-90.57299381334103, 1.2064155042976097, -91.9490968323523]
+    scale: [1.0, 1.0, 1.0]
+  scene4:
+    enabled: true
+    name: scene4_nurec_background
+    asset_path: /home/pika/Workspace/pika/scene4/3DGS.usdz
+    translation: [-0.18529451434906777, 3.421992472585831e-18, 0.0031799967439590654]
+    euler: [-89.45590118329105, 0.0, 0.0]
+    scale: [1.0, 1.0, 1.0]
+
+safety_evaluation:
+  enabled: true
+  output_subdir: safety_reports
+  temporal_sampling_interval_frames: 10
+  risk_thresholds: null
+  safety_gate:
+    enabled: false
+    distance_threshold_m: 0.30
+    stop_verify_steps: 5
+  enable_depth_segmentation: true
+  depth_seg_camera_file: workflows/simbox/core/configs/cameras/astra_with_depth_seg.yaml

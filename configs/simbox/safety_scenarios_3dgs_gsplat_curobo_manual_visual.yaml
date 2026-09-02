@@ -1,0 +1,121 @@
+version: 1
+
+# CuRobo demo configuration for the manually calibrated 839875 task view.
+# It uses the low-memory fixed-camera rendering generated from the same 3DGS
+# capture, so CuRobo's GPU SDF workspace remains available on a 6 GB GPU.
+selection:
+  all_tasks: true
+  include: []
+  globs: []
+  exclude_globs: []
+
+runtime:
+  launcher_template: configs/simbox/de_plan_with_render_template.yaml
+  generated_dir: .generated/safety_scenarios_3dgs_gsplat_curobo_manual_visual
+  isaac_python: scripts/isaac50/python.sh
+  curobo_root: InternDataAssets/curobo
+  asset_root_override: InternDataAssets/assets
+  isaac5_compat: true
+  random_num: 1
+  strict_mode: false
+  max_attempts: 1
+  headless: false
+  output_root: output/safety_scenarios_3dgs_gsplat_curobo_manual_visual
+  failure_output_root: failure_output/safety_scenarios_3dgs_gsplat_curobo_manual_visual
+  simulator_overrides:
+    physics_dt: 1/30
+    rendering_dt: 1/30
+    stage_units_in_meters: 1.0
+    renderer: RayTracedLighting
+    anti_aliasing: 0
+    multi_gpu: false
+    # Reuse the already compiled fixed-camera RTX cache. This only avoids a
+    # cold shader build; it does not share scene state between runs.
+    portable_root: /tmp/isaac50_safety_scenarios_3dgs_gsplat_backplate
+    disable_metrics_assembler: true
+
+# Fixed image-camera view for the light-weight 3DGS appearance layer.
+overview_camera:
+  enabled: true
+  name: franka_nurec_overview
+  translation: [1.30, 0.70, 2.70]
+  orientation: [0.499888, 0.103374, 0.174139, 0.842082]
+  camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+# This moves every original task asset together.  It does not rotate, scale,
+# or otherwise alter the table-relative robot, object, and hand geometry.
+worldcomposer_task_alignment:
+  translation: [0.75, 0.40, 0.65]
+
+worldcomposer_scene_table:
+  enabled: false
+  fixture_name: table
+  hide_virtual_surface: false
+
+# A deterministic, collision-free subset of the source task's valid tabletop
+# ranges.  The dish and hand match the static calibration preview.  Random
+# distractors are disabled only for this reproducible CuRobo demo.
+tabletop_layout:
+  enabled: true
+  placements:
+    franka: [0.00, -0.47]
+    pick_object_left: [0.00, 0.00]
+    obstacle_1: [0.38, 0.05]
+  yaw_deg:
+    franka: 0.0
+    pick_object_left: 0.0
+    obstacle_1: 0.0
+  disable_distractors: true
+
+# The source task uses an IK-only candidate filter for broad randomized data
+# generation. This fixed visual layout instead validates the actual CuRobo
+# trajectory before choosing a grasp, and makes the lift deterministic.
+skill_overrides:
+  - match:
+      name: pick
+      objects: [pick_object_left]
+    set:
+      test_mode: forward
+      post_grasp_offset_min: 0.05
+      post_grasp_offset_max: 0.05
+
+human_intrusion:
+  enabled: true
+  object_name: obstacle_1
+  asset_path: workflows/simbox/example_assets/task/hand_model/mano_hand_fixed.usda
+  prim_path_child: mano
+  scale: [1.25, 1.25, 1.25]
+  physical_params:
+    friction: {static: 0.5, dynamic: 0.5}
+  spawn:
+    support_object: table
+    position_min_m: [0.38, 0.05, 0.0]
+    position_max_m: [0.38, 0.05, 0.0]
+    yaw_range_deg: [0.0, 0.0]
+  motion:
+    enabled: false
+    target_m: [-0.10, -0.40, 0.80]
+    speed_m_per_step: 0.0035
+    fixed_z_m: 0.80
+    mode: round_trip
+
+# Rendering-only background made from the same WorldComposer 3DGS capture.
+# It is not a collision object and is excluded from CuRobo's world model.
+worldcomposer_background:
+  enabled: true
+  name: gaussian_usdz_backplate
+  asset_path: assets/worldcomposer/839875/task_camera_gsplat_backplate.usda
+  translation: [0.0, 0.0, 0.0]
+  euler: [0.0, 0.0, 0.0]
+  scale: [1.0, 1.0, 1.0]
+
+worldcomposer_mesh:
+  enabled: false
+
+safety_evaluation:
+  enabled: true
+  output_subdir: safety_reports
+  risk_thresholds: null
+  safety_gate: {enabled: false, distance_threshold_m: 0.30, stop_verify_steps: 5}
+  enable_depth_segmentation: true
+  depth_seg_camera_file: workflows/simbox/core/configs/cameras/astra_with_depth_seg.yaml

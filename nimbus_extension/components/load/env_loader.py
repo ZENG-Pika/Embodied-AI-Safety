@@ -1,3 +1,5 @@
+import os
+import sys
 import time
 from fractions import Fraction
 
@@ -60,16 +62,52 @@ class EnvLoader(SceneLoader):
         if isinstance(rendering_dt, str):
             rendering_dt = float(Fraction(rendering_dt))
 
+        portable_root = simulator.get("portable_root")
+        if portable_root and "--portable-root" not in sys.argv:
+            portable_root = os.path.abspath(portable_root)
+            os.makedirs(portable_root, exist_ok=True)
+            sys.argv.extend(["--portable-root", portable_root])
+
+        if simulator.get("disable_metrics_assembler", False):
+            # Isaac Sim 5 may otherwise recompose referenced 4.x assets after
+            # PhysX tensor views are live, invalidating the complete view.
+            sys.argv.extend(
+                [
+                    "--/metricsAssembler/operationMode=0",
+                    "--/metricsAssembler/changeListenerEnabled=false",
+                ]
+            )
+
         from isaacsim import SimulationApp
 
+        extra_args = list(simulator.get("extra_args", []) or [])
         self.simulation_app = SimulationApp(
             {
                 "headless": simulator.get("headless", True),
                 "anti_aliasing": simulator.get("anti_aliasing", 3),
                 "multi_gpu": simulator.get("multi_gpu", True),
                 "renderer": simulator.get("renderer", "RayTracedLighting"),
+                "extra_args": extra_args,
             }
         )
+
+        if (simulator.get("nurec", {}) or {}).get("enabled", False):
+            # Isaac Sim 5.0's beta NuRec delegate composites Gaussian Volumes
+            # through RTX. These settings match the asset's authored metadata
+            # and must be applied before the referenced USDZ is loaded.
+            import carb
+            import omni.kit.app
+
+            extension_manager = omni.kit.app.get_app().get_extension_manager()
+            extension_manager.set_extension_enabled_immediate("omni.usd.schema.omni_nurec_types", True)
+
+            settings = carb.settings.get_settings()
+            settings.set("/rtx/post/registeredCompositing/enabled", True)
+            settings.set("/rtx/post/registeredCompositing/invertColorCorrection", True)
+            settings.set("/rtx/post/registeredCompositing/invertToneMap", True)
+            settings.set("/rtx/post/histogram/enabled", False)
+            settings.set("/rtx/raytracing/fractionalCutoutOpacity", False)
+            settings.set("/omni/rtx/nre/compositing/logLevel", 2)
 
         self.logger.info(f"simulator params: physics dt={physics_dt}, rendering dt={rendering_dt}")
         from omni.isaac.core import World

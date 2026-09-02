@@ -13,7 +13,7 @@ class SplitAloha(TemplateRobot):
         self.right_joint_indices = self.cfg["right_joint_indices"]
         self.left_gripper_indices = self.cfg["left_gripper_indices"]
         self.right_gripper_indices = self.cfg["right_gripper_indices"]
-        self.body_indices = []
+        self.body_indices = self.cfg.get("body_indices", [])
         self.head_indices = []
         self.lift_indices = []
 
@@ -41,18 +41,31 @@ class SplitAloha(TemplateRobot):
         return 1.0 if gripper_home and gripper_home[0] >= 0.05 else -1.0
 
     def _setup_joint_velocities(self):
-        # SplitAloha has 12 joints for velocity control
-        all_joint_indices = self.left_joint_indices + self.right_joint_indices
+        all_joint_indices = (
+            self.body_indices
+            + self.left_joint_indices
+            + self.right_joint_indices
+        )
         if all_joint_indices:
             self._articulation_view.set_max_joint_velocities(
-                [500.0] * 12,
+                [500.0] * len(all_joint_indices),
                 joint_indices=all_joint_indices,
             )
 
     def _set_initial_positions(self):
-        positions = self.left_joint_home + self.right_joint_home + self.left_gripper_home + self.right_gripper_home
+        positions = (
+            self.body_home
+            + self.left_joint_home
+            + self.right_joint_home
+            + self.left_gripper_home
+            + self.right_gripper_home
+        )
         indices = (
-            self.left_joint_indices + self.right_joint_indices + self.left_gripper_indices + self.right_gripper_indices
+            self.body_indices
+            + self.left_joint_indices
+            + self.right_joint_indices
+            + self.left_gripper_indices
+            + self.right_gripper_indices
         )
         if positions and indices:
             self._articulation_view.set_joint_positions(positions, joint_indices=indices)

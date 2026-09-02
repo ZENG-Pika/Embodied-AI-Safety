@@ -159,8 +159,8 @@ class ArticulatedObject(Articulation):
         )
         self.apply_visual_material(mat)
 
-    def initialize(self):
-        super().initialize()
+    def initialize(self, physics_sim_view=None):
+        super().initialize(physics_sim_view)
         self._articulation_view.set_joint_velocities([0.0])
         if "joint_position_range" in self.cfg:
             self.articulation_initial_joint_position = np.random.uniform(

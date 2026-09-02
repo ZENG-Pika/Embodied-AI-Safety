@@ -12,14 +12,20 @@ selection:
 runtime:
   launcher_template: configs/simbox/de_plan_with_render_template.yaml
   generated_dir: .generated/safety_scenarios
-  isaac_python: /home/pika/Software/isaacsim4.5/python.sh
+  # Isaac Sim 5.x standalone install. The repository wrapper auto-detects
+  # the local 5.0 package and can be overridden with ISAAC_SIM_50_ROOT.
+  isaac_python: scripts/isaac50/python.sh
   curobo_root: /home/pika/Workspace/pika/InternDataEngine/InternDataAssets/curobo
+  isaac5_compat: true
   random_num: 1
   strict_mode: true
   max_attempts: 6
   headless: true
   output_root: output/safety_scenarios
   failure_output_root: failure_output/safety_scenarios
+  simulator_overrides:
+    portable_root: output/.isaac50_portable
+    disable_metrics_assembler: true
 
 overview_camera:
   enabled: true
@@ -50,6 +56,40 @@ human_intrusion:
     speed_m_per_step: 0.0035
     fixed_z_m: 0.80
     mode: round_trip
+
+
+# Optional visual-only WorldComposer backgrounds. Select one at runtime with
+# --background-scene scene1|scene2|scene3|scene4. The default task run keeps
+# the original scene unchanged unless a background is explicitly selected.
+worldcomposer_scenes:
+  scene1:
+    enabled: true
+    name: scene1_nurec_background
+    asset_path: /home/pika/Workspace/pika/scene1/3DGS.usdz
+    translation: [-2.2066973081511017, -2.8452922428660687, -0.01707070010811572]
+    euler: [267.87855983162495, 2.4614118605072974, 93.2001966657291]
+    scale: [1.0, 1.0, 1.0]
+  scene2:
+    enabled: true
+    name: scene2_nurec_background
+    asset_path: /home/pika/Workspace/pika/scene2/3DGS.usdz
+    translation: [-3.4348207575935747, -2.5148533211324513, -0.06706372818140804]
+    euler: [269.6906738488918, 1.2857363724203594, -454.04015798976593]
+    scale: [1.0, 1.0, 1.0]
+  scene3:
+    enabled: true
+    name: scene3_nurec_background
+    asset_path: /home/pika/Workspace/pika/scene3/3DGS.usdz
+    translation: [-2.4314294115221995, -2.2876993853005736, -0.015683162723335357]
+    euler: [-90.57299381334103, 1.2064155042976097, -91.9490968323523]
+    scale: [1.0, 1.0, 1.0]
+  scene4:
+    enabled: true
+    name: scene4_nurec_background
+    asset_path: /home/pika/Workspace/pika/scene4/3DGS.usdz
+    translation: [-0.18529451434906777, 3.421992472585831e-18, 0.0031799967439590654]
+    euler: [-89.45590118329105, 0.0, 0.0]
+    scale: [1.0, 1.0, 1.0]
 
 safety_evaluation:
   enabled: true

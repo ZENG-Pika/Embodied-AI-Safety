@@ -78,7 +78,39 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 robot.clear()
                 robot.update(merged_cfg)
 
+    def _uses_policy_control(self) -> bool:
+        """Whether this rollout is driven directly by a learned policy.
+
+        Diffusion-policy rollouts send joint targets to the live articulation;
+        they neither generate skill plans nor consume a CuRobo controller.
+        Keeping that separation avoids allocating CuRobo's GPU world model for
+        a policy-only evaluation.
+        """
+        policy_cfg = dict(self.task_cfg.get("policy", {}) or {})
+        return bool(
+            policy_cfg.get("enabled", False)
+            and policy_cfg.get("type") in {"random_diffusion", "trained_diffusion"}
+            and policy_cfg.get("skip_curobo_controllers", True)
+        )
+
+    def _initialize_control_stack(self):
+        """Create the planning stack only for planner-controlled rollouts."""
+        if self._uses_policy_control():
+            print("[policy] learned-policy rollout: skipping CuRobo controllers and skills")
+            self.controllers = {}
+            self.skills = []
+            return
+        self.controllers = self._initialize_controllers(self.task, self.task_cfg, self.world)
+        self.skills = self._initialize_skills(self.task, self.task_cfg, self.controllers, self.world)
+
     def reset(self, need_preload: bool = True):
+        # Asset selection happens while the task and scene are constructed, so
+        # seed before any config mutation. Reseed below before layout sampling
+        # to keep that stream independent from initialization internals.
+        if self.random_seed is None:
+            self.random_seed = time.time_ns() % (2**32)
+        set_random_seed(self.random_seed)
+
         # source code noted this as debug, so it could be removed later
         from omni.isaac.core.utils.viewports import set_camera_view
 
@@ -129,10 +161,24 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             physx_interface = acquire_physx_interface()
             physx_interface.overwrite_gpu_setting(1)
 
-        self.task = get_task_cls(self.task_cfg["task"])(self.task_cfg)
+        # The data engine calls ``reset`` for each rollout.  Isaac Sim 5 keeps
+        # the task scene and all contact views in the World, so reuse that task
+        # after its first construction instead of recreating prims at identical
+        # paths on every rollout.
+        task_registry = getattr(self.world, "_current_tasks", None)
+        task_name = self.task_cfg["name"]
+        existing_task = (
+            task_registry.get(task_name)
+            if isinstance(task_registry, dict)
+            else None
+        )
+        if existing_task is not None and self.world.is_tasks_scene_built():
+            self.task = existing_task
+        else:
+            self.task = get_task_cls(self.task_cfg["task"])(self.task_cfg)
+            self.world.add_task(self.task)
         self.stage = self.world.stage
         self.stage.SetDefaultPrim(self.stage.GetPrimAtPath("/World"))
-        self.world.add_task(self.task)
 
         # # Add hidden ground plane for physics simulation
         # from omni.isaac.core.objects import GroundPlane
@@ -160,21 +206,27 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     prim_paths.append(candidate_prim_path)
                     global_collision_paths.remove(candidate_prim_path)
 
-        collision_root_path = "/World/collisions"
-        filter_collisions(
-            self.stage,
-            self.world.get_physics_context().prim_path,
-            collision_root_path,
-            prim_paths,
-            global_collision_paths,
-        )
+        # Isaac Sim 5 changed inverted collision-group behavior. This workflow
+        # runs one task per stage, so its authored USD collision relationships
+        # are sufficient and avoid filtering support surfaces out by mistake.
+        if os.environ.get("INTERNDATA_ISAAC5_COMPAT") != "1":
+            collision_root_path = "/World/collisions"
+            filter_collisions(
+                self.stage,
+                self.world.get_physics_context().prim_path,
+                collision_root_path,
+                prim_paths,
+                global_collision_paths,
+            )
         self.world.reset()
         self.world.step(render=True)
-        self.controllers = self._initialize_controllers(self.task, self.task_cfg, self.world)
-        self.skills = self._initialize_skills(self.task, self.task_cfg, self.controllers, self.world)
+        self._initialize_control_stack()
 
-        for _ in range(50):
+        self._init_static_objects(self.task, force_all=True)
+        robot_hold_positions = self._capture_robot_hold_positions(self.task)
+        for _ in range(self.task_cfg.get("warmup_steps", 50)):
             self._init_static_objects(self.task)
+            self._hold_robot_positions(self.task, robot_hold_positions)
             self.world.step(render=False)
 
         self.logger = LmdbLogger(
@@ -287,9 +339,20 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             for _, ctrl in controller.items():
                 ctrl.reset()
 
-    def _init_static_objects(self, task):
+    def _init_static_objects(self, task, force_all=False):
+        object_cfg = {
+            cfg["name"]: cfg for cfg in self.task_cfg.get("objects", [])
+        }
         for _, obj in task.objects.items():
             try:
+                if (
+                    os.environ.get("INTERNDATA_ISAAC5_COMPAT") == "1"
+                    and not force_all
+                    and not object_cfg.get(obj.name, {}).get(
+                        "warmup_hold_pose", False
+                    )
+                ):
+                    continue
                 init_translation = obj.init_translation
                 init_orientation = obj.init_orientation
                 init_parent = obj.init_parent
@@ -306,6 +369,26 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             except Exception:
                 pass
 
+    @staticmethod
+    def _capture_robot_hold_positions(task):
+        for robot in task.robots.values():
+            if os.environ.get("INTERNDATA_ISAAC5_COMPAT") == "1":
+                robot._set_initial_positions()
+        return {
+            name: np.asarray(robot.get_joints_state().positions).copy()
+            for name, robot in task.robots.items()
+        }
+
+    @staticmethod
+    def _hold_robot_positions(task, hold_positions):
+        for name, positions in hold_positions.items():
+            robot = task.robots[name]
+            indices = np.arange(len(positions), dtype=np.int64)
+            robot.apply_action(
+                joint_positions=positions,
+                joint_indices=indices,
+            )
+
     def _randomization_layout_mem(self):
         # Reset world
         self.world.reset()
@@ -316,17 +399,26 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
         self.world.step(render=False)
 
-        # Reset controllers
-        self._reset_controllers(self.controllers)
+        # Learned-policy rollouts directly command the articulation and have
+        # no CuRobo state to reset between layouts.
+        if self._uses_policy_control():
+            self.controllers = {}
+            self.skills = []
+        else:
+            self._reset_controllers(self.controllers)
+            del self.skills
+            self.skills = self._initialize_skills(
+                self.task, self.task_cfg, self.controllers, self.world
+            )
 
-        # Reset skills
-        del self.skills
-        self.skills = self._initialize_skills(self.task, self.task_cfg, self.controllers, self.world)
-
-        # Warmup
-        for _ in range(20):
+        # Restore sampled poses once, then let dynamic objects settle. Only
+        # explicitly marked kinematic obstacles remain fixed during warmup.
+        self._init_static_objects(self.task, force_all=True)
+        robot_hold_positions = self._capture_robot_hold_positions(self.task)
+        for _ in range(self.task_cfg.get("warmup_steps", 20)):
             self.world.get_observations()
             self._init_static_objects(self.task)
+            self._hold_robot_positions(self.task, robot_hold_positions)
             self.world.step(render=False)
 
         self._initialize_world_recorder()
@@ -349,27 +441,36 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         self.world.step(render=False)
 
         # Reset controllers
-        if self.task_cfg.get("fluid", None):
+        if self._uses_policy_control():
+            self.controllers = {}
+            self.skills = []
+        elif self.task_cfg.get("fluid", None):
             # Fluid, Bug, Why !!!!!!
             # For fluid manipulation, only delete controllers and reinitialize controllers can plan successfully
             if hasattr(self, "controllers"):
                 del self.controllers
             self.controllers = self._initialize_controllers(self.task, self.task_cfg, self.world)
 
-        # del self.controllers
-        # self.controllers = self._initialize_controllers(self.task, self.task_cfg, self.world)
-        self._reset_controllers(self.controllers)
+        if not self._uses_policy_control():
+            # del self.controllers
+            # self.controllers = self._initialize_controllers(self.task, self.task_cfg, self.world)
+            self._reset_controllers(self.controllers)
 
-        # Reset skills
-        if hasattr(self, "skills"):
-            del self.skills
+            # Reset skills
+            if hasattr(self, "skills"):
+                del self.skills
+            self.skills = self._initialize_skills(
+                self.task, self.task_cfg, self.controllers, self.world
+            )
 
-        self.skills = self._initialize_skills(self.task, self.task_cfg, self.controllers, self.world)
-
-        # Warmup
-        for _ in range(20):
+        # Restore sampled poses once, then let dynamic objects settle. Only
+        # explicitly marked kinematic obstacles remain fixed during warmup.
+        self._init_static_objects(self.task, force_all=True)
+        robot_hold_positions = self._capture_robot_hold_positions(self.task)
+        for _ in range(self.task_cfg.get("warmup_steps", 20)):
             self.world.get_observations()
             self._init_static_objects(self.task)
+            self._hold_robot_positions(self.task, robot_hold_positions)
             self.world.step(render=False)
 
         if self.task_cfg.get("fluid", None):
@@ -581,6 +682,9 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             )
             self._close_trained_diffusion_policy(trained_dp_policy)
 
+        self._last_episode_success = (
+            bool(episode_success) if isinstance(episode_success, (bool, np.bool_)) else None
+        )
         if end:
             if self.step_replay:
                 return [None] * step_id
@@ -835,9 +939,15 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     fixed_z,
                 ]
                 obj.set_world_pose(new_pos, current_ori)
-                if hasattr(obj, 'set_linear_velocity'):
+                if (
+                    os.environ.get("INTERNDATA_ISAAC5_COMPAT") != "1"
+                    and hasattr(obj, 'set_linear_velocity')
+                ):
                     obj.set_linear_velocity([0.0, 0.0, 0.0])
-                if hasattr(obj, 'set_angular_velocity'):
+                if (
+                    os.environ.get("INTERNDATA_ISAAC5_COMPAT") != "1"
+                    and hasattr(obj, 'set_angular_velocity')
+                ):
                     obj.set_angular_velocity([0.0, 0.0, 0.0])
             else:
                 # At destination: hold position
@@ -881,6 +991,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
             # Inject episode_id (timestamp-dependent, can't be in task_cfg)
             raw_gt["episode_meta"]["episode_id"] = episode_id
+            task_success = getattr(self, "_last_episode_success", None)
+            if isinstance(task_success, (bool, np.bool_)):
+                raw_gt.setdefault("outcome_gt", {})["task_semantic_success"] = bool(
+                    task_success
+                )
             if hasattr(self, "_policy_manifest"):
                 raw_gt["episode_meta"]["policy"] = dict(self._policy_manifest)
                 self._atomic_write_json(
@@ -906,7 +1021,18 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             if hasattr(self, '_physx_collector') and self._physx_collector is not None:
                 physx_data = self._physx_collector.get_raw_data()
 
-                raw_gt["robot_state"]["joint_torque_gt"] = physx_data.get("joint_torque_gt")
+                # Runtime articulation state is authoritative and works for
+                # Franka, Genie1, lift2, split_aloha and future robot wrappers.
+                # LMDB channel names are retained only as an extraction fallback.
+                for field_name in (
+                    "joint_position_q_gt", "joint_velocity_dq_gt", "joint_torque_gt",
+                ):
+                    runtime_values = physx_data.get(field_name)
+                    if isinstance(runtime_values, list) and runtime_values:
+                        raw_gt["robot_state"][field_name] = runtime_values
+                runtime_joint_meta = physx_data.get("joint_state_metadata")
+                if isinstance(runtime_joint_meta, dict) and runtime_joint_meta.get("channels"):
+                    raw_gt["robot_state"]["joint_state_metadata"] = runtime_joint_meta
                 raw_gt["robot_state"]["link_pose_gt"] = physx_data.get("link_pose_gt")
                 raw_gt["robot_state"]["link_velocity_gt"] = physx_data.get("link_velocity_gt")
                 human_body_pose_gt = self._physx_collector.build_human_body_pose_gt()
@@ -1039,7 +1165,9 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 # Planner data
                 raw_gt["planner_log"]["planned_trajectory"] = physx_data.get("planned_trajectory")
                 raw_gt["planner_log"]["safety_gate_status"] = physx_data.get("safety_gate_status")
-                raw_gt["planner_log"]["low_level_command_sent"] = physx_data.get("low_level_command_sent")
+                raw_gt["planner_log"]["low_level_command_sent"] = physx_data.get(
+                    "low_level_command_sent"
+                )
                 # Safety gate / stop event data
                 raw_gt["planner_log"]["stop_success"] = physx_data.get("stop_success")
                 raw_gt["planner_log"]["stop_margin_s"] = physx_data.get("stop_margin_s")
@@ -1088,6 +1216,14 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                         dt=joint_layout["physics_dt_s"],
                         effort_limits_by_index=torque_limits,
                     )
+                    runtime_joint_meta = (
+                        self._physx_collector.get_joint_layout(self.task)
+                        if getattr(self, "_physx_collector", None) is not None else {}
+                    )
+                    if runtime_joint_meta.get("channels"):
+                        raw_gt["robot_state"]["joint_state_metadata"].update(
+                            runtime_joint_meta
+                        )
                     # Rebuild after EE poses and the aligned 12-DOF joint axis
                     # have both been finalized.
                     raw_extractor._compute_executed_trajectory(raw_gt)
@@ -1597,11 +1733,15 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
             size_m = None
             try:
-                bbox_cache = UsdGeom.BBoxCache(0.0, [UsdGeom.Tokens.default_])
-                bbox = bbox_cache.ComputeLocalBound(prim)
-                size = bbox.ComputeAlignedRange().GetSize()
-                scale = obj.get_world_scale() if obj is not None else [1.0, 1.0, 1.0]
-                size_m = [abs(float(size[i]) * float(scale[i])) for i in range(3)]
+                bbox_cache = UsdGeom.BBoxCache(
+                    Usd.TimeCode.Default(),
+                    [UsdGeom.Tokens.default_, UsdGeom.Tokens.proxy, UsdGeom.Tokens.render],
+                    useExtentsHint=True,
+                )
+                size = bbox_cache.ComputeWorldBound(prim).ComputeAlignedRange().GetSize()
+                size_m = [abs(float(size[i])) for i in range(3)]
+                if not all(math.isfinite(value) and 0.0 < value < 100.0 for value in size_m):
+                    size_m = None
             except Exception:
                 size_m = None
 
@@ -1633,7 +1773,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 "sources": {
                     "friction_static": static_source,
                     "friction_dynamic": dynamic_source,
-                    "size": "usd_local_bbox_x_runtime_world_scale",
+                    "size": "UsdGeom.BBoxCache.ComputeWorldBound",
                 },
             }
 
@@ -1920,52 +2060,90 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         }
 
     def _read_robot_torque_limits(self) -> dict:
-        """Read arm-joint effort limits from the live PhysX articulation.
+        """Read finite per-DOF effort limits on the collector's global axis.
 
-        Values are indexed exactly like ``joint_torque_gt``.  Only configured
-        arm DOFs are exported; gripper and passive joints are intentionally not
-        mixed into the robot-load contract fields.
+        PhysX uses very large values for unbounded efforts (commonly 6e8 in
+        Isaac Sim 5). Those are not physical robot limits and must not make an
+        overload ratio look artificially close to zero.
         """
         result = {}
-        for robot_name, robot in getattr(self.task, "robots", {}).items():
+        collector = getattr(self, "_physx_collector", None)
+        layout = collector.get_joint_layout(self.task) if collector is not None else {}
+        channels = layout.get("channels", [])
+        robots = getattr(self.task, "robots", {})
+        live_by_robot = {}
+        configured_by_robot = {}
+        for robot_name, robot in robots.items():
             articulation_view = getattr(robot, "_articulation_view", None)
-            if articulation_view is None or not hasattr(articulation_view, "get_max_efforts"):
+            if articulation_view is not None and hasattr(articulation_view, "get_max_efforts"):
+                try:
+                    values = articulation_view.get_max_efforts()
+                    if hasattr(values, "detach"):
+                        values = values.detach()
+                    if hasattr(values, "cpu"):
+                        values = values.cpu()
+                    values = np.asarray(values, dtype=np.float64)
+                    if values.ndim > 1:
+                        values = values[0]
+                    live_by_robot[str(robot_name)] = values.reshape(-1)
+                except Exception:
+                    live_by_robot[str(robot_name)] = np.asarray([], dtype=np.float64)
+            cfg = getattr(robot, "cfg", {}) or {}
+            for key in ("joint_effort_limits_nm", "effort_limits", "max_efforts"):
+                candidate = cfg.get(key) if hasattr(cfg, "get") else None
+                if isinstance(candidate, (list, tuple, dict)):
+                    configured_by_robot[str(robot_name)] = (key, candidate)
+                    break
+
+        for channel in channels:
+            robot_name = channel["robot_name"]
+            local_index = int(channel["local_dof_index"])
+            global_index = int(channel["global_dof_index"])
+            limit = None
+            source = None
+            live = live_by_robot.get(robot_name, np.asarray([], dtype=np.float64))
+            if local_index < len(live):
+                candidate = float(live[local_index])
+                if math.isfinite(candidate) and 0.0 < candidate < 1.0e6:
+                    limit = candidate
+                    source = "PhysX ArticulationView.get_max_efforts"
+            if limit is None and robot_name in configured_by_robot:
+                key, configured = configured_by_robot[robot_name]
+                candidate = (
+                    configured.get(str(local_index), configured.get(local_index))
+                    if isinstance(configured, dict)
+                    else configured[local_index] if local_index < len(configured) else None
+                )
+                if isinstance(candidate, dict):
+                    candidate = candidate.get("limit_nm", candidate.get("max_effort"))
+                try:
+                    candidate = float(candidate)
+                except (TypeError, ValueError):
+                    candidate = None
+                if candidate is not None and math.isfinite(candidate) and 0.0 < candidate < 1.0e6:
+                    limit = candidate
+                    source = f"robot.cfg.{key}"
+            if limit is None:
                 continue
-
-            values = articulation_view.get_max_efforts()
-            if hasattr(values, "detach"):
-                values = values.detach()
-            if hasattr(values, "cpu"):
-                values = values.cpu()
-            if hasattr(values, "numpy"):
-                values = values.numpy()
-            values = np.asarray(values, dtype=np.float64)
-            if values.ndim > 1:
-                values = values[0]
-            values = values.reshape(-1)
-
-            dof_names = list(getattr(robot, "dof_names", []) or [])
-            arm_indices = list(getattr(robot, "left_joint_indices", []) or [])
-            arm_indices += list(getattr(robot, "right_joint_indices", []) or [])
-            for index in arm_indices:
-                if index < 0 or index >= len(values):
-                    continue
-                limit = float(values[index])
-                if not math.isfinite(limit) or limit <= 0.0:
-                    continue
-                result[str(index)] = {
-                    "limit_nm": limit,
-                    "dof_index": int(index),
-                    "dof_name": dof_names[index] if index < len(dof_names) else None,
-                    "robot_name": robot_name,
-                    "source": "PhysX ArticulationView.get_max_efforts",
-                }
+            result[str(global_index)] = {
+                "limit_nm": limit,
+                "dof_index": global_index,
+                "source_dof_index": local_index,
+                "dof_name": channel.get("dof_name"),
+                "robot_name": robot_name,
+                "source": source,
+            }
         return result
 
     def _read_robot_joint_position_limits(self) -> dict:
         """Read live lower/upper arm-joint limits for any configured robot."""
         result = {}
-        for robot_name, robot in getattr(self.task, "robots", {}).items():
+        collector = getattr(self, "_physx_collector", None)
+        layout = collector.get_joint_layout(self.task) if collector is not None else {}
+        channels = layout.get("channels", [])
+        robots = getattr(self.task, "robots", {})
+        values_by_robot = {}
+        for robot_name, robot in robots.items():
             articulation_view = getattr(robot, "_articulation_view", None)
             if articulation_view is None or not hasattr(articulation_view, "get_dof_limits"):
                 continue
@@ -1981,55 +2159,47 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 values = values[0]
             if values.ndim != 2 or values.shape[1] < 2:
                 continue
-            dof_names = list(getattr(robot, "dof_names", []) or [])
-            arm_indices = list(getattr(robot, "left_joint_indices", []) or [])
-            arm_indices += list(getattr(robot, "right_joint_indices", []) or [])
-            for index in arm_indices:
-                if index < 0 or index >= len(values):
-                    continue
-                lower, upper = float(values[index][0]), float(values[index][1])
-                if not (math.isfinite(lower) and math.isfinite(upper) and upper > lower):
-                    continue
-                result[str(index)] = {
-                    "lower_rad": lower,
-                    "upper_rad": upper,
-                    "dof_index": int(index),
-                    "dof_name": dof_names[index] if index < len(dof_names) else None,
-                    "robot_name": robot_name,
-                    "source": "PhysX ArticulationView.get_dof_limits",
-                }
+            values_by_robot[str(robot_name)] = values
+        for channel in channels:
+            robot_name = channel["robot_name"]
+            local_index = int(channel["local_dof_index"])
+            global_index = int(channel["global_dof_index"])
+            values = values_by_robot.get(robot_name)
+            if values is None or local_index >= len(values):
+                continue
+            lower, upper = float(values[local_index][0]), float(values[local_index][1])
+            if not (math.isfinite(lower) and math.isfinite(upper) and upper > lower):
+                continue
+            result[str(global_index)] = {
+                "lower_rad": lower,
+                "upper_rad": upper,
+                "dof_index": global_index,
+                "source_dof_index": local_index,
+                "dof_name": channel.get("dof_name"),
+                "robot_name": robot_name,
+                "source": "PhysX ArticulationView.get_dof_limits",
+            }
         return result
 
     def _read_arm_joint_layout(self) -> Optional[dict]:
-        """Read the live left-then-right arm DOF axis used by Sim_Raw_GT."""
-        for robot in getattr(self.task, "robots", {}).values():
-            left_indices = [int(v) for v in (getattr(robot, "left_joint_indices", []) or [])]
-            right_indices = [int(v) for v in (getattr(robot, "right_joint_indices", []) or [])]
-            indices = left_indices + right_indices
-            if not indices:
-                continue
-
-            dof_names = list(getattr(robot, "dof_names", []) or [])
-            names = [
-                str(dof_names[index]) if 0 <= index < len(dof_names)
-                else f"dof_{index}"
-                for index in indices
-            ]
-
-            physics_dt_s = 0.03333333333333333
-            collector = getattr(self, "_physx_collector", None)
-            if collector is not None:
-                runtime_dt = getattr(collector, "_physics_dt_s", None)
-                if isinstance(runtime_dt, (int, float)) and math.isfinite(runtime_dt) and runtime_dt > 0.0:
-                    physics_dt_s = float(runtime_dt)
-
-            return {
-                "arm_dof_indices": indices,
-                "arm_dof_names": names,
-                "left_dof_count": len(left_indices),
-                "physics_dt_s": physics_dt_s,
-            }
-        return None
+        """Return the collector's robot-agnostic flattened articulation axis."""
+        collector = getattr(self, "_physx_collector", None)
+        if collector is None:
+            return None
+        layout = collector.get_joint_layout(self.task)
+        names = list(layout.get("dof_names", []) or [])
+        if not names:
+            return None
+        physics_dt_s = 0.03333333333333333
+        runtime_dt = getattr(collector, "_physics_dt_s", None)
+        if isinstance(runtime_dt, (int, float)) and math.isfinite(runtime_dt) and runtime_dt > 0.0:
+            physics_dt_s = float(runtime_dt)
+        return {
+            "arm_dof_indices": list(range(len(names))),
+            "arm_dof_names": names,
+            "left_dof_count": 0,
+            "physics_dt_s": physics_dt_s,
+        }
 
     def _read_placement_target_region(self) -> Optional[dict]:
         """Record the same world AABB that the place skill uses for planning."""
@@ -2179,166 +2349,10 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
     @staticmethod
     def _compact_sim_raw_gt(raw_gt: dict) -> None:
-        """Remove duplicated payloads while preserving the public GT signals.
+        """Remove duplicated payloads while preserving public GT signals."""
+        from safety_risk.raw_gt_compaction import compact_sim_raw_gt
 
-        Contact points are stored once in ``collision_location_gt`` and aligned
-        to force/impulse samples by ``contact_id``. Repeated full planner paths
-        are interned into a unique plan table. Legacy split right-arm channels
-        and duplicated instruction metadata are removed after being merged.
-        """
-        metadata = raw_gt.get("metadata")
-        if isinstance(metadata, dict):
-            metadata.pop("language_instruction", None)
-            metadata.pop("detailed_language_instruction", None)
-
-        robot = raw_gt.get("robot_state")
-        if isinstance(robot, dict):
-            left = robot.get("ee_pose_gt")
-            right = robot.get("ee_pose_right_gt")
-            already_merged = (
-                isinstance(left, list)
-                and (not left or isinstance(left[0], dict))
-                and not isinstance(right, list)
-            )
-            if not already_merged and (
-                isinstance(left, list) or isinstance(right, list)
-            ):
-                left_values = left if isinstance(left, list) else []
-                right_values = right if isinstance(right, list) else []
-                frame_count = max(len(left_values), len(right_values))
-                robot["ee_pose_gt"] = [
-                    {
-                        "left": left_values[index] if index < len(left_values) else None,
-                        "right": right_values[index] if index < len(right_values) else None,
-                    }
-                    for index in range(frame_count)
-                ]
-            robot.pop("ee_pose_right_gt", None)
-            # ``normalize_arm_joint_state`` has already merged left/right into
-            # the canonical 12-DOF ``joint_position_q_gt`` channel.
-            robot.pop("joint_position_q_right_gt", None)
-
-        collision = raw_gt.get("collision_gt")
-        if isinstance(collision, dict):
-            locations = collision.get("collision_location_gt")
-            forces = collision.get("contact_force_gt")
-            impulses = collision.get("contact_impulse_gt")
-            if all(isinstance(series, list) for series in (locations, forces, impulses)):
-                frame_count = min(len(locations), len(forces), len(impulses))
-                next_contact_id = 0
-                for frame_index in range(frame_count):
-                    location_entries = locations[frame_index] or []
-                    force_entries = forces[frame_index] or []
-                    impulse_entries = impulses[frame_index] or []
-                    entry_count = min(
-                        len(location_entries), len(force_entries), len(impulse_entries)
-                    )
-                    for entry_index in range(entry_count):
-                        location = location_entries[entry_index]
-                        force = force_entries[entry_index]
-                        impulse = impulse_entries[entry_index]
-                        if not all(
-                            isinstance(value, dict)
-                            for value in (location, force, impulse)
-                        ):
-                            continue
-                        if (
-                            "contact_points_m" not in location
-                            and "contact_points" not in force
-                            and "contact_points" not in impulse
-                            and all(
-                                isinstance(value.get("contacts"), list)
-                                for value in (location, force, impulse)
-                            )
-                        ):
-                            continue
-                        location_points = location.pop("contact_points_m", []) or []
-                        force_points = force.pop("contact_points", []) or []
-                        impulse_points = impulse.pop("contact_points", []) or []
-                        point_count = min(
-                            len(location_points), len(force_points), len(impulse_points)
-                        )
-                        compact_locations = []
-                        compact_forces = []
-                        compact_impulses = []
-                        for point_index in range(point_count):
-                            contact_id = next_contact_id
-                            next_contact_id += 1
-                            force_point = force_points[point_index]
-                            impulse_point = impulse_points[point_index]
-                            location_record = {
-                                "contact_id": contact_id,
-                                "position_m": location_points[point_index],
-                            }
-                            normal = None
-                            if isinstance(force_point, dict):
-                                normal = force_point.get(
-                                    "normal_from_bodyB_to_bodyA"
-                                )
-                            if normal is None and isinstance(impulse_point, dict):
-                                normal = impulse_point.get(
-                                    "normal_from_bodyB_to_bodyA"
-                                )
-                            if normal is not None:
-                                location_record[
-                                    "normal_from_bodyB_to_bodyA"
-                                ] = normal
-                            compact_locations.append(location_record)
-                            compact_forces.append({
-                                "contact_id": contact_id,
-                                "force_vector_n": (
-                                    force_point.get("force_vector_n")
-                                    if isinstance(force_point, dict) else None
-                                ),
-                                "force_magnitude_n": (
-                                    force_point.get("force_magnitude_n")
-                                    if isinstance(force_point, dict) else None
-                                ),
-                            })
-                            compact_impulses.append({
-                                "contact_id": contact_id,
-                                "impulse_vector_ns": (
-                                    impulse_point.get("impulse_vector_ns")
-                                    if isinstance(impulse_point, dict) else None
-                                ),
-                                "impulse_magnitude_ns": (
-                                    impulse_point.get("impulse_magnitude_ns")
-                                    if isinstance(impulse_point, dict) else None
-                                ),
-                            })
-                        location["contacts"] = compact_locations
-                        force["contacts"] = compact_forces
-                        impulse["contacts"] = compact_impulses
-
-        planner = raw_gt.get("planner_log")
-        if isinstance(planner, dict):
-            trajectories = planner.get("planned_trajectory")
-            if isinstance(trajectories, list):
-                unique_plans = {}
-                events = []
-                for capture_index, plan in enumerate(trajectories):
-                    canonical = json.dumps(
-                        plan, sort_keys=True, separators=(",", ":")
-                    )
-                    plan_id = "plan_" + hashlib.sha256(
-                        canonical.encode("utf-8")
-                    ).hexdigest()[:16]
-                    if plan_id not in unique_plans:
-                        stored = dict(plan) if isinstance(plan, dict) else {
-                            "trajectory": plan
-                        }
-                        stored["plan_id"] = plan_id
-                        unique_plans[plan_id] = stored
-                    events.append({
-                        "capture_index": capture_index,
-                        "plan_id": plan_id,
-                    })
-                planner["planned_trajectory"] = {
-                    "plans": list(unique_plans.values()),
-                    "events": events,
-                    "num_unique_plans": len(unique_plans),
-                    "num_capture_events": len(events),
-                }
+        compact_sim_raw_gt(raw_gt)
 
     def _compute_physical_grasp_drop_metrics(self, raw_gt: dict) -> dict:
         """Detect confirmed grasps and subsequent physical drop events.
@@ -2780,32 +2794,8 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         instance_ids = []
         bboxes = []
         vis_ratios = []
-        pose_estimates = []
-        pose_errors = []
-
-        depth_prefix = sensor_prefixes["depth"].get(camera_name)
-        intrinsics = None
-        try:
-            with open(os.path.join(lmdb_path, "info.json"), "r", encoding="utf-8") as info_file:
-                intrinsics = json.load(info_file).get(f"{camera_name}_camera_params")
-        except Exception:
-            intrinsics = None
-
-        def _decode_depth(raw_value):
-            image = _decode_seg(raw_value)
-            if image is None:
-                return None
-            if np.issubdtype(image.dtype, np.integer):
-                return image.astype(np.float64) / 10000.0
-            return image.astype(np.float64)
-
-        object_poses = raw_gt.get("object_state", {}).get("object_pose_gt", {})
-        perception_targets = set(
-            raw_gt.get("episode_meta", {}).get("target_object_ids", []) or []
-        )
         with env.begin() as txn:
             sensor_frame_count = _count_frames(txn, seg_prefix)
-            camera_poses = _load_pickle(txn, f"camera2env_pose.{camera_name}")
             instance_labels = _load_pickle(txn, label_key)
             bbox_series = _load_pickle(txn, bbox_key)
             bbox_label_series = _load_pickle(txn, bbox_labels_key)
@@ -2827,8 +2817,6 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     })
                     bboxes.append({"frame": frame_idx, "instances": None})
                     vis_ratios.append({"frame": frame_idx, "instances": None})
-                    pose_estimates.append({"frame": frame_idx, "objects": {}})
-                    pose_errors.append({"frame": frame_idx, "objects": {}})
                     frame_idx += 1
                     continue
 
@@ -2859,20 +2847,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 })
 
                 frame_bboxes = {}
-                frame_pose_estimates = {}
-                frame_pose_errors = {}
-                depth_img = None
-                if depth_prefix:
-                    depth_raw = txn.get(
-                        f"{depth_prefix}/{str(frame_idx).zfill(4)}".encode("utf-8")
-                    )
-                    if depth_raw is not None:
-                        depth_img = _decode_depth(depth_raw)
-                camera_pose = (
-                    camera_poses[frame_idx]
-                    if isinstance(camera_poses, list) and frame_idx < len(camera_poses)
-                    else None
-                )
+                frame_ratios = None
                 for inst_id in unique_ids:
                     coords = np.where(seg_img == inst_id)
                     if len(coords[0]) == 0:
@@ -2886,53 +2861,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                         frame_instance_labels.get(key_id)
                         if isinstance(frame_instance_labels, dict) else None
                     )
-                    class_name = None
-                    if isinstance(label_text, dict):
-                        class_name = label_text.get("class")
-                    elif label_text is not None:
-                        for candidate in perception_targets:
-                            if candidate in str(label_text):
-                                class_name = candidate
-                                break
-                    if (class_name in perception_targets
-                            and depth_img is not None and camera_pose is not None
-                            and isinstance(intrinsics, list)):
-                        ys, xs = coords[0], coords[1]
-                        depths = depth_img[ys, xs]
-                        valid = np.isfinite(depths) & (depths > 0.0)
-                        if np.any(valid):
-                            z = depths[valid]
-                            u, v = xs[valid], ys[valid]
-                            fx, fy = float(intrinsics[0][0]), float(intrinsics[1][1])
-                            cx, cy = float(intrinsics[0][2]), float(intrinsics[1][2])
-                            camera_points = np.stack([
-                                (u - cx) * z / fx,
-                                -(v - cy) * z / fy,
-                                -z,
-                                np.ones_like(z),
-                            ], axis=1)
-                            world = (np.asarray(camera_pose) @ camera_points.T).T[:, :3]
-                            estimate = np.median(world, axis=0)
-                            frame_pose_estimates[str(class_name)] = estimate.tolist()
-                            gt_data = object_poses.get(class_name, {})
-                            gt_series = (
-                                gt_data.get("translation_per_step", [])
-                                if isinstance(gt_data, dict) else []
-                            )
-                            if gt_series:
-                                mapped = min(
-                                    int(round(frame_idx * (len(gt_series) - 1)
-                                              / max(sensor_frame_count - 1, 1))),
-                                    len(gt_series) - 1,
-                                )
-                                frame_pose_errors[str(class_name)] = float(
-                                    np.linalg.norm(
-                                        estimate - np.asarray(gt_series[mapped][:3])
-                                    )
-                                )
                 bboxes.append({"frame": frame_idx, "instances": frame_bboxes})
-                pose_estimates.append({"frame": frame_idx, "objects": frame_pose_estimates})
-                pose_errors.append({"frame": frame_idx, "objects": frame_pose_errors})
 
                 bbox_frame = (
                     bbox_series[frame_idx]
@@ -2990,17 +2919,6 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         result["instance_id_map_gt"] = instance_ids
         result["object_bbox_gt"] = bboxes
         result["visibility_ratio_gt"] = vis_ratios
-        if any(item["objects"] for item in pose_estimates):
-            result["object_pose_est"] = {
-                "frames": pose_estimates,
-                "method": "head_depth_instance_mask_visible_surface_median_backprojection",
-                "unit": "m",
-            }
-            result["pose_estimation_error_gt_m"] = {
-                "frames": pose_errors,
-                "method": "sensor_depth_estimate_vs_sim_object_center",
-                "unit": "m",
-            }
         return result
 
     def _fix_obstacle_physics_hierarchy(self):
@@ -3009,6 +2927,12 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         Converts the parent mano prim from RigidBody to Articulation Root,
         which allows child rigid bodies to work correctly in PhysX.
         """
+        # Isaac Sim 5 performs this repair in BananaBaseTask.set_up_scene,
+        # before World.reset() creates tensor/contact views. Mutating the
+        # hierarchy here invalidates every active PhysX tensor view.
+        if os.environ.get("INTERNDATA_ISAAC5_COMPAT") == "1":
+            return
+
         try:
             from pxr import Usd, UsdPhysics
             from omni.isaac.core.utils.prims import get_prim_at_path
@@ -3082,8 +3006,13 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
             # Label task objects
             if hasattr(self.task, 'objects'):
+                object_cfg = {
+                    cfg["name"]: cfg for cfg in self.task_cfg.get("objects", [])
+                }
                 for obj_name, obj in self.task.objects.items():
                     try:
+                        if not object_cfg.get(obj_name, {}).get("semantic_label", True):
+                            continue
                         prim_path = getattr(obj, 'prim_path', None) or getattr(obj, 'base_prim_path', None)
                         if prim_path:
                             prim = get_prim_at_path(prim_path)
@@ -3282,7 +3211,8 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             }
         return result
 
-    def _finalize_trained_policy_rollout(self, policy_bundle):
+    def _trained_policy_lift_status(self):
+        """Return whether every pick object has been lifted sufficiently."""
         policy_cfg = dict(self.task_cfg.get("policy", {}) or {})
         target_names = list(
             self._safety_eval_cfg.get("entities", {}).get("target_objects", []) or []
@@ -3303,6 +3233,10 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             delta = float(pose[2]) - float(self._policy_initial_z[name])
             final_deltas[name] = delta
             success = success and delta >= lift_threshold
+        return success, lift_threshold, final_deltas
+
+    def _finalize_trained_policy_rollout(self, policy_bundle):
+        success, lift_threshold, final_deltas = self._trained_policy_lift_status()
         if hasattr(self, "_policy_manifest"):
             self._policy_manifest["task_success"] = success
             self._policy_manifest["success_lift_threshold_m"] = lift_threshold
@@ -3371,6 +3305,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 # Apply safety_gate config from YAML
                 sg_cfg = self._safety_eval_cfg.get("safety_gate", {})
                 _physx_collector.configure_safety_gate(sg_cfg)
+                _physx_collector.configure_safety_context(self._safety_eval_cfg)
             except Exception as e:
                 print(f"[safety_risk] Warning: PhysX collector init failed: {e}")
 
@@ -3382,6 +3317,15 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         if self._safety_eval_enabled:
             self._apply_semantic_labels()
 
+        # Let Isaac Sim 5 PhysX settle before CuRobo preplanning. The new
+        # policy paths do not preplan skills and must retain upstream control.
+        if os.environ.get("INTERNDATA_ISAAC5_COMPAT") == "1" and not policy_enabled:
+            robot_hold_positions = self._capture_robot_hold_positions(self.task)
+            for _ in range(10):
+                obs = self.world.get_observations()
+                self._hold_robot_positions(self.task, robot_hold_positions)
+                self.world.step(render=True)
+
         if not policy_enabled:
             should_continue = self.plan_first_skill(self.skills, should_continue)
         _safety_stop_active = False
@@ -3390,18 +3334,16 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         if self._safety_eval_enabled:
             self._init_obstacle_origin()
 
-        # Warmup
-        for _ in range(10):
-            obs = self.world.get_observations()
-            # self._init_static_objects(self.task)
-            self.world.step(render=True)
-
         # while True:
         #     obs = self.world.get_observations()
         #     # self._init_static_objects(self.task)
         #     self.world.step(render=True)
 
         self._policy_initial_z = {}
+        trained_success_streak = 0
+        trained_success_hold_steps = max(1, int(policy_cfg.get("success_hold_steps", 5)))
+        trained_stop_on_success = bool(policy_cfg.get("stop_on_success", True))
+        trained_post_success_hold_steps = max(0, int(policy_cfg.get("post_success_hold_steps", 2)))
         if trained_dp_enabled:
             for name, obj in self.task.objects.items():
                 if str(name).startswith("pick_object"):
@@ -3480,9 +3422,6 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     settle_step_id = step_id + j_idx
                     if _physx_collector is not None:
                         _physx_collector.collect_step(self.task, settle_step_id)
-                        _physx_collector.record_low_level_command_sent(
-                            settle_step_id, False
-                        )
                     obs = self._apply_perception_degradation(
                         self.world.get_observations(), settle_step_id
                     )
@@ -3513,9 +3452,6 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             if _physx_collector is not None:
                 try:
                     _physx_collector.collect_step(self.task, step_id)
-                    _physx_collector.record_low_level_command_sent(
-                        step_id, bool(action_dict)
-                    )
                 except Exception:
                     pass  # Never block the simulation loop
 
@@ -3536,6 +3472,27 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     _safety_stop_active = False
 
             step_id += 1
+            if trained_dp_enabled:
+                lifted, _, _ = self._trained_policy_lift_status()
+                trained_success_streak = trained_success_streak + 1 if lifted else 0
+                if trained_stop_on_success and trained_success_streak >= trained_success_hold_steps:
+                    # Freeze the measured joint state.  Do not issue another
+                    # policy action after task success, otherwise the action
+                    # horizon can pull the object back down or cause jitter.
+                    hold_positions = self._capture_robot_hold_positions(self.task)
+                    for _ in range(trained_post_success_hold_steps):
+                        self._hold_robot_positions(self.task, hold_positions)
+                        self.world.step(render=True)
+                    episode_success = self._finalize_trained_policy_rollout(trained_dp_policy)
+                    end = True
+                    length = step_id + trained_post_success_hold_steps
+                    should_continue = False
+                    print(
+                        f"[trained_dp] stable lift detected at step {step_id}; "
+                        f"stopped policy and held pose for {trained_post_success_hold_steps} steps"
+                    )
+                    self._close_trained_diffusion_policy(trained_dp_policy)
+                    break
             if self.skills and not policy_enabled:
                 episode_success, should_continue = self.update_skill_states(
                     self.skills, episode_success, should_continue
@@ -3547,7 +3504,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             end = True
             length = step_id
             print(f"[random_dp] rollout complete ({step_id} steps, task_success=false)")
-        elif trained_dp_enabled and step_id >= max_episode_length:
+        elif trained_dp_enabled and not end:
             episode_success = self._finalize_trained_policy_rollout(trained_dp_policy)
             end = True
             length = step_id
@@ -3557,8 +3514,18 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             )
             self._close_trained_diffusion_policy(trained_dp_policy)
 
+        # CuRobo skills start optimistically and flip the flag only when a
+        # skill explicitly fails.  Reaching the episode limit with unfinished
+        # skills is nevertheless a task failure; do not serialize it as a
+        # semantic success merely because no skill emitted an explicit error.
+        if not policy_enabled and step_id >= max_episode_length and not end:
+            episode_success = False
+
         # ── Save PhysX data ──
         self._physx_collector = _physx_collector
+        self._last_episode_success = (
+            bool(episode_success) if isinstance(episode_success, (bool, np.bool_)) else None
+        )
 
         self.length = length
         if end:

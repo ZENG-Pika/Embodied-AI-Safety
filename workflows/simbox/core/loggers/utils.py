@@ -1,3 +1,5 @@
+import numpy as np
+
 from core.utils.transformation_utils import get_fk_solution, pose_to_6d
 
 from .lmdb_logger import LmdbLogger
@@ -22,12 +24,17 @@ def log_dual_obs(logger: LmdbLogger, obs, action_dict, controllers, step_idx=0):
             right_joint_position = obs["robots"][robot_name]["states.right_joint.position"]
             left_gripper_position = obs["robots"][robot_name]["states.left_gripper.position"]
             right_gripper_position = obs["robots"][robot_name]["states.right_gripper.position"]
+            robot_controllers = controllers.get(robot_name, {})
+            left_controller = robot_controllers.get("left")
+            right_controller = robot_controllers.get("right")
             left_gripper_openness = (
-                1.0 if controllers[robot_name]["left"]._gripper_state > 0.0 else 0.0
-            )  # 1.0 open, 0.0 close
+                1.0 if left_controller is not None and left_controller._gripper_state > 0.0
+                else float(np.max(np.asarray(left_gripper_position)) > 1e-4)
+            )
             right_gripper_openness = (
-                1.0 if controllers[robot_name]["right"]._gripper_state > 0.0 else 0.0
-            )  # 1.0 open, 0.0 close
+                1.0 if right_controller is not None and right_controller._gripper_state > 0.0
+                else float(np.max(np.asarray(right_gripper_position)) > 1e-4)
+            )
 
             # Use raw action to udpate if one arm is not static
             robot_action = action_dict.get(robot_name, None)
@@ -53,10 +60,12 @@ def log_dual_obs(logger: LmdbLogger, obs, action_dict, controllers, step_idx=0):
         elif "franka" in robot_name:
             joint_position = obs["robots"][robot_name]["states.joint.position"]
             gripper_pose = obs["robots"][robot_name]["states.gripper.pose"]
-            gripper_openness = (
-                1.0 if controllers[robot_name]["left"]._gripper_state > 0.0 else 0.0
-            )  # 1.0 open, 0.0 close
             gripper_position = obs["robots"][robot_name]["states.gripper.position"]
+            controller = controllers.get(robot_name, {}).get("left")
+            gripper_openness = (
+                1.0 if controller is not None and controller._gripper_state > 0.0
+                else float(np.max(np.asarray(gripper_position)) > 1e-4)
+            )
 
             # Use raw action to udpate if one arm is not static
             robot_action = action_dict.get(robot_name, None)

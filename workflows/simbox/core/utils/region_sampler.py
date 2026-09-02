@@ -22,25 +22,38 @@ class RandomRegionSampler:
         return obj_trans, obj_ori
 
     @staticmethod
-    def A_on_B_region_sampler(obj, tgt, pos_range, yaw_rotation):
+    def A_on_B_region_sampler(
+        obj,
+        tgt,
+        pos_range,
+        yaw_rotation,
+        object_bottom_offset=None,
+        target_center=None,
+        target_z_max=None,
+    ):
         # Translation
         shift = np.random.uniform(*pos_range)
-        bbox_obj = compute_bbox(obj.prim)
-        obj_z_min = bbox_obj.min[2]
-        bbox_tgt = compute_bbox(tgt.prim)
-        tgt_center = (np.asarray(bbox_tgt.min) + np.asarray(bbox_tgt.max)) / 2
-        tgt_z_max = bbox_tgt.max[2]
+        if object_bottom_offset is None:
+            bbox_obj = compute_bbox(obj.prim)
+            object_bottom_offset = obj.get_world_pose()[0][2] - bbox_obj.min[2]
+        if target_center is None or target_z_max is None:
+            bbox_tgt = compute_bbox(tgt.prim)
+            if target_center is None:
+                target_center = (
+                    np.asarray(bbox_tgt.min) + np.asarray(bbox_tgt.max)
+                ) / 2
+            if target_z_max is None:
+                target_z_max = bbox_tgt.max[2]
+        target_center = np.asarray(target_center, dtype=np.float64)
         place_pos = np.zeros(3)
-        place_pos[0] = tgt_center[0]
-        place_pos[1] = tgt_center[1]
-        place_pos[2] = (
-            tgt_z_max + (obj.get_local_pose()[0][2] - obj_z_min) + 0.001
-        )  # add a small value to avoid penetration
+        place_pos[0] = target_center[0]
+        place_pos[1] = target_center[1]
+        place_pos[2] = float(target_z_max) + object_bottom_offset + 0.001
         place_pos += shift
         # Orientation
         yaw = np.random.uniform(*yaw_rotation)
         dr = R.from_euler("xyz", [0.0, 0.0, yaw], degrees=True)
-        r = R.from_quat(obj.get_local_pose()[1], scalar_first=True)
+        r = R.from_quat(obj.get_world_pose()[1], scalar_first=True)
         orientation = (dr * r).as_quat(scalar_first=True)
         return place_pos, orientation
 

@@ -19,6 +19,7 @@ import logging
 import math
 import os
 import pickle
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -36,6 +37,12 @@ class PhysXDataCollector:
 
     def __init__(self):
         self._data: Dict[str, List] = {
+            # S-ROBOT-001/002: live articulation state for every robot DOF.
+            # Rows are flattened across robots in deterministic task order;
+            # joint_state_metadata records the robot/local-index mapping.
+            "joint_position_q_gt": [],
+            "joint_velocity_dq_gt": [],
+            "joint_state_metadata": None,
             # S-ROBOT-004: joint torques
             "joint_torque_gt": [],
             # S-ROBOT-005: all link poses (all links, per step)
@@ -82,6 +89,7 @@ class PhysXDataCollector:
             "step_ids": [],
         }
         self._link_paths: Dict[str, List[str]] = {}  # robot_name -> [link_paths]
+        self._joint_layout: Optional[Dict[str, Any]] = None
         self._initialized = False
         self._contact_state: Dict[tuple, dict] = {}  # (bodyA, bodyB) -> active contact state
         self._physics_dt_s = 0.033
@@ -168,6 +176,14 @@ class PhysXDataCollector:
         self._prev_ee_obstacle_dist_m = None
         self._safety_stop_active = False
         self._safety_gate_enabled = True
+        self._target_object_names: List[str] = []
+        self._human_surrogate_names: List[str] = []
+
+    def configure_safety_context(self, config: Optional[dict]) -> None:
+        """Provide task entity roles without coupling the collector to one task class."""
+        entities = (config or {}).get("entities", {}) or {}
+        self._target_object_names = [str(v) for v in entities.get("target_objects", []) or []]
+        self._human_surrogate_names = [str(v) for v in entities.get("human_surrogates", []) or []]
 
     def collect_step(self, task, step_id: int) -> None:
         """Collect PhysX data for one simulation step.
@@ -182,6 +198,13 @@ class PhysXDataCollector:
             Current step index.
         """
         self._data["step_ids"].append(step_id)
+
+        try:
+            self._collect_joint_states(task)
+        except Exception as e:
+            logger.warning("Failed to collect joint state: %s", e)
+            self._data["joint_position_q_gt"].append(None)
+            self._data["joint_velocity_dq_gt"].append(None)
 
         try:
             self._collect_joint_torques(task)
@@ -451,6 +474,186 @@ class PhysXDataCollector:
         """Check if safety stop is currently active."""
         return self._safety_stop_active
 
+    @staticmethod
+    def _flat_articulation_values(value) -> Optional[List[float]]:
+        """Convert an Isaac/PhysX batched tensor result to one flat row."""
+        if value is None:
+            return None
+        try:
+            if hasattr(value, "detach"):
+                value = value.detach()
+            if hasattr(value, "cpu"):
+                value = value.cpu()
+            if hasattr(value, "numpy"):
+                value = value.numpy()
+            array = np.asarray(value)
+            if array.ndim > 1:
+                array = array[0]
+            array = array.reshape(-1)
+            return [float(item) if np.isfinite(item) else None for item in array]
+        except Exception:
+            return None
+
+    @classmethod
+    def _read_articulation_channel(cls, robot, method_names) -> Optional[List[float]]:
+        """Read a channel without assuming a particular robot wrapper class."""
+        owners = [robot, getattr(robot, "_articulation_view", None)]
+        for owner in owners:
+            if owner is None:
+                continue
+            for method_name in method_names:
+                method = getattr(owner, method_name, None)
+                if not callable(method):
+                    continue
+                try:
+                    values = cls._flat_articulation_values(method())
+                    if values:
+                        return values
+                except Exception:
+                    continue
+        return None
+
+    @staticmethod
+    def _configured_risk_dofs(robot, dof_count: int) -> List[int]:
+        """Return safety-relevant controllable DOFs for any configured robot."""
+        ordered = []
+        for attr in (
+            "left_joint_indices", "right_joint_indices", "lift_indices",
+            "body_indices", "head_indices", "joint_indices",
+            "arm_joint_indices",
+        ):
+            for value in getattr(robot, attr, []) or []:
+                try:
+                    index = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= index < dof_count and index not in ordered:
+                    ordered.append(index)
+        if ordered:
+            return ordered
+        gripper = set()
+        for attr in ("left_gripper_indices", "right_gripper_indices", "gripper_indices"):
+            gripper.update(int(v) for v in (getattr(robot, attr, []) or []))
+        return [index for index in range(dof_count) if index not in gripper]
+
+    def _build_joint_layout(self, task) -> Dict[str, Any]:
+        """Build a stable global DOF axis across one or more robot instances."""
+        channels = []
+        risk_compact_indices = []
+        ee_link_paths = {}
+        global_offset = 0
+        for robot_name, robot in getattr(task, "robots", {}).items():
+            ee_link_paths[str(robot_name)] = {
+                "left": str(getattr(robot, "fl_ee_path", "") or ""),
+                "right": str(getattr(robot, "fr_ee_path", "") or ""),
+            }
+            positions = self._read_articulation_channel(
+                robot, ("get_joint_positions", "get_dof_positions")
+            )
+            dof_names = list(getattr(robot, "dof_names", []) or [])
+            dof_count = max(len(dof_names), len(positions or []))
+            if dof_count <= 0:
+                continue
+            if len(dof_names) < dof_count:
+                dof_names.extend(f"dof_{i}" for i in range(len(dof_names), dof_count))
+            risk_local = set(self._configured_risk_dofs(robot, dof_count))
+            role_by_index = {}
+            for role, attr in (
+                ("left_arm", "left_joint_indices"),
+                ("right_arm", "right_joint_indices"),
+                ("lift", "lift_indices"),
+                ("body", "body_indices"),
+                ("head", "head_indices"),
+                ("left_gripper", "left_gripper_indices"),
+                ("right_gripper", "right_gripper_indices"),
+            ):
+                for value in getattr(robot, attr, []) or []:
+                    try:
+                        role_by_index[int(value)] = role
+                    except (TypeError, ValueError):
+                        continue
+            for local_index in range(dof_count):
+                compact_index = len(channels)
+                dof_name = str(dof_names[local_index])
+                role = role_by_index.get(local_index, "other")
+                name_lower = dof_name.lower()
+                is_prismatic = role == "lift" or any(
+                    token in name_lower
+                    for token in ("translate", "prismatic", "linear", "slider", "slide")
+                )
+                channels.append({
+                    "compact_index": compact_index,
+                    "global_dof_index": global_offset + local_index,
+                    "local_dof_index": local_index,
+                    "dof_name": dof_name,
+                    "robot_name": str(robot_name),
+                    "role": role,
+                    "joint_type": "prismatic" if is_prismatic else "revolute",
+                    "position_unit": "m" if is_prismatic else "rad",
+                    "velocity_unit": "m/s" if is_prismatic else "rad/s",
+                    "effort_unit": "N" if is_prismatic else "N*m",
+                    "risk_metric_dof": local_index in risk_local,
+                })
+                if local_index in risk_local:
+                    risk_compact_indices.append(compact_index)
+            global_offset += dof_count
+        return {
+            "channels": channels,
+            "dof_names": [f"{c['robot_name']}/{c['dof_name']}" for c in channels],
+            "source_dof_indices": [c["global_dof_index"] for c in channels],
+            "risk_metric_indices": risk_compact_indices,
+            "joint_limit_metric_indices": [
+                c["compact_index"] for c in channels
+                if c["risk_metric_dof"] and c["joint_type"] == "revolute"
+            ],
+            "effort_metric_indices": risk_compact_indices,
+            "ee_link_paths": ee_link_paths,
+            "left_dof_names": [
+                f"{c['robot_name']}/{c['dof_name']}" for c in channels
+                if c["role"] == "left_arm"
+            ],
+            "right_dof_names": [
+                f"{c['robot_name']}/{c['dof_name']}" for c in channels
+                if c["role"] == "right_arm"
+            ],
+            "position_unit": "mixed; see channels[].position_unit",
+            "velocity_unit": "mixed; see channels[].velocity_unit",
+            "effort_unit": "mixed; see channels[].effort_unit",
+            "axis_semantics": "all articulation DOFs, robots concatenated in task order",
+        }
+
+    def get_joint_layout(self, task=None) -> Dict[str, Any]:
+        if self._joint_layout is None and task is not None:
+            self._joint_layout = self._build_joint_layout(task)
+        return dict(self._joint_layout or {})
+
+    def _collect_joint_states(self, task) -> None:
+        """Collect all articulation positions and velocities for all robots."""
+        layout = self.get_joint_layout(task)
+        channels = layout.get("channels", [])
+        by_robot = {}
+        for robot_name, robot in getattr(task, "robots", {}).items():
+            by_robot[str(robot_name)] = {
+                "position": self._read_articulation_channel(
+                    robot, ("get_joint_positions", "get_dof_positions")
+                ),
+                "velocity": self._read_articulation_channel(
+                    robot, ("get_joint_velocities", "get_dof_velocities")
+                ),
+            }
+
+        def _row(channel_name):
+            result = []
+            for channel in channels:
+                values = by_robot.get(channel["robot_name"], {}).get(channel_name)
+                index = channel["local_dof_index"]
+                result.append(values[index] if values is not None and index < len(values) else None)
+            return result or None
+
+        self._data["joint_position_q_gt"].append(_row("position"))
+        self._data["joint_velocity_dq_gt"].append(_row("velocity"))
+        self._data["joint_state_metadata"] = layout
+
     def _collect_joint_torques(self, task) -> None:
         """Collect joint torques from all robots.
 
@@ -460,39 +663,21 @@ class PhysXDataCollector:
         2. get_measured_joint_efforts() - measured efforts (works for pos control)
         3. get_joint_torques() - direct PhysX API
         """
-        all_torques = []
-        for robot_name, robot in task.robots.items():
-            torques_found = False
-
-            # Try articulation_view APIs
-            if hasattr(robot, '_articulation_view') and robot._articulation_view is not None:
-                av = robot._articulation_view
-                for method_name in ('get_measured_joint_efforts', 'get_applied_joint_torques',
-                                    'get_applied_joint_efforts', 'get_joint_torques'):
-                    if hasattr(av, method_name):
-                        try:
-                            torques = getattr(av, method_name)()
-                            if torques is not None:
-                                if hasattr(torques, 'tolist'):
-                                    torques = torques.tolist()
-                                if isinstance(torques, (list, tuple)) and len(torques) > 0:
-                                    first = torques[0]
-                                    if hasattr(first, 'tolist'):
-                                        first = first.tolist()
-                                    if isinstance(first, (list, tuple)):
-                                        vals = [float(x) for x in first]
-                                        # Check if non-zero
-                                        if any(abs(v) > 1e-6 for v in vals):
-                                            all_torques.extend(vals)
-                                            torques_found = True
-                                            break
-                        except Exception:
-                            pass
-
-            if not torques_found:
-                all_torques.extend([None] * 6)
-
-        self._data["joint_torque_gt"].append(all_torques if all_torques else None)
+        layout = self.get_joint_layout(task)
+        channels = layout.get("channels", [])
+        values_by_robot = {}
+        for robot_name, robot in getattr(task, "robots", {}).items():
+            values_by_robot[str(robot_name)] = self._read_articulation_channel(
+                robot,
+                ("get_measured_joint_efforts", "get_applied_joint_torques",
+                 "get_applied_joint_efforts", "get_joint_torques"),
+            )
+        row = []
+        for channel in channels:
+            values = values_by_robot.get(channel["robot_name"])
+            index = channel["local_dof_index"]
+            row.append(values[index] if values is not None and index < len(values) else None)
+        self._data["joint_torque_gt"].append(row or None)
 
     # ── Link Poses & Velocities (S-ROBOT-005, S-ROBOT-006) ─────────────────
 
@@ -538,9 +723,11 @@ class PhysXDataCollector:
                     prim = get_prim_at_path(link_path)
                     if prim and prim.IsValid():
                         pos, ori = get_xform_world_pose(link_path)
+                        # Isaac get_world_pose returns scalar-first WXYZ; the
+                        # Sim_Raw_GT contract is consistently XYZW.
                         pose = [
                             float(pos[0]), float(pos[1]), float(pos[2]),
-                            float(ori[0]), float(ori[1]), float(ori[2]), float(ori[3])
+                            float(ori[1]), float(ori[2]), float(ori[3]), float(ori[0])
                         ]
                     else:
                         pose = [None] * 7
@@ -583,6 +770,7 @@ class PhysXDataCollector:
         shaders, visuals, collisions, and other non-link prims.
         """
         from omni.isaac.core.utils.prims import get_prim_at_path
+        from pxr import UsdPhysics
 
         link_map = {}
 
@@ -611,12 +799,18 @@ class PhysXDataCollector:
             if name_lower in ('physscene', 'world', 'scene'):
                 return False
 
-            # Keep prims with link-like names
+            # Prefer the physics schema over robot-specific naming.  This
+            # covers panda_linkN, Piper linkN, lift/base links and future USDs.
+            if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                return True
+
+            # Fallback for assets whose link Xforms do not author RigidBodyAPI.
             # Match: xxx_link, link1, link2, ..., arm_base, base_link
             if name_lower.endswith('_link') or name_lower == 'arm_base':
                 return True
-            import re
-            if re.match(r'^link\d+$', name_lower):
+            if re.match(r'^(?:[a-z0-9]+_)?link\d+$', name_lower):
+                return True
+            if any(token in name_lower for token in ("wrist", "hand", "gripper", "end_link")):
                 return True
 
             return False
@@ -655,7 +849,7 @@ class PhysXDataCollector:
         """
         from omni.isaac.core.utils.prims import get_prim_at_path
         from omni.isaac.core.utils.xforms import get_world_pose
-        from pxr import Usd, UsdPhysics
+        from pxr import Usd, UsdGeom, UsdPhysics
 
         if not hasattr(self, "_human_body_link_cache"):
             self._human_body_link_cache = {}
@@ -677,7 +871,15 @@ class PhysXDataCollector:
                     if root_prim and root_prim.IsValid():
                         root_prefix = str(root_prim.GetPath()).rstrip("/") + "/"
                         for prim in Usd.PrimRange(root_prim):
-                            if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                            name = prim.GetName().lower()
+                            named_hand_part = bool(re.match(
+                                r"^(?:mano|palm|wrist|thumb|index|middle|ring|pinky)(?:[_0-9].*)?$",
+                                name,
+                            ))
+                            if not (
+                                prim.HasAPI(UsdPhysics.RigidBodyAPI)
+                                or (named_hand_part and prim.IsA(UsdGeom.Xformable))
+                            ):
                                 continue
                             prim_path = str(prim.GetPath())
                             relative_path = prim_path.replace(root_prefix, "", 1)
@@ -1816,17 +2018,49 @@ class PhysXDataCollector:
             for name, obj in getattr(task, "objects", {}).items()
             if _root_path(obj)
         }
+        configured_targets = set(self._target_object_names)
         target_roots = {
             name: path for name, path in object_roots.items()
-            if str(name).startswith("pick_object")
+            if name in configured_targets or str(name).startswith("pick_object")
         }
         human_roots = {
             name: path for name, path in object_roots.items()
-            if str(name).startswith("obstacle")
+            if name in set(self._human_surrogate_names) or str(name).startswith("obstacle")
         }
+        # Articulation tasks often name an internal joint/link in the skill
+        # (for example close_v_left) rather than the object wrapper.  If no
+        # configured target resolves to a task object, treat every physical
+        # non-human task object as an intended object instead of silently
+        # producing an empty object-distance field.
+        if not target_roots:
+            target_roots = {
+                name: path for name, path in object_roots.items()
+                if name not in human_roots
+                and "background" not in str(name).lower()
+            }
 
         def _under(path, root):
             return path == root or path.startswith(root + "/")
+
+        def _absolute_robot_path(robot_root, configured_path):
+            value = str(configured_path or "").strip()
+            if not value:
+                return ""
+            if value.startswith("/"):
+                return value.rstrip("/")
+            if not robot_root:
+                return value
+            candidate = f"{robot_root.rstrip('/')}/{value.lstrip('/')}"
+            if stage.GetPrimAtPath(candidate).IsValid():
+                return candidate
+            # Several robot configs include an asset-internal prefix which is
+            # already present below robot_root. Match the longest valid suffix.
+            parts = value.split("/")
+            for start in range(1, len(parts)):
+                candidate = f"{robot_root.rstrip('/')}/{'/'.join(parts[start:])}"
+                if stage.GetPrimAtPath(candidate).IsValid():
+                    return candidate
+            return f"{robot_root.rstrip('/')}/{value.lstrip('/')}"
 
         def _rigid_owner(prim):
             current = prim
@@ -1951,7 +2185,17 @@ class PhysXDataCollector:
         for obstacle_name, obstacle_root in human_roots.items():
             for prim in stage.Traverse():
                 path = str(prim.GetPath())
-                if not _under(path, obstacle_root) or not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                if not _under(path, obstacle_root):
+                    continue
+                name = prim.GetName().lower()
+                named_hand_part = bool(re.match(
+                    r"^(?:mano|palm|wrist|thumb|index|middle|ring|pinky)(?:[_0-9].*)?$",
+                    name,
+                ))
+                if not (
+                    prim.HasAPI(UsdPhysics.RigidBodyAPI)
+                    or (named_hand_part and prim.IsA(UsdGeom.Xformable))
+                ):
                     continue
                 relative = path[len(obstacle_root):].strip("/") or prim.GetName()
                 label = f"{obstacle_name}/{relative}"
@@ -1999,7 +2243,9 @@ class PhysXDataCollector:
         ee_human = {}
         for robot_name, robot in getattr(task, "robots", {}).items():
             for arm, attr in (("left", "fl_ee_path"), ("right", "fr_ee_path")):
-                ee_path = str(getattr(robot, attr, "") or "")
+                ee_path = _absolute_robot_path(
+                    robot_roots.get(robot_name, ""), getattr(robot, attr, "")
+                )
                 ee_groups = [
                     (name, boxes) for name, boxes in groups["robot"].items()
                     if ee_path and (
@@ -2036,6 +2282,7 @@ class PhysXDataCollector:
             }
 
         excluded_pairs = set()
+        joint_graph = {}
         for prim in stage.Traverse():
             if not prim.IsA(UsdPhysics.Joint):
                 continue
@@ -2043,14 +2290,101 @@ class PhysXDataCollector:
             body0 = joint.GetBody0Rel().GetTargets()
             body1 = joint.GetBody1Rel().GetTargets()
             if body0 and body1:
-                excluded_pairs.add(tuple(sorted((str(body0[0]), str(body1[0])))))
+                path0, path1 = str(body0[0]), str(body1[0])
+                excluded_pairs.add(tuple(sorted((path0, path1))))
+                joint_graph.setdefault(path0, set()).add(path1)
+                joint_graph.setdefault(path1, set()).add(path0)
+
+        def _kinematically_near(path_a, path_b, max_hops=2):
+            """Exclude rigid bodies connected by a short joint chain.
+
+            Many robot assets insert a collider-free terminal body (for
+            example Franka panda_link8) between the last arm collider and the
+            hand collider.  Direct-pair filtering therefore still reports a
+            permanent zero self-clearance.  A two-joint graph distance is the
+            conservative robot-independent fallback used by collision models
+            when no SRDF disabled-collision matrix is available.
+            """
+            if not path_a or not path_b:
+                return False
+            frontier = {path_a}
+            visited = {path_a}
+            for _ in range(max_hops):
+                frontier = {
+                    neighbor
+                    for node in frontier
+                    for neighbor in joint_graph.get(node, ())
+                    if neighbor not in visited
+                }
+                if path_b in frontier:
+                    return True
+                visited.update(frontier)
+                if not frontier:
+                    break
+            return False
+
+        # Prefer each robot's CuRobo disabled-collision matrix when it is
+        # available.  It captures legitimate close geometry (for example
+        # Franka panda_hand versus panda_link5) that a generic graph-distance
+        # heuristic cannot distinguish from a real self-collision hazard.
+        configured_ignored_names = set()
+        configured_ignored_link_pairs = set()
+        for robot_name, robot in getattr(task, "robots", {}).items():
+            robot_files = (getattr(robot, "cfg", {}) or {}).get("robot_file", [])
+            if isinstance(robot_files, str):
+                robot_files = [robot_files]
+            for robot_file in robot_files or []:
+                candidates = [Path(robot_file)]
+                if not Path(robot_file).is_absolute():
+                    candidates.extend([
+                        Path.cwd() / robot_file,
+                        Path(__file__).resolve().parents[1] / robot_file,
+                    ])
+                config_path = next((p for p in candidates if p.is_file()), None)
+                if config_path is None:
+                    continue
+                try:
+                    import yaml
+                    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+                    ignored = (
+                        config.get("robot_cfg", {})
+                        .get("kinematics", {})
+                        .get("self_collision_ignore", {})
+                    ) or {}
+                    for link_a, linked_names in ignored.items():
+                        for link_b in linked_names or []:
+                            configured_ignored_names.add(tuple(sorted((
+                                f"{robot_name}/{link_a}", f"{robot_name}/{link_b}"
+                            ))))
+                            configured_ignored_link_pairs.add(tuple(sorted((
+                                str(link_a).rsplit("/", 1)[-1],
+                                str(link_b).rsplit("/", 1)[-1],
+                            ))))
+                except Exception as exc:
+                    logger.debug("Could not read self-collision ignore config %s: %s", config_path, exc)
+                break
 
         self_dist = {}
         robot_names = sorted(groups["robot"])
         for index, name_a in enumerate(robot_names):
             for name_b in robot_names[index + 1:]:
                 owners = tuple(sorted((group_roots.get(name_a, ""), group_roots.get(name_b, ""))))
-                if owners in excluded_pairs:
+                labels = tuple(sorted((name_a, name_b)))
+                local_link_pair = tuple(sorted((
+                    name_a.rsplit("/", 1)[-1], name_b.rsplit("/", 1)[-1]
+                )))
+                same_link_namespace = (
+                    name_a.rsplit("/", 1)[0] == name_b.rsplit("/", 1)[0]
+                )
+                if (
+                    owners in excluded_pairs
+                    or labels in configured_ignored_names
+                    or (
+                        same_link_namespace
+                        and local_link_pair in configured_ignored_link_pairs
+                    )
+                    or _kinematically_near(*owners)
+                ):
                     continue
                 self_dist[f"{name_a}→{name_b}"] = _group_clearance(
                     groups["robot"][name_a], groups["robot"][name_b]

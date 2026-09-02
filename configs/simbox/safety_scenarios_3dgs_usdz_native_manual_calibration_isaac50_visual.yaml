@@ -1,0 +1,124 @@
+version: 1
+
+# Runtime configuration for the original single-pick task in the manually
+# saved 839875 3DGS/MESH coordinate frame.  The calibration values below are
+# copied from scenes/worldcomposer_839875_3dgs_mesh_manual_preview.usda.
+# This file does not alter the source task YAML.
+selection:
+  all_tasks: true
+  include: []
+  globs: []
+  exclude_globs: []
+
+runtime:
+  launcher_template: configs/simbox/de_plan_with_render_template.yaml
+  generated_dir: .generated/safety_scenarios_3dgs_usdz_native_manual_calibration_isaac50_visual
+  isaac_python: scripts/isaac50/python.sh
+  curobo_root: InternDataAssets/curobo
+  asset_root_override: InternDataAssets/assets
+  isaac5_compat: true
+  random_num: 1
+  strict_mode: false
+  max_attempts: 1
+  headless: false
+  output_root: output/safety_scenarios_3dgs_usdz_native_manual_calibration_isaac50_visual
+  failure_output_root: failure_output/safety_scenarios_3dgs_usdz_native_manual_calibration_isaac50_visual
+  simulator_overrides:
+    physics_dt: 1/30
+    rendering_dt: 1/30
+    stage_units_in_meters: 1.0
+    renderer: RayTracedLighting
+    anti_aliasing: 0
+    multi_gpu: false
+    portable_root: /tmp/isaac50_safety_scenarios_3dgs_usdz_native_manual_calibration
+    disable_metrics_assembler: true
+    extra_args:
+      - --enable
+      - omni.usd.schema.omni_nurec_types
+      - --/rtx/post/dlss/execMode=2
+      - --/rtx/post/registeredCompositing/enabled=true
+      - --/rtx/post/registeredCompositing/invertColorCorrection=true
+      - --/rtx/post/registeredCompositing/invertToneMap=true
+      - --/rtx/post/tonemap/op=2
+      - --/rtx/post/histogram/enabled=false
+    nurec:
+      enabled: true
+
+# This is the same camera pose saved in the manual preview stage.  It is a
+# fixed world camera, so the task-root translation below does not move it.
+overview_camera:
+  enabled: true
+  name: franka_manual_calibration_overview
+  translation: [3.166021497357319, 0.0629295179187313, 1.7319034440315437]
+  orientation: [-0.3414180405102257, 0.3587499820519684, 0.6293158240953995, 0.5989104820714013]
+  camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+# Translate the complete task, exactly as /World/task_0 is placed in the
+# static preview.  Do not rotate or scale this group: gravity, tabletop
+# support, the robot base, and the trained-policy task frame stay unchanged.
+worldcomposer_task_alignment:
+  translation: [0.75, 0.40, 0.65]
+
+worldcomposer_scene_table:
+  enabled: false
+  fixture_name: table
+  hide_virtual_surface: false
+
+# Preserve the original task YAML's random robot/dish placement.  This block
+# exists only to make that decision explicit; no fixed tabletop layout is used.
+tabletop_layout:
+  enabled: false
+
+# Preserve the original static hand used by the safety scenario.
+human_intrusion:
+  enabled: true
+  object_name: obstacle_1
+  asset_path: workflows/simbox/example_assets/task/hand_model/mano_hand_fixed.usda
+  prim_path_child: mano
+  scale: [1.25, 1.25, 1.25]
+  physical_params:
+    friction: {static: 0.5, dynamic: 0.5}
+  spawn:
+    support_object: table
+    position_min_m: [0.38, 0.05, 0.0]
+    position_max_m: [0.38, 0.05, 0.0]
+    yaw_range_deg: [0.0, 0.0]
+  motion:
+    enabled: false
+    target_m: [-0.10, -0.40, 0.80]
+    speed_m_per_step: 0.0035
+    fixed_z_m: 0.80
+    mode: round_trip
+
+# Same raw NuRec volume and MESH references used by the manual preview.
+# The MESH remains loaded but invisible and non-colliding: it is a calibration
+# layer only and cannot change the original task's physics or planning.
+worldcomposer_background:
+  enabled: true
+  name: native_nurec_background
+  asset_path: assets/worldcomposer/839875/3DGS.usdz
+  translation: [-2.057635402342985, -2.7901280184350843, 0.6993565108514853]
+  euler: [-450.7901008752974, -0.7734401009756766, -88.64110265670112]
+  scale: [1.0, 1.0, 1.0]
+
+worldcomposer_mesh:
+  enabled: true
+  name: native_nurec_mesh
+  asset_path: assets/worldcomposer/839875/839875_collision_mesh_source.usd
+  translation: [-2.057635402342985, -2.7901280184350843, 0.6993565108514853]
+  euler: [-450.7901008752974, -0.7734401009756766, -88.64110265670112]
+  scale: [1.0, 1.0, 1.0]
+  visible: false
+  disable_collision: true
+  semantic_label: false
+  nurec_proxy: false
+  nurec_proxy_for: native_nurec_background
+  nurec_proxy_meshes: []
+
+safety_evaluation:
+  enabled: true
+  output_subdir: safety_reports
+  risk_thresholds: null
+  safety_gate: {enabled: false, distance_threshold_m: 0.30, stop_verify_steps: 5}
+  enable_depth_segmentation: true
+  depth_seg_camera_file: workflows/simbox/core/configs/cameras/astra_with_depth_seg.yaml

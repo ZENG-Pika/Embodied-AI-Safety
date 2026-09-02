@@ -1,0 +1,135 @@
+##
+## Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+##
+## NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+## property and proprietary rights in and to this material, related
+## documentation and any modifications thereto. Any use, reproduction,
+## disclosure or distribution of this material and related documentation
+## without an express license agreement from NVIDIA CORPORATION or
+## its affiliates is strictly prohibited.
+##
+
+robot_cfg:
+  kinematics:
+    usd_path: "robot/piper100.usd"
+    usd_robot_root: "/robot"
+    isaac_usd_path: ""
+    usd_flip_joints: {}
+    usd_flip_joint_limits: []
+
+    # TemplateController loads this field directly before CuRobo resolves assets.
+    urdf_path: "/home/pika/Workspace/pika/InternDataEngine/InternDataAssets/curobo/src/curobo/content/assets/robot/piper100/piper100.urdf"
+    asset_root_path: "/home/pika/Workspace/pika/InternDataEngine/InternDataAssets/curobo/src/curobo/content/assets/robot"
+
+    base_link: "arm_base"
+    ee_link: "link6"
+
+    # lock_joints: {"joint7": 0.0, "joint8": 0.0}
+    extra_links: {"attached_object":{"parent_link_name": "link6" ,
+    "link_name": "attached_object", "fixed_transform": [0,0,0,1,0,0,0], "joint_type":"FIXED",
+    "joint_name": "attach_joint" }}
+
+
+    collision_link_names:
+      [
+        "arm_base",
+        "link1",
+        "link2",
+        "link3",
+        "link4",
+        "link5",
+        "link6",
+        "link7",
+        "link8",
+        "attached_object",
+      ]
+    collision_spheres:
+      arm_base:
+        - "center": [-0.016, -0.02, 0.028]
+          "radius": 0.01497
+      link1:
+        - "center": [-0.005, -0.01, -0.007]
+          "radius": 0.03343
+      link2:
+        - "center": [0.258, -0.005, -0.009]
+          "radius": 0.03
+        - "center": [0.058, 0.0, 0.013]
+          "radius": 0.03
+        - "center": [0.163, -0.014, -0.004]
+          "radius": 0.03
+      link3:
+        - "center": [-0.186, 0.051, -0.003]
+          "radius": 0.03
+        - "center": [-0.04, 0.02, -0.007]
+          "radius": 0.03
+        - "center": [-0.107, 0.036, -0.004]
+          "radius": 0.03
+      link4:
+        - "center": [-0.005, -0.0, -0.001]
+          "radius": 0.03
+      link5:
+        - "center": [-0.004, 0.053, -0.001]
+          "radius": 0.03
+      link6:
+        - "center": [-0.001, -0.002, 0.011]
+          "radius": 0.03
+      link7:
+        - "center": [0.017, -0.055, -0.015]
+          "radius": 0.0155
+        - "center": [-0.017, -0.057, -0.008]
+          "radius": 0.0155
+      link8:
+        - "center": [0.018, 0.055, -0.011]
+          "radius": 0.01601
+        - "center": [-0.019, 0.061, -0.007]
+          "radius": 0.0149
+    collision_sphere_buffer: 0.004
+    extra_collision_spheres: {"attached_object": 4}
+    self_collision_ignore:
+      {
+        "arm_base": ["link1", "link2", "link3", "link4", "link5", "link6", "link7", "link8", "attached_object"],
+        "link1": ["link2", "link3", "link4", "link5", "link6", "link7", "link8", "attached_object"],
+        "link2": ["link3", "link4", "link5", "link6", "link7", "link8", "attached_object"],
+        "link3": ["link4", "link5", "link6", "link7", "link8", "attached_object"],
+        "link4": ["link5", "link6", "link7", "link8", "attached_object"],
+        "link5": ["link6", "link7", "link8", "attached_object"],
+        "link6": ["link7", "link8", "attached_object"],
+        "link7": ["link8", "attached_object"]
+      }
+    self_collision_buffer:
+      {
+        "arm_base": 0.1,
+        "link1": 0.05,
+        "link2": 0.05,
+        "link3": 0.05,
+        "link4": 0.05,
+        "link5": 0.05,
+        "link6": 0.05,
+        "link7": 0.02,
+        "link8": 0.02,
+        "attached_object": 0.0,
+      }
+    use_global_cumul: True
+    mesh_link_names:
+      [
+        "arm_base",
+        "link1",
+        "link2",
+        "link3",
+        "link4",
+        "link5",
+        "link6",
+        "link7",
+        "link8"
+      ]
+    external_asset_path: null # Use this to add path for externally located assets/robot folder.
+    lock_joints: {"joint7": 0.05, "joint8": -0.05}
+
+    cspace:
+      joint_names: ["joint1","joint2","joint3","joint4", "joint5", "joint6","joint7","joint8"]
+      # retract_config: [0.0, 0.35, -0.35, 0.0, 0.0, 0.0, 0.0, 0.0]
+      retract_config: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      null_space_weight: [1,1,1,1,1,1,1,1]
+      cspace_distance_weight: [1,1,1,1,1,1,1,1]
+      max_acceleration: 15.0
+      max_jerk: 500.0

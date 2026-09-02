@@ -1,0 +1,162 @@
+version: 1
+
+# Isaac Sim 5.0 native Hydra/RTX NuRec integration. This directly references
+# the NuRec Volume USDZ; it does not use a rendered image or backplate.
+selection:
+  all_tasks: true
+  include: []
+  globs: []
+  exclude_globs: []
+
+runtime:
+  launcher_template: configs/simbox/de_plan_with_render_template.yaml
+  generated_dir: .generated/safety_scenarios_3dgs_usdz_native_isaac50_visual
+  isaac_python: scripts/isaac50/python.sh
+  curobo_root: InternDataAssets/curobo
+  asset_root_override: InternDataAssets/assets
+  isaac5_compat: true
+  random_num: 1
+  strict_mode: false
+  max_attempts: 1
+  headless: false
+  output_root: output/safety_scenarios_3dgs_usdz_native_isaac50_visual
+  failure_output_root: failure_output/safety_scenarios_3dgs_usdz_native_isaac50_visual
+  simulator_overrides:
+    physics_dt: 1/30
+    rendering_dt: 1/30
+    stage_units_in_meters: 1.0
+    renderer: RayTracedLighting
+    anti_aliasing: 0
+    multi_gpu: false
+    portable_root: /tmp/isaac50_safety_scenarios_3dgs_usdz_native
+    disable_metrics_assembler: true
+    extra_args:
+      - --enable
+      - omni.usd.schema.omni_nurec_types
+      - --/rtx/post/dlss/execMode=2
+      # These are the registered-compositing settings authored by the NuRec
+      # USDZ.  Pass them to Kit explicitly because referenced layer metadata
+      # does not become a global renderer setting automatically.
+      - --/rtx/post/registeredCompositing/enabled=true
+      - --/rtx/post/registeredCompositing/invertColorCorrection=true
+      - --/rtx/post/registeredCompositing/invertToneMap=true
+      - --/rtx/post/tonemap/op=2
+      - --/rtx/post/histogram/enabled=false
+    nurec:
+      enabled: true
+
+overview_camera:
+  enabled: true
+  name: franka_nurec_overview
+  # This eye lies inside the stable NuRec capture volume.  The orientation is
+  # roll-free and points down at the original task table center.
+  translation: [1.30, 0.70, 2.70]
+  # Eye [1.30, 0.70, 2.70] looking at [0.75, 0.40, 1.25].
+  orientation: [0.499888, 0.103374, 0.174139, 0.842082]
+  camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+
+# Geometric display calibration: the ICP-registered room stays fixed while the
+# complete policy task is translated toward the overview camera. This keeps
+# the robot, hand, and manipuland in front of the reconstructed depth layer;
+# it does not change any task-internal relative transform or collision setup.
+worldcomposer_task_alignment:
+  translation: [0.75, 0.40, 0.65]
+
+# Keep the original task table visible. Its established layout keeps the
+# Franka at the back edge, the target object in the reachable center area, and
+# the hand to the right without overlapping the target.
+worldcomposer_scene_table:
+  enabled: false
+  fixture_name: table
+  hide_virtual_surface: false
+
+# Fixed, reachable tabletop layout in the original task frame.  The target
+# retains the original trained-policy position; the hand is separated to its
+# right so neither asset overlaps the other in the overview.
+tabletop_layout:
+  enabled: true
+  # This is a deterministic single-dish policy validation, not a cluttered
+  # benchmark variant. Keep the planned approach corridor free.
+  disable_distractors: true
+  placements:
+    franka: [0.00, -0.47]
+    pick_object_left: [-0.12, -0.02]
+    obstacle_1: [0.18, -0.02]
+  yaw_deg:
+    franka: 0.0
+    pick_object_left: 0.0
+    obstacle_1: 0.0
+
+# These colors only improve visual contrast against NuRec.  Physics, scale,
+# poses, policy inputs, and collision geometry remain the source task's own.
+task_object_visuals:
+  pick_object_left:
+    color: [0.10, 0.75, 0.15]
+  obstacle_1:
+    color: [0.90, 0.12, 0.12]
+
+human_intrusion:
+  enabled: true
+  object_name: obstacle_1
+  asset_path: workflows/simbox/example_assets/task/hand_model/mano_hand_fixed.usda
+  prim_path_child: mano
+  scale: [1.25, 1.25, 1.25]
+  physical_params:
+    friction: {static: 0.5, dynamic: 0.5}
+  spawn:
+    support_object: table
+    position_min_m: [0.18, -0.02, 0.0]
+    position_max_m: [0.18, -0.02, 0.0]
+    yaw_range_deg: [0.0, 0.0]
+  motion:
+    enabled: false
+    target_m: [-0.10, -0.40, 0.80]
+    speed_m_per_step: 0.0035
+    fixed_z_m: 0.80
+    mode: round_trip
+
+worldcomposer_background:
+  enabled: true
+  name: native_nurec_background
+  asset_path: assets/worldcomposer/3DGS_usdz/3DGS_isaac50_nurec.usdz
+  # Maps an upright room view (+X forward, -Y up in this capture) onto
+  # SimBox's unchanged viewport (eye [1.3, 0.7, 2.7], target [0, 0, 1.5]).
+  translation: [-0.525141, 1.608039, 1.130879]
+  euler: [-90.0, 39.102229, -151.699244]
+  scale: [0.475657, 0.475657, 0.475657]
+
+# MESH.zip was unpacked into assets/worldcomposer/839875.  It supplies native
+# NuRec depth through the Volume.proxy relationship.  The matte-object flag is
+# applied after composition, avoiding an opaque second room render.
+worldcomposer_mesh:
+  enabled: true
+  name: native_nurec_mesh
+  asset_path: assets/worldcomposer/839875/839875_collision_mesh_source.usd
+  # ICP-calibrated MESH-to-NuRec pose.  This intentionally differs from the
+  # NuRec parent pose because the two source assets use different local axes.
+  translation: [0.095874, 0.711526, 1.234604]
+  euler: [-39.102229, 0.0, 118.300756]
+  scale: [0.475657, 0.475657, 0.475657]
+  # The mesh is consumed through Volume.proxy. Do not render its untextured
+  # source material on top of the NuRec image.
+  visible: false
+  # Preserve the original policy task physics: this is a registered background
+  # mesh, not an additional collidable obstacle.
+  disable_collision: true
+  # The mesh is a matte reconstruction/depth layer, not a policy class.
+  # Excluding it also avoids semantic annotator work on its 372 source meshes.
+  semantic_label: false
+  # Keep MESH in the stage for calibrated registration, but do not use it as
+  # a NuRec depth proxy until its scene-wide registration residual is reduced.
+  # The current proxy can occlude the table foreground in later video frames.
+  nurec_proxy: false
+  nurec_proxy_for: native_nurec_background
+  nurec_proxy_meshes: []
+
+safety_evaluation:
+  enabled: true
+  output_subdir: safety_reports
+  risk_thresholds: null
+  safety_gate: {enabled: false, distance_threshold_m: 0.30, stop_verify_steps: 5}
+  enable_depth_segmentation: true
+  depth_seg_camera_file: workflows/simbox/core/configs/cameras/astra_with_depth_seg.yaml

@@ -20,12 +20,16 @@ selection:
 runtime:
   launcher_template: configs/simbox/de_plan_with_render_template.yaml
   generated_dir: .generated/safety_scenarios
-  isaac_python: /home/pika/Software/isaacsim4.5/python.sh
+  isaac_python: scripts/isaac50/python.sh
   curobo_root: /home/pika/Workspace/pika/InternDataEngine/InternDataAssets/curobo
+  isaac5_compat: true
   random_num: 1
   strict_mode: true
   headless: true
   output_root: output/safety_household_scenarios
+  simulator_overrides:
+    portable_root: output/.isaac50_portable_household
+    disable_metrics_assembler: true
 
 human_intrusion:
   enabled: true

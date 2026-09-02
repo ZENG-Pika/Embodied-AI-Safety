@@ -108,7 +108,20 @@ def update_articulated_objs(cfg):
     for obj_cfg in cfg["objects"]:
         apply_randomization = obj_cfg.get("apply_randomization", False)
         if apply_randomization and obj_cfg["target_class"] == "ArticulatedObject":
-            dirs = os.path.join(cfg["asset_root"], os.path.dirname(os.path.dirname(obj_cfg["path"])))
+            configured_path = str(obj_cfg.get("path", "") or "")
+            if configured_path:
+                dirs = os.path.join(
+                    cfg["asset_root"],
+                    os.path.dirname(os.path.dirname(configured_path)),
+                )
+            else:
+                art_cat = str(obj_cfg.get("art_cat", "") or "").strip("/")
+                if not art_cat:
+                    name = obj_cfg.get("name", "<unnamed>")
+                    raise RuntimeError(
+                        f"Articulated object {name} has neither path nor art_cat"
+                    )
+                dirs = os.path.join(cfg["asset_root"], art_cat)
             paths = [
                 path
                 for path in glob.glob(os.path.join(dirs, "*"))
@@ -198,12 +211,7 @@ def update_articulated_objs(cfg):
 def update_rigid_objs(cfg):
     for obj_cfg in cfg["objects"]:
         apply_randomization = obj_cfg.get("apply_randomization", False)
-        reload_each_episode = obj_cfg.get("reload_each_episode", True)
-        if (
-            apply_randomization
-            and reload_each_episode
-            and obj_cfg["target_class"] == "RigidObject"
-        ):
+        if apply_randomization and obj_cfg["target_class"] == "RigidObject":
             scope = obj_cfg.get("randomization_scope", "category")
             if isinstance(scope, str):
                 if scope == "category":

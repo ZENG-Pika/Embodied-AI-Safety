@@ -344,7 +344,7 @@ class SimRawGTExtractor:
 
         return {
             "episode_id": None,           # 由调用方填充
-            "scenario_id": cfg.get("name", None),
+            "scenario_id": cfg.get("scenario_id", cfg.get("name", None)),
             "random_seed": cfg.get("random_seed", None),
             "task_type": cfg.get("task", None),
             "object_id": None,            # 由调用方填充
@@ -355,6 +355,9 @@ class SimRawGTExtractor:
             "physics_config": physics_cfg,
             "lighting_config": lighting_cfg,
             "sensor_noise_config": cfg.get("sensor_noise_config", None),
+            "task_capabilities": (
+                (cfg.get("safety_eval") or {}).get("task_capabilities", {})
+            ),
         }
 
     # ── Robot State (S-ROBOT-*) ──────────────────────────────────────────────
@@ -1426,10 +1429,32 @@ class SimRawGTExtractor:
                 return robots
             return []
 
-        def _ee_suffixes(side: str):
+        def _ee_suffixes(side: str, robot_name: str = ""):
             # side: "fl" or "fr"
             suffixes = []
+            basename_fallbacks = []
             attr = f"{side}_ee_path"
+            side_name = "left" if side == "fl" else "right"
+            runtime_paths = (
+                robot.get("joint_state_metadata", {}).get("ee_link_paths", {})
+            )
+            if isinstance(runtime_paths, dict):
+                ordered_paths = []
+                if robot_name and isinstance(runtime_paths.get(robot_name), dict):
+                    ordered_paths.append(runtime_paths[robot_name])
+                ordered_paths.extend(
+                    paths for name, paths in runtime_paths.items()
+                    if name != robot_name and isinstance(paths, dict)
+                )
+                for paths in ordered_paths:
+                    if paths.get(side_name):
+                        path = str(paths[side_name])
+                        suffixes.append(path)
+                        if robot_name:
+                            marker = f"/{robot_name}/"
+                            if marker in path:
+                                suffixes.append(path.split(marker, 1)[1])
+                        basename_fallbacks.append(path.rstrip("/").rsplit("/", 1)[-1])
             for robot_cfg in _task_robot_configs():
                 ee_path = robot_cfg.get(attr) if isinstance(robot_cfg, dict) else None
                 if ee_path:
@@ -1437,18 +1462,34 @@ class SimRawGTExtractor:
             # split_aloha/lift2 default EE link is link6. link8 is kept only as a
             # fallback for gripper/collision-only assets or other robot configs.
             suffixes.extend([f"/{side}/link6", f"/{side}/link8", f"{side}/link6", f"{side}/link8"])
-            return suffixes
+            # A basename is ambiguous on dual-arm robots (both EEs are often
+            # named link6), so use it only after side-qualified paths.
+            return suffixes + basename_fallbacks
 
         def _find_pose_in_frame(frame, side: str):
             if not isinstance(frame, dict):
                 return None
-            suffixes = _ee_suffixes(side)
             candidate_items = []
             for robot_name, links in frame.items():
                 if isinstance(links, dict):
                     for link_name, pose in links.items():
                         candidate_items.append((robot_name, link_name, pose))
-            for suffix in suffixes:
+            # Match within each robot first.  Runtime metadata stores absolute
+            # prim paths while link_pose_gt intentionally stores robot-relative
+            # link names, so include the path basename as a stable fallback.
+            for candidate_robot in frame:
+                suffixes = _ee_suffixes(side, str(candidate_robot))
+                for suffix in suffixes:
+                    normalized_suffix = suffix.strip("/")
+                    for robot_name, link_name, pose in candidate_items:
+                        if robot_name != candidate_robot:
+                            continue
+                        link_norm = str(link_name).strip("/")
+                        if link_norm == normalized_suffix or link_norm.endswith("/" + normalized_suffix):
+                            if isinstance(pose, (list, tuple)) and len(pose) >= 7 and pose[0] is not None:
+                                return [float(v) for v in pose[:7]]
+            # Legacy frames can omit the robot namespace.
+            for suffix in _ee_suffixes(side):
                 normalized_suffix = suffix.strip("/")
                 for _, link_name, pose in candidate_items:
                     link_norm = str(link_name).strip("/")

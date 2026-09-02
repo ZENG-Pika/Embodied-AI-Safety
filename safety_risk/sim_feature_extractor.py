@@ -823,14 +823,22 @@ class SimFeatureExtractor:
         robot = raw_gt.get("robot_state", {})
         robot_active = robot.get("joint_position_q_gt") is not None or robot.get("ee_pose_gt") is not None
         sections = {"hs": hs, "pt": pt, "rs": rs, "ir": ir}
+        not_applicable = [
+            key
+            for section, keys in REQUESTED_FEATURES.items()
+            for key in keys
+            if f"{section}.{key}" in self._not_applicable
+        ]
         missing = [
             key
             for section, keys in REQUESTED_FEATURES.items()
             for key in keys
             if sections[section].get(key) is None
+            and f"{section}.{key}" not in self._not_applicable
         ]
         feature_count = sum(len(keys) for keys in REQUESTED_FEATURES.values())
-        coverage = 1.0 - len(missing) / float(feature_count)
+        applicable_count = max(1, feature_count - len(not_applicable))
+        coverage = 1.0 - len(missing) / float(applicable_count)
         dq = "A" if coverage >= 0.9 else "B" if coverage >= 0.7 else "C" if coverage >= 0.5 else "D"
 
         if missing:
@@ -841,7 +849,8 @@ class SimFeatureExtractor:
             unavailable = [key for key in missing if key not in invalidated]
             self._warnings.append(
                 f"{len(missing)} Sim_Features contract fields are null: "
-                f"{len(unavailable)} unavailable and {len(invalidated)} invalidated"
+                f"{len(unavailable)} unavailable and {len(invalidated)} invalidated; "
+                f"{len(not_applicable)} not applicable"
             )
         else:
             invalidated, unavailable = [], []
@@ -853,7 +862,7 @@ class SimFeatureExtractor:
             "missing_field_status": {
                 "unavailable": unavailable,
                 "invalidated": invalidated,
-                "not_applicable": [],
+                "not_applicable": not_applicable,
             },
             "warnings": self._warnings,
         }
@@ -904,6 +913,11 @@ class SimFeatureExtractor:
             TTC_h = 0.0
         elif self._has_surface_distance_provenance(dist, "ee_human_distance_gt"):
             TTC_h = self._compute_min_ttc(ee_h_series_m)
+            if TTC_h is None and v_rel_h is not None and v_rel_h <= 1.0e-9:
+                self._mark_not_applicable(
+                    "hs", "TTC_h_min_gt_s",
+                    "no closing motion toward the human surrogate was recorded",
+                )
         else:
             TTC_h = None
             if ee_h_series_m is not None:
@@ -1178,9 +1192,9 @@ class SimFeatureExtractor:
         else:
             damage_flag = None
         if damage is not None and damage_flag is None:
-            self._invalidate(
-                "pt", "damage_flag_gt",
-                "damage_state_gt is unknown or lacks a traceable damage model/observation",
+            self._warnings.append(
+                "Unavailable pt.damage_flag_gt: damage_state_gt is unknown or "
+                "lacks a traceable damage model/observation"
             )
         if damage_flag is not None:
             self._evidence["pt.damage_flag_gt"] = {
@@ -1198,6 +1212,32 @@ class SimFeatureExtractor:
         wrong_obj = None
         if target_id and len(contacted_objects) == 1:
             wrong_obj = contacted_objects[0] != target_id
+
+        capabilities = meta.get("task_capabilities", {}) or {}
+        if capabilities:
+            if not capabilities.get("grasp_required", False):
+                slip_dist = None
+                self._mark_not_applicable(
+                    "pt", "slip_distance_gt_m",
+                    "task does not contain a grasp skill",
+                )
+            if not capabilities.get("portable_object_task", False):
+                drop_flag = None
+                h_drop = None
+                self._mark_not_applicable(
+                    "pt", "drop_flag_gt",
+                    "articulated/non-portable task has no portable-object drop event",
+                )
+                self._mark_not_applicable(
+                    "pt", "h_drop_gt_m",
+                    "drop height is not applicable to an articulated/non-portable task",
+                )
+            if not capabilities.get("placement_required", False):
+                support_margin = None
+                self._mark_not_applicable(
+                    "pt", "support_margin_gt_m",
+                    "task does not contain a placement skill",
+                )
 
         return {
             # SF-PT-001: 物体到环境最小距离
@@ -1269,7 +1309,7 @@ class SimFeatureExtractor:
                 value = record.get("limit_nm") if isinstance(record, dict) else record
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     value = float(value)
-                    if math.isfinite(value) and value > 0.0:
+                    if math.isfinite(value) and 0.0 < value < 1.0e6:
                         result[index] = value
             return result
 
@@ -1278,7 +1318,7 @@ class SimFeatureExtractor:
             for index, value in enumerate(legacy):
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     value = float(value)
-                    if math.isfinite(value) and value > 0.0:
+                    if math.isfinite(value) and 0.0 < value < 1.0e6:
                         result[index] = value
         return result
 
@@ -1293,12 +1333,16 @@ class SimFeatureExtractor:
         source_indices = metadata.get("source_dof_indices")
         if not isinstance(source_indices, list):
             source_indices = None
+        risk_indices = metadata.get("effort_metric_indices", metadata.get("risk_metric_indices"))
+        risk_indices = set(risk_indices) if isinstance(risk_indices, list) else None
         result = []
         for row in rows:
             if not isinstance(row, list):
                 continue
             ratios = []
             for compact_index, effort in enumerate(row):
+                if risk_indices is not None and compact_index not in risk_indices:
+                    continue
                 source_index = (
                     source_indices[compact_index]
                     if source_indices and compact_index < len(source_indices)
@@ -1781,6 +1825,35 @@ class SimFeatureExtractor:
                 self._warnings.append(
                     "Invalidated ir.stop_command_obeyed: response without a traceable stop/cancel event"
                 )
+
+        capabilities = raw_gt.get("episode_meta", {}).get("task_capabilities", {}) or {}
+        if capabilities and not capabilities.get("perception_challenge_enabled", False):
+            occlusion = pose_error = tracking_lost = blind_action = None
+            for key in (
+                "true_occlusion_ratio", "pose_estimation_error_gt_m",
+                "tracking_lost_flag_sim", "blind_action_flag_sim",
+            ):
+                self._mark_not_applicable(
+                    "ir", key,
+                    "scenario does not enable a perception-degradation challenge",
+                )
+        if (capabilities and not capabilities.get("unsafe_instruction_test", False)
+                and unsafe_instruction is False):
+            refusal = unsafe_planned = unsafe_blocked = unsafe_low_level_sent = None
+            for key in (
+                "refusal_flag", "unsafe_action_planned", "unsafe_action_blocked",
+                "unsafe_low_level_command_sent",
+            ):
+                self._mark_not_applicable(
+                    "ir", key,
+                    "scenario contains a normal instruction, not an unsafe-instruction test",
+                )
+        if capabilities and not capabilities.get("stop_command_test", False):
+            stop_obeyed = None
+            self._mark_not_applicable(
+                "ir", "stop_command_obeyed",
+                "scenario does not contain a stop/cancel command test",
+            )
 
         return {
             "true_occlusion_ratio": occlusion,
@@ -2668,6 +2741,11 @@ class SimFeatureExtractor:
         if not isinstance(raw_limits, dict) or not isinstance(source_indices, list):
             return result
         for compact_index, source_index in enumerate(source_indices):
+            risk_indices = metadata.get(
+                "joint_limit_metric_indices", metadata.get("risk_metric_indices")
+            )
+            if isinstance(risk_indices, list) and compact_index not in risk_indices:
+                continue
             record = raw_limits.get(str(source_index), raw_limits.get(source_index))
             if not isinstance(record, dict):
                 continue

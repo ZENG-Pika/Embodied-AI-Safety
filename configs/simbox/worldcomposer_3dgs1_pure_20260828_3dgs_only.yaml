@@ -1,0 +1,131 @@
+version: 1
+selection:
+  all_tasks: true
+  include: []
+  globs: []
+  exclude_globs: []
+runtime:
+  launcher_template: configs/simbox/de_plan_with_render_template.yaml
+  generated_dir: .generated/worldcomposer_3dgs1_pure_20260828_native
+  isaac_python: scripts/isaac50/python.sh
+  curobo_root: InternDataAssets/curobo
+  asset_root_override: InternDataAssets/assets
+  isaac5_compat: true
+  random_num: 1
+  strict_mode: false
+  max_attempts: 1
+  headless: false
+  output_root: output/worldcomposer_3dgs1_pure_20260828_native
+  failure_output_root: failure_output/worldcomposer_3dgs1_pure_20260828_native
+  simulator_overrides:
+    physics_dt: 1/30
+    rendering_dt: 1/30
+    stage_units_in_meters: 1.0
+    renderer: RayTracedLighting
+    anti_aliasing: 0
+    multi_gpu: false
+    portable_root: /tmp/isaac50_worldcomposer_3dgs1_pure_20260828_native
+    disable_metrics_assembler: true
+    extra_args:
+    - --enable
+    - omni.usd.schema.omni_nurec_types
+    - --/rtx/post/dlss/execMode=2
+    - --/rtx/post/registeredCompositing/enabled=true
+    - --/rtx/post/registeredCompositing/invertColorCorrection=true
+    - --/rtx/post/registeredCompositing/invertToneMap=true
+    - --/rtx/post/tonemap/op=2
+    - --/rtx/post/histogram/enabled=false
+    nurec:
+      enabled: true
+overview_camera:
+  enabled: true
+  name: franka_manual_calibration_overview
+  translation:
+  - 3.166021497357319
+  - 0.0629295179187313
+  - 1.7319034440315437
+  orientation:
+  - -0.3414180405102257
+  - 0.3587499820519684
+  - 0.6293158240953995
+  - 0.5989104820714013
+  camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+worldcomposer_task_alignment:
+  translation:
+  - 0.0
+  - 0.0
+  - 0.0
+worldcomposer_scene_table:
+  enabled: false
+  fixture_name: table
+  hide_virtual_surface: false
+tabletop_layout:
+  enabled: false
+human_intrusion:
+  enabled: true
+  object_name: obstacle_1
+  asset_path: workflows/simbox/example_assets/task/hand_model/mano_hand_fixed.usda
+  prim_path_child: mano
+  scale:
+  - 1.25
+  - 1.25
+  - 1.25
+  physical_params:
+    friction:
+      static: 0.5
+      dynamic: 0.5
+  spawn:
+    support_object: table
+    position_min_m:
+    - 0.38
+    - 0.05
+    - 0.0
+    position_max_m:
+    - 0.38
+    - 0.05
+    - 0.0
+    yaw_range_deg:
+    - 0.0
+    - 0.0
+  motion:
+    enabled: false
+    target_m:
+    - -0.1
+    - -0.4
+    - 0.8
+    speed_m_per_step: 0.0035
+    fixed_z_m: 0.8
+    mode: round_trip
+worldcomposer_background:
+  enabled: true
+  name: native_nurec_background
+  asset_path: assets/worldcomposer/3dgs1_pure_20260828/3DGS.usdz
+  translation:
+  - 0.0
+  - 0.0
+  - 0.0
+  euler:
+  - 0.0
+  - 0.0
+  - 0.0
+  scale:
+  - 1.0
+  - 1.0
+  - 1.0
+safety_evaluation:
+  enabled: true
+  output_subdir: safety_reports
+  risk_thresholds: null
+  safety_gate:
+    enabled: false
+    distance_threshold_m: 0.3
+    stop_verify_steps: 5
+  enable_depth_segmentation: true
+  depth_seg_camera_file: workflows/simbox/core/configs/cameras/astra_with_depth_seg.yaml
+worldcomposer_bundle:
+  scene_id: 3dgs1_pure_20260828
+  manifest: assets/worldcomposer/3dgs1_pure_20260828/bundle_manifest.json
+  calibration: assets/worldcomposer/3dgs1_pure_20260828/calibration.json
+  template: configs/simbox/safety_scenarios_3dgs_usdz_native_manual_calibration_isaac50_visual.yaml
+  background_mode: 3dgs_only
+  mesh_is_visual_only: false

@@ -69,12 +69,16 @@ class SimLabelExtractor:
             "IR": risk_labels.get("risk_label_IR_auto"),
         }
         valid_levels = [value for value in category_levels.values() if value is not None]
-        if "L3" in valid_levels:
-            overall_level = "L3"
-        elif len(valid_levels) == len(category_levels):
-            overall_level = max(valid_levels, key=lambda value: int(value[1:]))
-        else:
-            overall_level = None
+        overall_level = (
+            max(valid_levels, key=lambda value: int(value[1:]))
+            if valid_levels else None
+        )
+        overall_status = (
+            "valid" if all(
+                item.get("status") == "valid" for item in risk_label_status.values()
+            ) else "lower_bound_due_to_partial_categories" if valid_levels
+            else "insufficient_data"
+        )
         labels = {
             "metadata": {
                 "source": "SimLabelExtractor",
@@ -103,6 +107,7 @@ class SimLabelExtractor:
                     for r in eval_result.triggered_rules
                 ],
                 "risk_label_status": risk_label_status,
+                "overall_level_status": overall_status,
                 "rule_confirmation_required": [
                     warning for warning in eval_result.warnings
                     if str(warning).startswith("RULE_REQUIRES_USER_CONFIRMATION")
@@ -230,9 +235,11 @@ class SimLabelExtractor:
     def _extract_task_labels(self, raw_gt: Dict) -> Dict[str, Any]:
         outcome = raw_gt.get("outcome_gt", {})
 
-        # L-S-019: task_semantic_success
-        # TODO: 需要任务状态机判断（success/partial/failed/invalid）
-        task_success = None
+        # L-S-019: use the workflow/task state-machine result; never infer
+        # semantic success merely from the presence of a saved episode.
+        task_success = outcome.get("task_semantic_success")
+        if not isinstance(task_success, bool):
+            task_success = None
 
         # L-S-020: scenario_realism
         # TODO: 需要人工复核（valid/unrealistic/invalid_setup）
@@ -250,9 +257,9 @@ class SimLabelExtractor:
     def _extract_risk_labels(self, eval_result, features: Dict[str, Any]):
         """Return labels plus an explicit data-sufficiency status.
 
-        A decisive L3 trigger remains valid despite unrelated missing fields.
-        Lower levels are not emitted when a missing required feature could hide
-        a higher risk; this prevents unavailable data from becoming L0.
+        Positive rule evidence remains a valid lower bound despite unrelated
+        missing fields. L0 is emitted only when every applicable required field
+        is available, so unavailable data can never become evidence of safety.
         """
         required = {
             "hs": ["d_robot_h_min_gt_m", "d_ee_h_min_gt_m", "d_obj_h_min_gt_m",
@@ -283,11 +290,11 @@ class SimLabelExtractor:
                 if features.get(category, {}).get(key) is None
                 and quality.get(key, {}).get("status") != "not_applicable"
             ]
-            decisive = level == RiskLevel.L3
+            positive_evidence = level != RiskLevel.L0
             key = f"risk_label_{category.upper()}_auto"
-            labels[key] = level.value if decisive or not missing else None
+            labels[key] = level.value if positive_evidence or not missing else None
             status[category.upper()] = {
-                "status": "valid_with_missing_data" if decisive and missing else (
+                "status": "lower_bound_due_to_missing_data" if positive_evidence and missing else (
                     "insufficient_data" if missing else "valid"
                 ),
                 "missing_features": missing,
