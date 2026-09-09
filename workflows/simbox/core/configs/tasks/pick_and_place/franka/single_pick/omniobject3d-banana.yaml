@@ -129,4 +129,7 @@ tasks:
                 lift_th: 0.02
                 post_grasp_offset_min: 0.05
                 post_grasp_offset_max: 0.20
-                test_mode: ik
+                # The controller executes this skill with CuRobo.  Preflight
+                # both pre-grasp and grasp poses with the same planner instead
+                # of accepting IK-only poses that CuRobo cannot execute.
+                test_mode: forward

@@ -313,6 +313,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     task=task,
                     world=world,
                     ignore_substring=robot.get("ignore_substring", ["material", "Plane", "conveyor", "scene", "table"]),
+                    collision_include_substrings=robot.get("collision_include_substrings", []),
                     use_batch=robot.get("use_batch", False),
                 )
                 controllers[robot["name"]][controller_name].reset()
@@ -513,6 +514,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             skills.pop(0)
             if skills:
                 should_continue = self.plan_first_skill(skills, should_continue)
+            else:
+                # A scripted rollout is successful only after every skill has
+                # actually completed.  This is intentionally not initialized
+                # optimistically at episode start.
+                episode_success = True
             return episode_success, should_continue
 
         # Update each robot's skills
@@ -526,7 +532,9 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     start_lr_skill = lr_skill_list[0]
                     start_lr_skill.update()  # Must update regardless of completion
                     if start_lr_skill.is_done():
-                        if not start_lr_skill.is_success():
+                        skill_success = bool(start_lr_skill.is_success())
+                        self._record_articulation_skill_result(start_lr_skill, skill_success)
+                        if not skill_success:
                             episode_success = False
                             should_continue = False
                         lr_skill_list.remove(start_lr_skill)
@@ -569,6 +577,129 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     should_continue = not lr_skill_list[0].is_ready()
         return should_continue
 
+    def _is_articulation_task(self):
+        """Return whether this task has an articulated-object interaction."""
+        articulation_skills = {"open", "close", "push", "pull", "rotate", "turn", "press"}
+        for skill_group in self.task_cfg.get("skills", []) or []:
+            if not isinstance(skill_group, dict):
+                continue
+            for robot_sequences in skill_group.values():
+                for arm_group in robot_sequences or []:
+                    if not isinstance(arm_group, dict):
+                        continue
+                    for sequence in arm_group.values():
+                        for skill_cfg in sequence or []:
+                            if isinstance(skill_cfg, dict) and str(skill_cfg.get("name", "")).lower() in articulation_skills:
+                                return True
+        for obj_cfg in self.task_cfg.get("objects", []) or []:
+            if str(obj_cfg.get("target_class", "")).lower() == "articulatedobject":
+                return True
+        return False
+
+    @staticmethod
+    def _scalar_value(value):
+        try:
+            array = np.asarray(value).reshape(-1)
+            return float(array[0]) if array.size else None
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    def _capture_robot_joint_positions(self):
+        positions = {}
+        for name, robot in getattr(self.task, "robots", {}).items():
+            try:
+                values = np.asarray(robot.get_joints_state().positions, dtype=float).reshape(-1)
+                positions[str(name)] = values.copy()
+            except Exception:
+                continue
+        return positions
+
+    def _skill_is_feasible(self, skill):
+        """Apply one configurable consecutive planning-failure limit to all skills."""
+        data_cfg = self.task_cfg.get("data", {}) or {}
+        max_failures = int(data_cfg.get("max_consecutive_plan_failures", 20))
+        try:
+            return bool(skill.is_feasible(th=max_failures))
+        except TypeError:
+            # Preserve compatibility with custom skills whose is_feasible()
+            # implementation does not expose a threshold argument.
+            return bool(skill.is_feasible())
+
+    def _update_motion_observed(self):
+        current = self._capture_robot_joint_positions()
+        initial = getattr(self, "_initial_robot_joint_positions", {})
+        max_delta = 0.0
+        for name, values in current.items():
+            reference = initial.get(name)
+            if reference is None or len(reference) != len(values):
+                continue
+            max_delta = max(max_delta, float(np.max(np.abs(values - reference))))
+        self._max_robot_joint_delta = max(
+            float(getattr(self, "_max_robot_joint_delta", 0.0)), max_delta
+        )
+        if max_delta > 1e-4:
+            self._motion_observed = True
+
+    def _articulation_target_reached(self, skill):
+        """Check the skill's actual articulation joint against its target rule."""
+        art_obj = getattr(skill, "art_obj", None)
+        view = getattr(art_obj, "_articulation_view", None)
+        joint_index = getattr(art_obj, "object_joint_index", None)
+        if view is None or joint_index is None:
+            return False
+        try:
+            current = self._scalar_value(view.get_joint_positions()[:, joint_index])
+            initial = self._scalar_value(getattr(art_obj, "articulation_initial_joint_position", None))
+            threshold = abs(self._scalar_value(getattr(skill, "success_threshold", 0.0)) or 0.0)
+            if current is None:
+                return False
+            mode = str(getattr(skill, "success_mode", "abs") or "abs").lower()
+            if mode == "zero":
+                return abs(current) <= threshold
+            if initial is None:
+                return False
+            delta = current - initial
+            if mode == "normal":
+                return delta >= threshold
+            return abs(delta) >= threshold
+        except Exception:
+            return False
+
+    def _record_articulation_skill_result(self, skill, success):
+        name = str(getattr(skill, "name", "")).lower()
+        if name not in {"open", "close", "push", "pull", "rotate", "turn", "press"}:
+            return
+        self._articulation_skill_results.append({
+            "skill": name,
+            "skill_success": bool(success),
+            "target_reached": bool(self._articulation_target_reached(skill)),
+        })
+
+    def _articulation_requirements_met(self):
+        if not getattr(self, "_articulation_task", False):
+            return True
+        results = getattr(self, "_articulation_skill_results", [])
+        return bool(results) and all(
+            result.get("skill_success") and result.get("target_reached")
+            for result in results
+        )
+
+    def _validate_scripted_success(self, episode_success):
+        """Reject an apparent success that produced no real robot execution."""
+        if not episode_success:
+            return False
+        if not getattr(self, "_execution_started", False):
+            self._execution_status = "no_effective_motion"
+            return False
+        if not getattr(self, "_motion_observed", False):
+            self._execution_status = "no_effective_motion"
+            return False
+        if not self._articulation_requirements_met():
+            self._execution_status = "articulation_target_not_reached"
+            return False
+        self._execution_status = "completed"
+        return True
+
     def generate_seq(self) -> list:
         end = False
 
@@ -590,7 +721,15 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         random_dp_policy = self._initialize_random_diffusion_policy() if random_dp_enabled else None
         trained_dp_policy = self._initialize_trained_diffusion_policy() if trained_dp_enabled else None
         policy_enabled = random_dp_enabled or trained_dp_enabled
-        episode_success = not policy_enabled
+        # Scripted/CuRobo rollouts must prove execution and task completion;
+        # they must never start with an optimistic success value.
+        episode_success = False
+        self._articulation_task = self._is_articulation_task()
+        self._articulation_skill_results = []
+        self._execution_started = False
+        self._motion_observed = False
+        self._max_robot_joint_delta = 0.0
+        self._execution_status = "initialized"
         should_continue = True
         max_episode_length = int(
             policy_cfg.get("max_episode_steps", self.task_cfg["data"]["max_episode_length"])
@@ -629,7 +768,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                             if skill[0] and skill[0].is_ready()
                         ]
 
-                        feasible_labels = [skill[0].is_feasible() for skill in skill_sequences[0] if skill[0]]
+                        feasible_labels = [
+                            self._skill_is_feasible(skill[0])
+                            for skill in skill_sequences[0]
+                            if skill[0]
+                        ]
                         record_labels = [skill[0].is_record() for skill in skill_sequences[0] if skill[0]]
 
                         if False in feasible_labels:
@@ -705,8 +848,19 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
 
     def _record_rgb_depth(self, step_idx: int, observations: Optional[dict] = None):
         for key, value in self.task.cameras.items():
-            for robot_name, _ in self.task.robots.items():
-                if robot_name in key:
+            camera_names = [
+                robot_name for robot_name in self.task.robots
+                if robot_name in str(key)
+            ]
+            # Fixed world cameras (for example split_aloha_overview) do not
+            # contain a robot prefix. Record them under the first robot's
+            # logger namespace so LMDB/MP4 saving includes the view.
+            if not camera_names and "overview" in str(key).lower():
+                camera_names = [next(iter(self.task.robots), None)]
+            for robot_name in camera_names:
+                if robot_name is not None and (
+                    robot_name in str(key) or "overview" in str(key).lower()
+                ):
                     camera_obs = None
                     if isinstance(observations, dict):
                         cameras = observations.get("cameras")
@@ -1176,6 +1330,21 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 raw_gt["planner_log"]["safety_gate_status"] = physx_data.get("safety_gate_status")
                 raw_gt["planner_log"]["low_level_command_sent"] = physx_data.get(
                     "low_level_command_sent"
+                )
+                raw_gt["planner_log"]["execution_status"] = getattr(
+                    self, "_execution_status", "unknown"
+                )
+                raw_gt["planner_log"]["execution_started"] = bool(
+                    getattr(self, "_execution_started", False)
+                )
+                raw_gt["planner_log"]["motion_observed"] = bool(
+                    getattr(self, "_motion_observed", False)
+                )
+                raw_gt["planner_log"]["max_robot_joint_delta_rad"] = float(
+                    getattr(self, "_max_robot_joint_delta", 0.0)
+                )
+                raw_gt["planner_log"]["articulation_target_checks"] = list(
+                    getattr(self, "_articulation_skill_results", [])
                 )
                 # Safety gate / stop event data
                 raw_gt["planner_log"]["stop_success"] = physx_data.get("stop_success")
@@ -2951,6 +3120,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 return
 
             for obj_name, obj in self.task.objects.items():
+                cfg = next(
+                    (item for item in self.task_cfg.get("objects", [])
+                     if item.get("name") == obj_name),
+                    {},
+                )
                 if "obstacle" not in obj_name.lower():
                     continue
                 try:
@@ -3298,7 +3472,15 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         random_dp_policy = self._initialize_random_diffusion_policy() if random_dp_enabled else None
         trained_dp_policy = self._initialize_trained_diffusion_policy() if trained_dp_enabled else None
         policy_enabled = random_dp_enabled or trained_dp_enabled
-        episode_success = not policy_enabled
+        # Scripted/CuRobo rollouts must prove execution and task completion;
+        # they must never start with an optimistic success value.
+        episode_success = False
+        self._articulation_task = self._is_articulation_task()
+        self._articulation_skill_results = []
+        self._execution_started = False
+        self._motion_observed = False
+        self._max_robot_joint_delta = 0.0
+        self._execution_status = "initialized"
         should_continue = True
         max_episode_length = int(
             policy_cfg.get("max_episode_steps", self.task_cfg["data"]["max_episode_length"])
@@ -3336,7 +3518,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 self.world.step(render=True)
 
         if not policy_enabled:
+            self._initial_robot_joint_positions = self._capture_robot_joint_positions()
             should_continue = self.plan_first_skill(self.skills, should_continue)
+            if not should_continue:
+                self._execution_status = "preplan_failed"
+                episode_success = False
         _safety_stop_active = False
 
         # Record obstacle starting position for round-trip movement
@@ -3390,7 +3576,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                             if skill[0] and skill[0].is_ready()
                         ]
 
-                        feasible_labels = [skill[0].is_feasible() for skill in skill_sequences[0] if skill[0]]
+                        feasible_labels = [
+                            self._skill_is_feasible(skill[0])
+                            for skill in skill_sequences[0]
+                            if skill[0]
+                        ]
                         record_labels = [skill[0].is_record() for skill in skill_sequences[0] if skill[0]]
 
                         if False in feasible_labels:
@@ -3448,11 +3638,15 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 should_continue = False
                 break
 
+            command_sent = bool(action_dict) and not _safety_stop_active
+            if command_sent:
+                self._execution_started = True
             if record_flag:
                 log_dual_obs(self.logger, obs, action_dict, self.controllers, step_idx=step_id)
                 self._record_rgb_depth(step_id, obs)
             self.task.apply_action(action_dict)
             self.world.step(render=True)
+            self._update_motion_observed()
 
             # ── Move hand obstacle toward robot ──
             self._move_hand_obstacle(step_id)
@@ -3461,8 +3655,14 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             if _physx_collector is not None:
                 try:
                     _physx_collector.collect_step(self.task, step_id)
-                except Exception:
-                    pass  # Never block the simulation loop
+                    # collect_step creates the planner sample; overwrite its
+                    # best-effort introspection with the authoritative action
+                    # dictionary actually submitted to the task.
+                    _physx_collector.record_low_level_command_sent(
+                        step_id, command_sent
+                    )
+                except Exception as _record_err:
+                    print(f"[safety_risk] low-level command record failed at step {step_id}: {_record_err}")
 
                 # ── Safety gate: check proximity and manage stop ──
                 try:
@@ -3523,12 +3723,13 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             )
             self._close_trained_diffusion_policy(trained_dp_policy)
 
-        # CuRobo skills start optimistically and flip the flag only when a
-        # skill explicitly fails.  Reaching the episode limit with unfinished
-        # skills is nevertheless a task failure; do not serialize it as a
-        # semantic success merely because no skill emitted an explicit error.
-        if not policy_enabled and step_id >= max_episode_length and not end:
-            episode_success = False
+        # CuRobo skills must prove actual execution and, for articulation
+        # tasks, reach the configured object joint target before success.
+        if not policy_enabled:
+            if step_id >= max_episode_length and not end:
+                episode_success = False
+                self._execution_status = "max_episode_steps"
+            episode_success = self._validate_scripted_success(episode_success)
 
         # ── Save PhysX data ──
         self._physx_collector = _physx_collector

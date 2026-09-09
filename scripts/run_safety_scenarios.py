@@ -154,6 +154,31 @@ def _merge_dict(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]
     return result
 
 
+def _is_human_surrogate_spec(spec: Dict[str, Any]) -> bool:
+    """Identify an injected human by explicit semantics, not its name."""
+    if not isinstance(spec, dict):
+        return False
+    if str(spec.get("target_class", "")).strip() == "RoboSafeHumanObject":
+        return True
+    role = str(spec.get("semantic_role", "")).strip().lower()
+    if role in {"human", "human_surrogate", "mano", "hand", "person"}:
+        return True
+    path = str(spec.get("path", spec.get("asset_path", ""))).lower()
+    return any(token in path for token in ("mano", "human", "robosafe"))
+
+
+def _unique_object_name(base: str, existing_names: set[str], suffix: str) -> str:
+    """Return a deterministic collision-free name for an injected object."""
+    if base not in existing_names:
+        return base
+    candidate = f"{base}__{suffix}"
+    index = 2
+    while candidate in existing_names:
+        candidate = f"{base}__{suffix}_{index}"
+        index += 1
+    return candidate
+
+
 def _infer_target_objects(task: Dict[str, Any]) -> List[str]:
     targets = []
     referenced_objects = []
@@ -275,9 +300,12 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
     runtime_limit = (config.get("runtime", {}) or {}).get("max_episode_steps")
     if runtime_limit is not None:
         result.setdefault("data", {})["max_episode_length"] = int(runtime_limit)
-    object_name = str(intrusion.get("object_name", "obstacle_1"))
+    configured_human_name = str(intrusion.get("object_name", "obstacle_1"))
 
     objects = result.setdefault("objects", [])
+    existing_names = {
+        str(obj.get("name")) for obj in objects if isinstance(obj, dict)
+    }
     for obj in objects:
         if isinstance(obj, dict) and obj.get("target_class") in (
             "RigidObject",
@@ -287,20 +315,52 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
             # colliders invalidates the simulation view. Safety rollouts keep
             # the initially selected asset and randomize only its pose.
             obj["reload_each_episode"] = False
-    if not any(isinstance(obj, dict) and obj.get("name") == object_name for obj in objects):
+    existing_human = next(
+        (
+            obj for obj in objects
+            if isinstance(obj, dict)
+            and obj.get("name") == configured_human_name
+            and _is_human_surrogate_spec(obj)
+        ),
+        None,
+    )
+    if existing_human is not None:
+        object_name = configured_human_name
+        existing_human.setdefault("human_surrogate", True)
+        existing_human.setdefault("semantic_role", "human_surrogate")
+    else:
+        # A few upstream tasks already use obstacle_1 for ordinary geometry.
+        # Keep that object and give the injected hand a deterministic name.
+        object_name = _unique_object_name(
+            configured_human_name, existing_names, "human_intrusion"
+        )
         asset_path = _repo_path(str(intrusion["asset_path"])).resolve()
-        objects.append({
+        human_target_class = str(intrusion.get("target_class", "RigidObject"))
+        human_cfg = {
             "name": object_name,
             "path": str(asset_path),
-            "target_class": "RigidObject",
-            "prim_path_child": intrusion.get("prim_path_child", "mano"),
-            "translation": [0.0, 0.0, 0.0],
-            "euler": [0.0, 0.0, 0.0],
+            "target_class": human_target_class,
+            "human_surrogate": True,
+            "semantic_role": "human_surrogate",
+            "fixed_pose": bool(intrusion.get("fixed_pose", False)),
+            "translation": intrusion.get("translation", [0.0, 0.0, 0.0]),
+            "euler": intrusion.get("euler", [0.0, 0.0, 0.0]),
             "scale": intrusion.get("scale", [1.25, 1.25, 1.25]),
             "apply_randomization": False,
             "reload_each_episode": False,
             "physical_params": intrusion.get("physical_params", {}),
-        })
+        }
+        if human_target_class in ("RigidObject", "ArticulatedObject"):
+            human_cfg["prim_path_child"] = intrusion.get("prim_path_child", "mano")
+        for key in (
+            "collision_body_mass_kg", "minimum_collision_shapes",
+            "collision_include_substrings", "render_exclude_substrings",
+            "human_model_id", "semantic_role", "velocity_driven_collision_body",
+            "kinematic", "fixed_pose",
+        ):
+            if key in intrusion:
+                human_cfg[key] = copy.deepcopy(intrusion[key])
+        objects.append(human_cfg)
 
     # Rendering-only overrides make small task entities identifiable against a
     # reconstructed background.  They do not alter object scale, pose, mass,
@@ -397,7 +457,10 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
 
     spawn = intrusion.get("spawn", {})
     regions = result.setdefault("regions", [])
-    if not any(isinstance(region, dict) and region.get("object") == object_name for region in regions):
+    fixed_human_pose = str(intrusion.get("target_class", "RigidObject")) == "RoboSafeHumanObject" or bool(
+        intrusion.get("fixed_pose", False)
+    )
+    if not fixed_human_pose and not any(isinstance(region, dict) and region.get("object") == object_name for region in regions):
         support_object = str(spawn.get("support_object", "table"))
         region_targets = [
             str(region.get("target"))
@@ -492,7 +555,9 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
         if matched == 0:
             raise ValueError(f"skill_overrides matched no skills: {match}")
 
-    planner_ignored = ["obstacle", "mano"]
+    # Only the configured human surrogate is ignored by CuRobo. Ordinary task
+    # geometry remains in the collision world so plans route around it.
+    planner_ignored = [object_name, "mano"]
     if background.get("enabled", False):
         planner_ignored.append(background_name)
     if mesh.get("enabled", False):

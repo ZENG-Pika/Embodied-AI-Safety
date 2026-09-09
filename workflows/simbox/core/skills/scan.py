@@ -133,9 +133,9 @@ class Scan(BaseSkill):
         flag = len(indices) >= 1
 
         if self.skill_cfg.get("process_valid", True):
-            self.process_valid = np.max(np.abs(self.robot.get_joints_state().velocities)) < 5 and (
-                np.max(np.abs(self.pick_obj.get_linear_velocity())) < 5
-            )
+            # Robot joint speed is evaluated by RS and must not invalidate the
+            # task-semantic outcome of a scan skill.
+            self.process_valid = np.max(np.abs(self.pick_obj.get_linear_velocity())) < 5
 
         flag = flag and self.process_valid
 

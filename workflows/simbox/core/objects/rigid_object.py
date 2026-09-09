@@ -37,6 +37,12 @@ class RigidObject(RigidPrim):
         # Runtime safety overlays may inject a shared asset outside a task's
         # asset_root. Preserve absolute paths instead of prefixing them twice.
         usd_path = cfg_path if os.path.isabs(cfg_path) else os.path.join(asset_root, cfg_path)
+        # Keep the concrete asset selected for this object.  ``update_rigid_objs``
+        # may replace ``cfg['path']`` with a randomized instance before the
+        # object is constructed; skills must use this resolved path rather than
+        # re-reading a stale/original task configuration.
+        self.usd_path = os.path.abspath(usd_path)
+        self.cfg_path = cfg_path
         self.init_translation = cfg.get("init_translation", None)
         self.init_orientation = cfg.get("init_orientation", None)
         self.init_parent = cfg.get("init_parent", None)

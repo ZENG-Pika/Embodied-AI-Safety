@@ -24,6 +24,71 @@ from omni.isaac.core.utils.transformations import (
 # pylint: disable=unused-argument
 @register_skill
 class Pick(BaseSkill):
+    @staticmethod
+    def _grasp_annotation_path(usd_path, npy_name):
+        """Resolve a grasp annotation beside the *selected* USD asset.
+
+        Randomized rigid objects can be selected from a sibling instance
+        (e.g. ``..._003/Aligned_obj.usd``) while the task YAML still names the
+        nominal instance (e.g. ``..._001``).  The annotation must come from the
+        same instance; otherwise a valid grasp pose can be several centimetres
+        away from the actual mesh.
+        """
+        usd_path = os.path.abspath(os.fspath(usd_path))
+        npy_name = os.fspath(npy_name)
+        if os.path.isabs(npy_name):
+            return npy_name
+
+        asset_name = os.path.basename(usd_path)
+        if asset_name == "Aligned_obj.usd":
+            return os.path.join(os.path.dirname(usd_path), npy_name)
+        # Preserve the historical replacement behavior for custom asset names,
+        # while still keeping the annotation in the selected asset directory.
+        return os.path.join(os.path.dirname(usd_path), npy_name)
+
+    def _resolve_grasp_annotation(self, object_name):
+        """Return the grasp annotation belonging to the runtime object asset."""
+        npy_name = self.skill_cfg.get("npy_name", "Aligned_grasp_sparse.npy")
+        configured_path = [
+            obj["path"]
+            for obj in self.task.cfg["objects"]
+            if obj["name"] == object_name
+        ][0]
+        configured_usd = (
+            configured_path
+            if os.path.isabs(configured_path)
+            else os.path.join(self.task.asset_root, configured_path)
+        )
+
+        # RigidObject records the concrete path used by create_prim().  This is
+        # the authoritative path after object randomization.  Keep a fallback
+        # for legacy object implementations that do not expose ``usd_path``.
+        runtime_usd = getattr(self.pick_obj, "usd_path", None)
+        selected_usd = runtime_usd or configured_usd
+        grasp_path = self._grasp_annotation_path(selected_usd, npy_name)
+
+        if not os.path.isfile(grasp_path):
+            # Do not silently use the nominal instance's annotation when a
+            # randomized instance is missing one: that recreates the original
+            # mismatch and produces an apparently successful approach with no
+            # physical grasp.
+            if runtime_usd and os.path.abspath(runtime_usd) != os.path.abspath(configured_usd):
+                raise FileNotFoundError(
+                    "No grasp annotation for the runtime-randomized asset: "
+                    f"object={object_name!r}, usd={selected_usd!r}, "
+                    f"expected={grasp_path!r}. The nominal config asset is "
+                    f"{configured_usd!r}; refusing to mix annotations."
+                )
+            raise FileNotFoundError(
+                f"Grasp annotation not found for object={object_name!r}: {grasp_path!r}"
+            )
+
+        print(
+            f"[pick] object={object_name} runtime_asset={selected_usd} "
+            f"grasp_annotation={grasp_path}"
+        )
+        return grasp_path
+
     def __init__(self, robot: Robot, controller: BaseController, task: BaseTask, cfg: DictConfig, *args, **kwargs):
         super().__init__()
         self.robot = robot
@@ -33,12 +98,9 @@ class Pick(BaseSkill):
         object_name = self.skill_cfg["objects"][0]
         self.pick_obj = task.objects[object_name]
 
-        # Get grasp annotation
-        usd_path = [obj["path"] for obj in task.cfg["objects"] if obj["name"] == object_name][0]
-        usd_path = os.path.join(self.task.asset_root, usd_path)
-        grasp_pose_path = usd_path.replace(
-            "Aligned_obj.usd", self.skill_cfg.get("npy_name", "Aligned_grasp_sparse.npy")
-        )
+        # Get the annotation for the concrete runtime asset.  The object path
+        # may have been randomized before this skill is constructed.
+        grasp_pose_path = self._resolve_grasp_annotation(object_name)
         sparse_grasp_poses = np.load(grasp_pose_path)
         lr_arm = "right" if "right" in self.controller.robot_file else "left"
         self.T_obj_ee, self.scores = self.robot.pose_post_process_fn(
@@ -335,9 +397,10 @@ class Pick(BaseSkill):
             flag = len(indices) >= 1
 
         if self.skill_cfg.get("process_valid", True):
-            self.process_valid = np.max(np.abs(self.robot.get_joints_state().velocities)) < 5 and (
-                np.max(np.abs(self.pick_obj.get_linear_velocity())) < 5
-            )
+            # Robot joint speed is an RS safety signal, not evidence that the
+            # object was not picked.  Keep task-semantic success independent
+            # from that instantaneous measurement.
+            self.process_valid = np.max(np.abs(self.pick_obj.get_linear_velocity())) < 5
         flag = flag and self.process_valid
 
         if self.skill_cfg.get("lift_th", 0.0) > 0.0:

@@ -8,7 +8,7 @@ from .geometry_object import GeometryObject
 from .plane_object import PlaneObject
 from .rigid_object import RigidObject
 from .shape_object import ShapeObject
-from .xform_object import XFormObject
+from .xform_object import RoboSafeHumanObject, XFormObject
 
 # Explicitly declare the public interface
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "RigidObject",
     "ShapeObject",
     "XFormObject",
+    "RoboSafeHumanObject",
     "get_object_cls",
     "get_object_dict",
 ]

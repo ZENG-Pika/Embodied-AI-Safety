@@ -19,7 +19,9 @@ tasks:
       intensity_range: [4000, 7000]
       rotation_range: [0, 180]
 
-    neglect_collision_names: ["tray"]
+    # Keep both trays in the CuRobo collision world.  They are real supports
+    # around the fork and spoon, so planned grasp approaches must avoid them.
+    neglect_collision_names: []
 
     robots:
       -
@@ -30,7 +32,8 @@ tasks:
         right_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         left_joint_home_std: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         right_joint_home_std: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        ignore_substring: ["material", "table", "tray"]
+        ignore_substring: ["material", "table"]
+        collision_include_substrings: ["plate_shelf", "tray_0", "tray_1"]
     objects:
       -
         name: plate
@@ -212,7 +215,6 @@ tasks:
                 filter_x_dir: ["downward", 130]
                 pre_grasp_offset: 0.05
                 gripper_change_steps: 10
-                ignore_substring: ["plate_shelf"]
                 post_grasp_offset_min: 0.075
                 post_grasp_offset_max: 0.125
               -

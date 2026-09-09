@@ -1034,11 +1034,23 @@ class SimRawGTExtractor:
 
             def _is_arm_gripper(body):
                 body = str(body)
-                return (
-                    body.startswith("robot/")
-                    and arm_token in body
-                    and body.endswith(gripper_links)
+                lower = body.lower()
+                if not lower.startswith("robot/"):
+                    return False
+                # SplitAloha/Lift2 use /fl/ and /fr/ paths. FR3 uses
+                # panda_leftfinger/panda_rightfinger instead.
+                arm_match = (
+                    arm_token in lower
+                    or (arm == "left" and ("leftfinger" in lower or "left_gripper" in lower))
+                    or (arm == "right" and ("rightfinger" in lower or "right_gripper" in lower))
                 )
+                link_match = lower.endswith(gripper_links) or any(
+                    token in lower for token in (
+                        "leftfinger", "rightfinger", "left_finger", "right_finger",
+                        "leftgripper", "rightgripper", "left_gripper", "right_gripper",
+                    )
+                )
+                return arm_match and link_match
 
             return any(
                 isinstance(entry, dict)
@@ -1064,6 +1076,26 @@ class SimRawGTExtractor:
             ee_poses = _ee_pose_series(robot, arm)
             obj_trans = (obj_poses.get(target) or {}).get("translation_per_step")
             widths = gripper.get(f"gripper_width_{arm}")
+            if not isinstance(widths, list):
+                joint_rows = robot.get("joint_position_q_gt") or []
+                layout = robot.get("joint_state_metadata") or {}
+                channels = layout.get("channels", []) if isinstance(layout, dict) else []
+                role = f"{arm}_gripper"
+                indices = [
+                    int(channel.get("compact_index"))
+                    for channel in channels
+                    if isinstance(channel, dict)
+                    and channel.get("role") == role
+                    and channel.get("compact_index") is not None
+                ]
+                if indices and joint_rows:
+                    widths = []
+                    for row in joint_rows:
+                        try:
+                            values = [abs(float(row[index])) for index in indices]
+                            widths.append(2.0 * values[0] if len(values) == 1 else sum(values))
+                        except (TypeError, ValueError, IndexError):
+                            widths.append(None)
             record = {
                 "arm": arm,
                 "slip_distance_m": None,
@@ -1176,11 +1208,23 @@ class SimRawGTExtractor:
 
             def _is_arm_gripper(body):
                 body = str(body)
-                return (
-                    body.startswith("robot/")
-                    and arm_token in body
-                    and body.endswith(gripper_links)
+                lower = body.lower()
+                if not lower.startswith("robot/"):
+                    return False
+                # SplitAloha/Lift2 use /fl/ and /fr/ paths. FR3 uses
+                # panda_leftfinger/panda_rightfinger instead.
+                arm_match = (
+                    arm_token in lower
+                    or (arm == "left" and ("leftfinger" in lower or "left_gripper" in lower))
+                    or (arm == "right" and ("rightfinger" in lower or "right_gripper" in lower))
                 )
+                link_match = lower.endswith(gripper_links) or any(
+                    token in lower for token in (
+                        "leftfinger", "rightfinger", "left_finger", "right_finger",
+                        "leftgripper", "rightgripper", "left_gripper", "right_gripper",
+                    )
+                )
+                return arm_match and link_match
 
             return any(
                 isinstance(entry, dict)
@@ -1211,6 +1255,33 @@ class SimRawGTExtractor:
             close_threshold = max_width - max(0.005, 0.05 * max_width)
             open_threshold = min(max_width, close_threshold + 0.002)
             widths_raw = gripper.get(f"gripper_width_{arm}")
+            # Older PhysX reports did not populate the optional
+            # gripper_width_* channel, although joint_position_q_gt contains
+            # the live gripper DOF and its role metadata. Derive the physical
+            # opening here so grasp_state_gt remains observable.
+            if not isinstance(widths_raw, list):
+                joint_rows = robot.get("joint_position_q_gt") or []
+                layout = robot.get("joint_state_metadata") or {}
+                channels = layout.get("channels", []) if isinstance(layout, dict) else []
+                role = f"{arm}_gripper"
+                indices = [
+                    int(channel.get("compact_index"))
+                    for channel in channels
+                    if isinstance(channel, dict)
+                    and channel.get("role") == role
+                    and channel.get("compact_index") is not None
+                ]
+                if indices and joint_rows:
+                    widths_raw = []
+                    for row in joint_rows:
+                        try:
+                            values = [abs(float(row[index])) for index in indices]
+                            # FR3 and the common parallel grippers expose one
+                            # half-width DOF; two-DOF grippers expose both
+                            # halves directly.
+                            widths_raw.append(2.0 * values[0] if len(values) == 1 else sum(values))
+                        except (TypeError, ValueError, IndexError):
+                            widths_raw.append(None)
             ee_poses = _ee_pose_series(robot, arm)
             obj_trans = (obj_poses.get(target) or {}).get("translation_per_step")
             if not all(isinstance(values, list) for values in (widths_raw, ee_poses, obj_trans)):

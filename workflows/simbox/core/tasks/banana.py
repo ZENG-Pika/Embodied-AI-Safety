@@ -81,6 +81,17 @@ class BananaBaseTask(BaseTask):
         )
 
     @staticmethod
+    def _is_human_surrogate_cfg(cfg: DictConfig) -> bool:
+        """Use explicit human semantics when separating contact views."""
+        if str(cfg.get("target_class", "")).strip() == "RoboSafeHumanObject":
+            return True
+        role = str(cfg.get("semantic_role", "")).strip().lower()
+        if role in {"human", "human_surrogate", "mano", "hand", "person"}:
+            return True
+        path = str(cfg.get("path", "")).lower()
+        return any(token in path for token in ("mano", "human", "robosafe"))
+
+    @staticmethod
     def _reset_object_velocity(obj, cfg: DictConfig) -> None:
         """Reset velocity when the asset exposes typed velocity attributes."""
         for method_name in ("set_linear_velocity", "set_angular_velocity"):
@@ -135,7 +146,7 @@ class BananaBaseTask(BaseTask):
         if os.environ.get("INTERNDATA_ISAAC5_COMPAT") == "1":
             for cfg in self.cfg["objects"]:
                 if (
-                    cfg["target_class"] in ("RigidObject", "ArticulatedObject")
+                    cfg["target_class"] in ("RigidObject", "ArticulatedObject", "RoboSafeHumanObject")
                     and cfg.get("scene_register", True)
                 ):
                     scene.add(self.objects[cfg["name"]])
@@ -365,11 +376,33 @@ class BananaBaseTask(BaseTask):
                 if cfg["target_class"] == "ArticulatedObject":
                     self.objects[cfg["name"]].initialize()
 
+        # RoboSafeHumanObject authors one compound rigid body before the first
+        # reset and must bind its PhysX tensor view after every reset.  This is
+        # required in Isaac Sim 5 as well as the legacy runtime.
+        for cfg in self.cfg["objects"]:
+            if cfg.get("target_class") == "RoboSafeHumanObject":
+                human = self.objects[cfg["name"]]
+                human.initialize()
+                if cfg.get("fixed_pose", False) and hasattr(human, "apply_fixed_pose"):
+                    human.apply_fixed_pose()
+
         # PhysX can restore authored poses while creating Isaac Sim 5 handles.
         # Reapply the sampled pose without resampling, preserving seed semantics.
         for object_name, pose in self._region_poses.items():
             obj = self._task_objects.get(object_name)
             if obj is None:
+                continue
+            cfg = next(
+                (item for item in self.cfg.get("objects", [])
+                 if item.get("name") == object_name),
+                {},
+            )
+            # A fixed RoboSafe body is deliberately positioned by its object
+            # config. Layout sampling must not restore a stale zero pose.
+            if (
+                cfg.get("target_class") == "RoboSafeHumanObject"
+                and bool(cfg.get("fixed_pose", False))
+            ):
                 continue
             if self._region_pose_frames.get(object_name) == "world":
                 obj.set_world_pose(position=pose[0], orientation=pose[1])
@@ -773,7 +806,7 @@ class BananaBaseTask(BaseTask):
         obstacle_names = [
             obj_cfg["name"]
             for obj_cfg in cfg.get("objects", [])
-            if "obstacle" in obj_cfg.get("name", "").lower()
+            if self._is_human_surrogate_cfg(obj_cfg)
             and obj_cfg["name"] in self.objects
         ]
         for robot_name, robot in self.robots.items():
@@ -838,7 +871,10 @@ class BananaBaseTask(BaseTask):
         roots = list(self.fixtures.items())
         for cfg in self.cfg.get("objects", []):
             name = cfg.get("name", "")
-            if name in self.objects and not name.startswith("pick_") and "obstacle" not in name.lower():
+            # Human surrogates are collected through their dedicated contact
+            # path. Other task objects remain environment geometry.
+            is_human_surrogate = self._is_human_surrogate_cfg(cfg)
+            if name in self.objects and not name.startswith("pick_") and not is_human_surrogate:
                 roots.append((name, self.objects[name]))
 
         seen = set()
@@ -906,7 +942,7 @@ class BananaBaseTask(BaseTask):
 
         for item in cfg.get("objects", []):
             name = item.get("name", "")
-            if "obstacle" not in name.lower() or name not in self.objects:
+            if not self._is_human_surrogate_cfg(item) or name not in self.objects:
                 continue
             obstacle_prim = get_prim_at_path(self.objects[name].prim_path)
             for path in self._rigid_body_paths_under(obstacle_prim):
@@ -998,7 +1034,7 @@ class BananaBaseTask(BaseTask):
         obstacle_names = [
             item.get("name", "")
             for item in cfg.get("objects", [])
-            if "obstacle" in item.get("name", "").lower()
+            if self._is_human_surrogate_cfg(item)
             and item.get("name", "") in self.objects
         ]
         pick_names = [
@@ -1065,7 +1101,12 @@ class BananaBaseTask(BaseTask):
         from pxr import UsdPhysics
 
         for obj_name, obj in self.objects.items():
-            if "obstacle" not in obj_name.lower():
+            cfg = next(
+                (item for item in self.cfg.get("objects", [])
+                 if item.get("name") == obj_name),
+                {},
+            )
+            if not self._is_human_surrogate_cfg(cfg):
                 continue
             prim = get_prim_at_path(obj.prim_path)
             if not prim or not prim.IsValid():

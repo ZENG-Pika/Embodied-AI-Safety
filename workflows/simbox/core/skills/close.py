@@ -192,9 +192,9 @@ class Close(BaseSkill):
                 and len(contact["fingers_base"]["fingers_base_contact_indices"]) == 0
             )
         if self.skill_cfg.get("process_valid", True):
-            self.process_valid = np.max(np.abs(self.robot.get_joints_state().velocities)) < 5 and (
-                np.max(np.abs(self.art_obj.get_linear_velocity())) < 5
-            )
+            # Robot joint speed is evaluated by RS and must not invalidate the
+            # task-semantic outcome of an articulation skill.
+            self.process_valid = np.max(np.abs(self.art_obj.get_linear_velocity())) < 5
 
         curr_joint_p = self.art_obj._articulation_view.get_joint_positions()[:, self.art_obj.object_joint_index]
         init_joint_p = self.art_obj.articulation_initial_joint_position

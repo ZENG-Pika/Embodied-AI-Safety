@@ -60,6 +60,7 @@ class TemplateController(BaseController):
         constrain_grasp_approach: bool = False,
         collision_activation_distance: float = 0.03,
         ignore_substring: Optional[List[str]] = None,
+        collision_include_substrings: Optional[List[str]] = None,
         use_batch: bool = False,
         **kwargs,
     ) -> None:
@@ -70,7 +71,23 @@ class TemplateController(BaseController):
         self.robot = self.task.robots[name]
         self.ignore_substring = self._get_default_ignore_substring()
         if ignore_substring is not None:
-            self.ignore_substring = ignore_substring
+            self.ignore_substring = list(ignore_substring)
+        self.collision_include_substrings = list(collision_include_substrings or [])
+        if self.collision_include_substrings:
+            # A positive include overrides broad exclusions such as "tray".
+            # UsdHelper includes every stage obstacle that is not ignored, so
+            # removing the overlapping ignore token makes these named objects
+            # part of every subsequent CuRobo world refresh as well.
+            include_names = [name.lower() for name in self.collision_include_substrings]
+            self.ignore_substring = [
+                ignored
+                for ignored in self.ignore_substring
+                if not any(
+                    str(ignored).lower() in included
+                    or included in str(ignored).lower()
+                    for included in include_names
+                )
+            ]
         self.ignore_substring.append(name)
         self.use_batch = use_batch
         self.constrain_grasp_approach = constrain_grasp_approach

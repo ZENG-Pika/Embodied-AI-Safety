@@ -870,8 +870,25 @@ class PhysXDataCollector:
                     root_prim = get_prim_at_path(root_path)
                     if root_prim and root_prim.IsValid():
                         root_prefix = str(root_prim.GetPath()).rstrip("/") + "/"
+                        collision_shape_paths = []
+                        for candidate in Usd.PrimRange(root_prim):
+                            candidate_path = str(candidate.GetPath()).lower()
+                            if (
+                                "/humanskeletonphysics/" in candidate_path
+                                and candidate.GetTypeName() in {
+                                    "Capsule", "Sphere", "Mesh", "Cube", "Cylinder"
+                                }
+                            ):
+                                collision_shape_paths.append(candidate)
                         for prim in Usd.PrimRange(root_prim):
                             name = prim.GetName().lower()
+                            prim_path_text = str(prim.GetPath()).lower()
+                            is_human_collision_shape = (
+                                "/humanskeletonphysics/" in prim_path_text
+                                and prim.GetTypeName() in {
+                                    "Capsule", "Sphere", "Mesh", "Cube", "Cylinder"
+                                }
+                            )
                             named_hand_part = bool(re.match(
                                 r"^(?:mano|palm|wrist|thumb|index|middle|ring|pinky)(?:[_0-9].*)?$",
                                 name,
@@ -879,7 +896,15 @@ class PhysXDataCollector:
                             if not (
                                 prim.HasAPI(UsdPhysics.RigidBodyAPI)
                                 or (named_hand_part and prim.IsA(UsdGeom.Xformable))
+                                or is_human_collision_shape
                             ):
+                                continue
+                            # RoboSafe uses one compound rigid body at the
+                            # root and 23 shape colliders below it. The root
+                            # pose is redundant when the complete collider
+                            # poses are available, so keep the report at the
+                            # body-part granularity expected by Sim_Raw_GT.
+                            if prim == root_prim and collision_shape_paths:
                                 continue
                             prim_path = str(prim.GetPath())
                             relative_path = prim_path.replace(root_prefix, "", 1)
@@ -1877,14 +1902,35 @@ class PhysXDataCollector:
         gripper_obj_force = {"left": 0.0, "right": 0.0}
         if self._contact_report_sub is not None:
             for pair in collision_pairs:
-                body_a = pair.get("bodyA", "")
-                body_b = pair.get("bodyB", "")
-                if not body_a.startswith("robot/") or not body_b.startswith("object/"):
+                body_a = str(pair.get("bodyA", ""))
+                body_b = str(pair.get("bodyB", ""))
+                # Contact reports are not guaranteed to keep the robot body
+                # first. Also support FR3 panda_leftfinger/rightfinger
+                # naming; the old matcher only handled /fl/ and /fr/.
+                if body_a.startswith("robot/") and body_b.startswith("object/"):
+                    robot_body = body_a
+                elif body_b.startswith("robot/") and body_a.startswith("object/"):
+                    robot_body = body_b
+                else:
                     continue
-                lower = body_a.lower()
-                if "/fl/" in lower or "/left/" in lower:
+                lower = robot_body.lower()
+                if (
+                    "/fl/" in lower
+                    or "/left/" in lower
+                    or "leftfinger" in lower
+                    or "left_finger" in lower
+                    or "leftgripper" in lower
+                    or "left_gripper" in lower
+                ):
                     gripper_obj_force["left"] += float(pair.get("force_n", 0.0) or 0.0)
-                elif "/fr/" in lower or "/right/" in lower:
+                elif (
+                    "/fr/" in lower
+                    or "/right/" in lower
+                    or "rightfinger" in lower
+                    or "right_finger" in lower
+                    or "rightgripper" in lower
+                    or "right_gripper" in lower
+                ):
                     gripper_obj_force["right"] += float(pair.get("force_n", 0.0) or 0.0)
         elif hasattr(task, 'pickcontact_views'):
             for robot_name, lr_dict in task.pickcontact_views.items():
@@ -2027,6 +2073,19 @@ class PhysXDataCollector:
             name: path for name, path in object_roots.items()
             if name in set(self._human_surrogate_names) or str(name).startswith("obstacle")
         }
+        compound_human_roots = set()
+        for human_root in human_roots.values():
+            for candidate in stage.Traverse():
+                candidate_path = str(candidate.GetPath()).lower()
+                if (
+                    candidate_path.startswith(human_root.lower().rstrip("/") + "/")
+                    and "/humanskeletonphysics/" in candidate_path
+                    and candidate.GetTypeName() in {
+                        "Capsule", "Sphere", "Mesh", "Cube", "Cylinder"
+                    }
+                ):
+                    compound_human_roots.add(human_root)
+                    break
         # Articulation tasks often name an internal joint/link in the skill
         # (for example close_v_left) rather than the object wrapper.  If no
         # configured target resolves to a task object, treat every physical
@@ -2155,6 +2214,13 @@ class PhysXDataCollector:
                     if _under(path, candidate):
                         category, root_name, root_path = "human", name, candidate
                         break
+            if category == "human" and (
+                path == root_path
+                or prim.GetName() == root_name
+            ) and root_path in human_roots.values():
+                # The compound root owns the PhysX body, but the 23 shape
+                # colliders below it are the reportable human body parts.
+                continue
             if category == "environment":
                 for name, candidate in target_roots.items():
                     if _under(path, candidate):
@@ -2164,7 +2230,13 @@ class PhysXDataCollector:
             if category == "robot":
                 label = f"{root_name}/{owner[len(root_path):].strip('/') or prim.GetName()}"
             elif category == "human":
-                label = f"{root_name}/{owner[len(root_path):].strip('/') or prim.GetName()}"
+                # RoboSafe uses one rigid root with shape-level colliders.
+                # Label each HumanSkeletonPhysics shape independently instead
+                # of collapsing all 23 parts into the root body name.
+                if "/humanskeletonphysics/" in path.lower():
+                    label = f"{root_name}/{prim.GetName()}"
+                else:
+                    label = f"{root_name}/{owner[len(root_path):].strip('/') or prim.GetName()}"
             elif category == "object":
                 label = root_name
             else:
@@ -2186,6 +2258,12 @@ class PhysXDataCollector:
             for prim in stage.Traverse():
                 path = str(prim.GetPath())
                 if not _under(path, obstacle_root):
+                    continue
+                # RoboSafe uses a single rigid root to own all of the
+                # HumanSkeletonPhysics shapes. The root itself is not a
+                # reportable body part; including it here would create a
+                # duplicate obstacle_1/obstacle_1 distance entry.
+                if path.rstrip("/") == obstacle_root.rstrip("/"):
                     continue
                 name = prim.GetName().lower()
                 named_hand_part = bool(re.match(

@@ -38,9 +38,26 @@ human_intrusion:
   enabled: true
   object_name: obstacle_1
   # Absolute paths are also accepted. Relative paths are resolved from repo root.
-  asset_path: workflows/simbox/example_assets/task/hand_model/mano_hand_fixed.usda
-  prim_path_child: mano
-  scale: [1.25, 1.25, 1.25]
+  # Full RoboSafe character: visual People asset, skeleton and 23-part
+  # HumanSkeletonPhysics collision body. Keep the historical object name so
+  # existing safety metrics continue to classify it as the human surrogate.
+  asset_path: RoboSafe_HS_合并包_20260902/project_overlay/interndata/robosafe_benchmark/assets/humans/retargeted_people_isaacsim45/base_5people_5poses/F_Medical_01_right_side_reach_retargeted_stage.usda
+  target_class: RoboSafeHumanObject
+  fixed_pose: true
+  kinematic: true
+  # Keep the torso and feet outside the opposite long table edge while the right hand reaches
+  # toward the near side (table top spans approximately y=-0.42..0.42 m).
+  # Long-edge placement: torso/legs stay outside the table at y=+0.80 m.
+  # The retargeted right-side reach asset is yawed +90 deg so the raised
+  # right arm reaches -Y, toward the robot and across the table edge.
+  translation: [0.00, 0.644, 0.0]
+  euler: [0.0, 0.0, 90.0]
+  scale: [0.75, 0.75, 0.75]
+  human_model_id: robosafe_f_medical_01_right_side_reach
+  collision_body_mass_kg: 75.0
+  minimum_collision_shapes: 23
+  collision_include_substrings: ["/HumanSkeletonPhysics"]
+  render_exclude_substrings: ["/HumanSkeletonPhysics", "/CollisionDebug", "/Physics", "/Collision", "/Collider"]
   physical_params:
     friction:
       static: 0.5
@@ -56,7 +73,6 @@ human_intrusion:
     speed_m_per_step: 0.0035
     fixed_z_m: 0.80
     mode: round_trip
-
 
 # Optional visual-only WorldComposer backgrounds. Select one at runtime with
 # --background-scene scene1|scene2|scene3|scene4. The default task run keeps
@@ -101,6 +117,10 @@ safety_evaluation:
     enabled: false
     distance_threshold_m: 0.30
     stop_verify_steps: 5
+  obstacle:
+    enabled: true
+    motion_enabled: false
+    name: obstacle_1
   # Existing head cameras are upgraded to depth + instance segmentation.
   enable_depth_segmentation: true
   depth_seg_camera_file: workflows/simbox/core/configs/cameras/astra_with_depth_seg.yaml

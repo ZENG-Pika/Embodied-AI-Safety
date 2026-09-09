@@ -167,6 +167,7 @@ class EnvWriter(BaseWriter):
         recorded_frames,
         writer_status,
         attempt_count=None,
+        execution_status=None,
     ):
         if self.failure_output_dir is None:
             return
@@ -179,6 +180,7 @@ class EnvWriter(BaseWriter):
             "semantic_success": semantic_success,
             "attempt_count": attempt_count,
             "recorded_frames": int(recorded_frames),
+            "execution_status": execution_status,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
         }
         with (manifest_dir / "failure_manifest.json").open(
@@ -211,6 +213,7 @@ class EnvWriter(BaseWriter):
                 recorded_length,
                 writer_status="failed",
                 attempt_count=attempt_count,
+                execution_status=getattr(task, "_execution_status", None),
             )
         self.logger.info(f"Saved failed attempt metadata and {recorded_length} recorded frames in {log_dir}")
         return recorded_length
@@ -232,6 +235,7 @@ class EnvWriter(BaseWriter):
                         length,
                         writer_status="success",
                         attempt_count=getattr(self, "total_case", None),
+                        execution_status=getattr(task, "_execution_status", None),
                     )
                 self.logger.info(f"Saved {length} obs output saved in {log_dir}")
             elif seq is not None and self.seq_output_dir is not None:
