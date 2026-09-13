@@ -115,6 +115,7 @@ class Pick(BaseSkill):
         self.manip_list = []
         self.pickcontact_view = task.pickcontact_views[robot.name][lr_arm][object_name]
         self.process_valid = True
+        self.plan_failed = False
         self.obj_init_trans = deepcopy(self.pick_obj.get_local_pose()[0])
         final_gripper_state = self.skill_cfg.get("final_gripper_state", -1)
         if final_gripper_state == 1:
@@ -146,7 +147,14 @@ class Pick(BaseSkill):
         manip_list.append(cmd)
 
         # Pre grasp
-        T_base_ee_grasps = self.sample_ee_pose()  # (N, 4, 4)
+        # Small tableware assets have many annotated grasps, while only a
+        # subset is reachable for the current arm/base pose.  Allow a task to
+        # request a larger deterministic candidate set instead of falling
+        # back to the last failed sample after the default batch is exhausted.
+        grasp_candidate_count = int(
+            self.skill_cfg.get("grasp_candidate_count", CUROBO_BATCH_SIZE)
+        )
+        T_base_ee_grasps = self.sample_ee_pose(max_length=grasp_candidate_count)  # (N, 4, 4)
         T_base_ee_pregrasps = deepcopy(T_base_ee_grasps)
         self.controller.update_specific(
             ignore_substring=ignore_substring, reference_prim_path=self.controller.reference_prim_path
@@ -160,6 +168,17 @@ class Pick(BaseSkill):
         p_base_ee_pregrasps, q_base_ee_pregrasps = poses_from_tf_matrices(T_base_ee_pregrasps)
         p_base_ee_grasps, q_base_ee_grasps = poses_from_tf_matrices(T_base_ee_grasps)
 
+        def _batch_success_mask(plan_result):
+            """Return a NumPy success mask without assuming torch/NumPy type."""
+            success = getattr(plan_result, "success", None)
+            if success is None:
+                return np.zeros(T_base_ee_grasps.shape[0], dtype=bool)
+            try:
+                success = success.detach().cpu().numpy()
+            except AttributeError:
+                success = np.asarray(success)
+            return np.asarray(success, dtype=bool).reshape(-1)
+
         if self.controller.use_batch:
             # Check if the input arrays are exactly the same
             if np.array_equal(p_base_ee_pregrasps, p_base_ee_grasps) and np.array_equal(
@@ -167,13 +186,34 @@ class Pick(BaseSkill):
             ):
                 # Inputs are identical, compute only once to avoid redundant computation
                 result = self.controller.test_batch_forward(p_base_ee_grasps, q_base_ee_grasps)
+                result_success = _batch_success_mask(result)
+                if not result_success.any():
+                    self.plan_failed = True
+                    self.process_valid = False
+                    self.manip_list = []
+                    print(
+                        f"[pick_plan_failed] object={self.pick_obj.name} "
+                        f"batch_candidates={len(result_success)} stage=grasp"
+                    )
+                    return
                 index = select_index_by_priority_single(result)
             else:
                 # Inputs are different, compute separately
                 pre_result = self.controller.test_batch_forward(p_base_ee_pregrasps, q_base_ee_pregrasps)
                 result = self.controller.test_batch_forward(p_base_ee_grasps, q_base_ee_grasps)
+                common_success = _batch_success_mask(pre_result) & _batch_success_mask(result)
+                if not common_success.any():
+                    self.plan_failed = True
+                    self.process_valid = False
+                    self.manip_list = []
+                    print(
+                        f"[pick_plan_failed] object={self.pick_obj.name} "
+                        f"batch_candidates={len(common_success)} stage=pregrasp_and_grasp"
+                    )
+                    return
                 index = select_index_by_priority_dual(pre_result, result)
         else:
+            plan_found = False
             for index in range(T_base_ee_grasps.shape[0]):
                 p_base_ee_pregrasp, q_base_ee_pregrasp = p_base_ee_pregrasps[index], q_base_ee_pregrasps[index]
                 p_base_ee_grasp, q_base_ee_grasp = p_base_ee_grasps[index], q_base_ee_grasps[index]
@@ -193,15 +233,38 @@ class Pick(BaseSkill):
                         raise NotImplementedError
                     if result == 1 and result_pre == 1:
                         print("pick plan success")
+                        plan_found = True
                         break
                 else:
                     if result_pre == 1:
                         print("pick plan success")
+                        plan_found = True
                         break
+
+            if not plan_found:
+                # Do not enqueue an untested grasp pose.  The caller will
+                # record the failed skill/episode, preserving the distinction
+                # between a planning failure and a physical grasp failure.
+                self.plan_failed = True
+                self.process_valid = False
+                self.manip_list = []
+                print(
+                    f"[pick_plan_failed] object={self.pick_obj.name} "
+                    f"candidates={T_base_ee_grasps.shape[0]}"
+                )
+                return
 
         if self.fixed_orientation is not None:
             q_base_ee_pregrasps[index] = self.fixed_orientation
             q_base_ee_grasps[index] = self.fixed_orientation
+
+        print(
+            f"[pick_target] object={self.pick_obj.name} "
+            f"arm={'right' if 'right' in self.controller.robot_file else 'left'} "
+            f"object_init={np.asarray(self.obj_init_trans).round(5).tolist()} "
+            f"grasp_pos={np.asarray(p_base_ee_grasps[index]).round(5).tolist()} "
+            f"pre_pos={np.asarray(p_base_ee_pregrasps[index]).round(5).tolist()}"
+        )
 
         # Pre-grasp
         cmd = (p_base_ee_pregrasps[index], q_base_ee_pregrasps[index], "open_gripper", {})
@@ -313,24 +376,23 @@ class Pick(BaseSkill):
 
         combined_flag = np.logical_and.reduce(list(flags.values()))
         if sum(combined_flag) == 0:
-            # idx_list = [i for i in range(max_length)]
-            idx_list = list(range(max_length))
+            idx_list = list(range(min(max_length, num_pose)))
         else:
             tmp_scores = self.scores[combined_flag]
             tmp_idxs = np.arange(num_pose)[combined_flag]
             combined = list(zip(tmp_scores, tmp_idxs))
             combined.sort()
             idx_list = [idx for (score, idx) in combined[:max_length]]
-            score_list = self.scores[idx_list]
-            weights = 1.0 / (score_list + 1e-8)
-            weights = weights / weights.sum()
+            if not self.skill_cfg.get("deterministic_grasp_selection", False):
+                score_list = self.scores[idx_list]
+                weights = 1.0 / (score_list + 1e-8)
+                weights = weights / weights.sum()
+                sampled_idx = random.choices(idx_list, weights=weights, k=min(max_length, len(idx_list)))
+                sampled_scores = self.scores[sampled_idx]
 
-            sampled_idx = random.choices(idx_list, weights=weights, k=max_length)
-            sampled_scores = self.scores[sampled_idx]
-
-            # Sort indices by their scores (ascending)
-            sorted_pairs = sorted(zip(sampled_scores, sampled_idx))
-            idx_list = [idx for _, idx in sorted_pairs]
+                # Sort indices by their scores (ascending)
+                sorted_pairs = sorted(zip(sampled_scores, sampled_idx))
+                idx_list = [idx for _, idx in sorted_pairs]
 
         print(self.scores[idx_list])
         # print((T_base_ee[idx_list])[:, 0, 1])
@@ -366,8 +428,22 @@ class Pick(BaseSkill):
         indices = np.where(contact > contact_threshold)[0]
         return contact, indices
 
-    def is_feasible(self, th=5):
-        return self.controller.num_plan_failed <= th
+    def is_feasible(self, th=None):
+        """Allow task-level planner retry budgets to reach the skill.
+
+        Older pick skills used a hard-coded five-failure cutoff, which made
+        the task YAML value ``max_consecutive_plan_failures: 20`` ineffective
+        for thin or highly constrained objects.  Keep an explicit skill-level
+        override, then fall back to the task budget and finally to 20.
+        """
+        if th is None:
+            task_cfg = getattr(self.task, "cfg", {}) or {}
+            data_cfg = task_cfg.get("data", {}) if hasattr(task_cfg, "get") else {}
+            th = self.skill_cfg.get(
+                "max_plan_failures",
+                data_cfg.get("max_consecutive_plan_failures", 20),
+            )
+        return self.controller.num_plan_failed <= int(th)
 
     def is_subtask_done(self, t_eps=1e-3, o_eps=5e-3):
         assert len(self.manip_list) != 0
@@ -384,17 +460,33 @@ class Pick(BaseSkill):
 
     def is_done(self):
         if len(self.manip_list) == 0:
-            return True
+            # Empty can mean a successful final command or an infeasible
+            # pre-plan. Require the physical pick check in both cases.
+            done = bool(self.is_success())
+            if not done:
+                self.process_valid = False
+            return done
         if self.is_subtask_done(t_eps=self.skill_cfg.get("t_eps", 1e-3), o_eps=self.skill_cfg.get("o_eps", 5e-3)):
             self.manip_list.pop(0)
         return len(self.manip_list) == 0
 
     def is_success(self):
-        flag = True
+        flag = not self.plan_failed
 
         _, indices = self.get_contact()
+        contact_count = len(indices)
+        lift_delta = float(self.pick_obj.get_local_pose()[0][2] - self.obj_init_trans[2])
+        lift_th = float(self.skill_cfg.get("lift_th", 0.0))
+        lift_ok = lift_delta > lift_th if lift_th > 0.0 else True
+        attachment_ok = getattr(self.controller, "_last_attached_obj_path", None) == self.pick_obj.mesh_prim_path
         if self.gripper_cmd == "close_gripper":
-            flag = len(indices) >= 1
+            flag = contact_count >= 1
+            # Some thin fork/spoon meshes have no force samples in the
+            # per-object PhysX contact view.  They are still valid picks when
+            # the explicit CuRobo attachment ran and the object was lifted
+            # past the configured threshold.
+            if lift_th > 0.0 and attachment_ok and lift_ok:
+                flag = True
 
         if self.skill_cfg.get("process_valid", True):
             # Robot joint speed is an RS safety signal, not evidence that the
@@ -403,8 +495,13 @@ class Pick(BaseSkill):
             self.process_valid = np.max(np.abs(self.pick_obj.get_linear_velocity())) < 5
         flag = flag and self.process_valid
 
-        if self.skill_cfg.get("lift_th", 0.0) > 0.0:
-            p_world_obj = deepcopy(self.pick_obj.get_local_pose()[0])
-            flag = flag and ((p_world_obj[2] - self.obj_init_trans[2]) > self.skill_cfg.get("lift_th", 0.0))
+        if lift_th > 0.0:
+            flag = flag and lift_ok
+
+        print(
+            f"[pick_result] object={self.pick_obj.name} contacts={contact_count} "
+            f"lift_delta={lift_delta:.5f} attached={attachment_ok} "
+            f"process_valid={self.process_valid} success={bool(flag)}"
+        )
 
         return flag

@@ -609,6 +609,27 @@ class TemplateController(BaseController):
     def open_gripper(self):
         self._gripper_state = 1.0
     def attach_obj(self, obj_prim_path: str, link_name="attached_object"):
+        # Keep the explicit attachment identity so pick-success checks can
+        # distinguish a CuRobo-attached object from a mere gripper closure.
+        # This is important for small utensils whose PhysX contact view may
+        # report no force even though the object is lifted with the gripper.
+        self._last_attached_obj_path = obj_prim_path
+        # Pick planning temporarily ignores the target mesh so the gripper can
+        # reach its annotated contact pose. CuRobo's attachment API, however,
+        # requires that mesh to be present in its current world model. Rebuild
+        # the world once with the target's name removed from the ignore list;
+        # this avoids the intermittent "Object not found in world" failure
+        # after a valid pre-grasp plan.
+        target_tokens = [token for token in self.ignore_substring if token not in obj_prim_path]
+        try:
+            obstacles = self.usd_help.get_obstacles_from_stage(
+                ignore_substring=target_tokens,
+                reference_prim_path=self.reference_prim_path,
+            ).get_collision_check_world()
+            self.motion_gen.update_world(obstacles)
+            self.world_cfg = obstacles
+        except Exception as exc:
+            print(f"[attach_obj] target world refresh skipped: {exc}")
         sim_js = self.robot.get_joints_state()
         js_names = self.robot.dof_names
         cu_js = JointState(
@@ -628,6 +649,7 @@ class TemplateController(BaseController):
 
     def detach_obj(self):
         self.motion_gen.detach_object_from_robot()
+        self._last_attached_obj_path = None
 
     def update_specific(self, ignore_substring, reference_prim_path):
         obstacles = self.usd_help.get_obstacles_from_stage(

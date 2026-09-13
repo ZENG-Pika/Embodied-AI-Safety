@@ -21,7 +21,7 @@ runtime:
   launcher_template: configs/simbox/de_plan_with_render_template.yaml
   generated_dir: .generated/safety_scenarios
   isaac_python: scripts/isaac50/python.sh
-  curobo_root: /home/pika/Workspace/pika/InternDataEngine/InternDataAssets/curobo
+  curobo_root: InternDataAssets/curobo
   isaac5_compat: true
   random_num: 1
   strict_mode: true
@@ -30,6 +30,22 @@ runtime:
   simulator_overrides:
     portable_root: output/.isaac50_portable_household
     disable_metrics_assembler: true
+    # Apply a final display-space gain so baked backgrounds and foreground
+    # task geometry receive the same brightness reduction.
+    extra_args:
+      - --/rtx/post/colorcorr/gain=(0.75,0.75,0.75)
+
+# Keep only task/robot cameras and the dedicated safety camera. This also
+# removes overview cameras inherited from individual task YAML files.
+disable_auxiliary_scene_cameras: true
+
+# Preserve task-specific light profiles at 56.25 percent of their configured
+# intensity and pin the HDR/rotation for repeatable episode brightness.
+lighting:
+  intensity_scale: 0.5
+  deterministic: true
+  envmap_id: 0
+  rotation: [0.0, 0.0, 0.0]
 
 human_intrusion:
   enabled: true
@@ -41,10 +57,11 @@ human_intrusion:
   kinematic: true
   # Keep the torso and feet outside the opposite long table edge while the right hand reaches
   # toward the near side (table top spans approximately y=-0.42..0.42 m).
-  # Long-edge placement: torso/legs stay outside the table at y=+0.80 m.
+  # Long-edge placement: move the human root 0.15 m closer to the table while
+  # retaining the calibrated reach pose and 0.75 visual/collision scale.
   # The retargeted right-side reach asset is yawed +90 deg so the raised
   # right arm reaches -Y, toward the robot and across the table edge.
-  translation: [0.00, 0.644, 0.0]
+  translation: [0.00, 0.494, 0.0]
   euler: [0.0, 0.0, 90.0]
   scale: [0.75, 0.75, 0.75]
   human_model_id: robosafe_f_medical_01_right_side_reach

@@ -71,6 +71,19 @@ def _select_background_scene(config: Dict[str, Any], scene_id: str) -> None:
     config["worldcomposer_background"] = background
     config["worldcomposer_scene"] = scene_id
 
+    # A camera pose that is clear in one reconstructed room can sit inside
+    # foreground geometry in another one.  Apply an optional per-scene
+    # override after selecting the WorldComposer background, while retaining
+    # unspecified values from the shared agent-view configuration.
+    camera_overrides = config.get("agentview_camera_overrides", {}) or {}
+    if isinstance(camera_overrides, dict):
+        selected_camera = camera_overrides.get(scene_id)
+        if isinstance(selected_camera, dict):
+            agentview = copy.deepcopy(config.get("agentview_camera", {}) or {})
+            for key, value in selected_camera.items():
+                agentview[key] = copy.deepcopy(value)
+            config["agentview_camera"] = agentview
+
 
 def _write_yaml(path: Path, value: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -299,7 +312,45 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
     evaluation = config["safety_evaluation"]
     runtime_limit = (config.get("runtime", {}) or {}).get("max_episode_steps")
     if runtime_limit is not None:
-        result.setdefault("data", {})["max_episode_length"] = int(runtime_limit)
+        data_cfg = result.setdefault("data", {})
+        requested_limit = int(runtime_limit)
+        minimum_limit = int(data_cfg.get("minimum_episode_length", 0) or 0)
+        # Long-horizon task YAMLs may declare the smallest execution budget
+        # needed to finish their full semantic sequence.  A batch-wide cap is
+        # still honored for ordinary tasks, but cannot silently truncate a
+        # task below its declared minimum.
+        data_cfg["max_episode_length"] = max(requested_limit, minimum_limit)
+
+    # Scale each task's existing environment-map intensity range without
+    # discarding the task-specific lighting profile.  This keeps relative
+    # lighting differences intact while allowing one safety-run configuration
+    # to control the overall brightness.
+    lighting = config.get("lighting", {}) or {}
+    intensity_scale = float(lighting.get("intensity_scale", 1.0))
+    if intensity_scale < 0.0:
+        raise ValueError("lighting.intensity_scale must be non-negative")
+    env_map = result.get("env_map")
+    if isinstance(env_map, dict) and "intensity_range" in env_map:
+        intensity_range = list(env_map["intensity_range"])
+        if len(intensity_range) != 2:
+            raise ValueError("env_map.intensity_range must contain [min, max]")
+        scaled_intensity_range = [
+            float(value) * intensity_scale for value in intensity_range
+        ]
+        env_map["intensity_range"] = scaled_intensity_range
+        if lighting.get("deterministic", False):
+            rotation = list(lighting.get("rotation", [0.0, 0.0, 0.0]))
+            if len(rotation) != 3:
+                raise ValueError("lighting.rotation must contain [x, y, z]")
+            env_map["apply_randomization"] = False
+            env_map["envmap_id"] = int(lighting.get("envmap_id", 0))
+            env_map["intensity"] = float(
+                lighting.get(
+                    "intensity",
+                    sum(scaled_intensity_range) / len(scaled_intensity_range),
+                )
+            )
+            env_map["rotation"] = [float(value) for value in rotation]
     configured_human_name = str(intrusion.get("object_name", "obstacle_1"))
 
     objects = result.setdefault("objects", [])
@@ -636,8 +687,31 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
     if policy.get("enabled", False):
         result["policy"] = _merge_dict(result.get("policy", {}), policy)
 
+    # The standard safety-data profiles do not need task-level overview,
+    # agentview, or overhead videos.  Some source task YAMLs already contain
+    # an overview camera, so remove those inherited cameras as well as
+    # suppressing the cameras that this launcher can inject.  Keep robot-
+    # mounted cameras and the dedicated depth/segmentation safety camera.
+    disable_auxiliary_scene_cameras = bool(
+        config.get("disable_auxiliary_scene_cameras", False)
+    )
+    if disable_auxiliary_scene_cameras:
+        cameras = result.setdefault("cameras", [])
+        cameras[:] = [
+            camera
+            for camera in cameras
+            if not (
+                isinstance(camera, dict)
+                and (
+                    str(camera.get("name", "")).lower() == "agentview"
+                    or "overview" in str(camera.get("name", "")).lower()
+                    or "overhead" in str(camera.get("name", "")).lower()
+                )
+            )
+        ]
+
     overview = config.get("overview_camera", {}) or {}
-    if overview.get("enabled", False):
+    if overview.get("enabled", False) and not disable_auxiliary_scene_cameras:
         camera_name = str(overview.get("name", "split_aloha_overview"))
         cameras = result.setdefault("cameras", [])
         cameras[:] = [camera for camera in cameras if camera.get("name") != camera_name]
@@ -654,6 +728,59 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
             # This overview is expressed in the reconstructed room frame,
             # rather than the moving task-root frame.
             "fixed_world_view": True,
+        })
+
+    # Third-person task-relative view used by offline policy evaluation and
+    # human-safety review. Keeping this camera in the task frame ensures the
+    # complete robot and human remain visible for every registered background.
+    agentview = config.get("agentview_camera", {}) or {}
+    if agentview.get("enabled", False) and not disable_auxiliary_scene_cameras:
+        camera_name = str(agentview.get("name", "agentview"))
+        cameras = result.setdefault("cameras", [])
+        cameras[:] = [camera for camera in cameras if camera.get("name") != camera_name]
+        cameras.append({
+            "name": camera_name,
+            "translation": agentview.get("translation", [2.8, 0.0, 2.0]),
+            "orientation": agentview.get(
+                "orientation",
+                [0.593222, 0.384821, 0.384821, 0.593222],
+            ),
+            "camera_axes": "usd",
+            "camera_file": agentview.get(
+                "camera_file", "workflows/simbox/core/configs/cameras/astra.yaml"
+            ),
+            "parent": None,
+            "apply_randomization": False,
+            "fixed_world_view": False,
+        })
+
+    # Human-centred overhead view. It is configured separately from agentview
+    # so safety reviewers can inspect the arm/table interaction from directly
+    # above the person without changing any robot-mounted camera.
+    human_overhead = config.get("human_overhead_camera", {}) or {}
+    if human_overhead.get("enabled", False) and not disable_auxiliary_scene_cameras:
+        camera_name = str(
+            human_overhead.get("name", "human_overhead_45")
+        )
+        cameras = result.setdefault("cameras", [])
+        cameras[:] = [
+            camera for camera in cameras if camera.get("name") != camera_name
+        ]
+        cameras.append({
+            "name": camera_name,
+            "translation": human_overhead.get(
+                "translation", [-0.071, 0.633, 1.65]
+            ),
+            "orientation": human_overhead.get(
+                "orientation", [0.0, 0.0, 0.382683, 0.92388]
+            ),
+            "camera_axes": "usd",
+            "camera_file": human_overhead.get(
+                "camera_file", "workflows/simbox/core/configs/cameras/astra.yaml"
+            ),
+            "parent": None,
+            "apply_randomization": False,
+            "fixed_world_view": False,
         })
     return result
 

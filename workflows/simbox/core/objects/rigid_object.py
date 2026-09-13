@@ -57,6 +57,28 @@ class RigidObject(RigidPrim):
         self.mesh_prim_path = str(get_prim_at_path(rigid_prim_path).GetChildren()[0].GetPrimPath())
         super().__init__(prim_path=rigid_prim_path, name=cfg["name"], *args, **kwargs)
 
+        # Thin utensils can settle through the tray while CuRobo is warming
+        # up and planning. Their grasp poses are authored relative to the
+        # reset pose, so a few centimetres of gravity drift is enough to make
+        # an otherwise valid grasp miss. Tasks may opt out of gravity during
+        # the pre-grasp phase while preserving authored collision geometry.
+        if bool(cfg.get("disable_gravity", False)):
+            try:
+                from pxr import PhysxSchema
+
+                prim = get_prim_at_path(rigid_prim_path)
+                physx_api = (
+                    PhysxSchema.PhysxRigidBodyAPI(prim)
+                    if prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI)
+                    else PhysxSchema.PhysxRigidBodyAPI.Apply(prim)
+                )
+                physx_api.CreateDisableGravityAttr().Set(True)
+                print(f"[rigid_object] gravity disabled for pre-grasp stability: {cfg_name}")
+            except Exception as exc:
+                # Keep legacy Isaac versions usable; the object still loads
+                # with authored physics if this optional schema is unavailable.
+                print(f"[rigid_object] disable_gravity unavailable for {cfg_name}: {exc}")
+
     def get_observations(self):
         translation, orientation = self.get_local_pose()
         scale = self.get_local_scale()

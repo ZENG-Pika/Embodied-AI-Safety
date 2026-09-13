@@ -355,8 +355,16 @@ class Place(BaseSkill):
             indices = np.random.choice(len(valid_rot_mats), CUROBO_BATCH_SIZE)
             return valid_rot_mats[indices]
 
-    def is_feasible(self, th=5):
-        return self.controller.num_plan_failed <= th
+    def is_feasible(self, th=None):
+        """Use the task-configured CuRobo retry budget for placement."""
+        if th is None:
+            task_cfg = getattr(self.task, "cfg", {}) or {}
+            data_cfg = task_cfg.get("data", {}) if hasattr(task_cfg, "get") else {}
+            th = self.skill_cfg.get(
+                "max_plan_failures",
+                data_cfg.get("max_consecutive_plan_failures", 20),
+            )
+        return self.controller.num_plan_failed <= int(th)
 
     def is_subtask_done(self, t_eps=1e-3, o_eps=5e-3):
         assert len(self.manip_list) != 0
@@ -373,7 +381,9 @@ class Place(BaseSkill):
 
     def is_done(self):
         if len(self.manip_list) == 0:
-            return True
+            # Do not treat an empty command list from a failed plan as a
+            # completed placement. Validate the configured placement metric.
+            return bool(self.is_success())
         if self.is_subtask_done(t_eps=self.skill_cfg.get("t_eps", 1e-3), o_eps=self.skill_cfg.get("o_eps", 5e-3)):
             self.manip_list.pop(0)
         # if self.is_success():

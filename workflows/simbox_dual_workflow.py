@@ -665,14 +665,84 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         except Exception:
             return False
 
+    def _articulation_result_target_reached(self, result):
+        """Recheck an articulated-object target at episode finalization.
+
+        A close/open skill can momentarily satisfy its threshold and then let
+        the joint rebound after contact is released.  Treating that transient
+        state as task success produced false-positive articulation episodes.
+        This check reads the live joint again after all skills have finished.
+        """
+        object_name = result.get("object_name")
+        art_obj = getattr(self.task, "objects", {}).get(object_name)
+        view = getattr(art_obj, "_articulation_view", None)
+        joint_index = getattr(art_obj, "object_joint_index", None)
+        if view is None or joint_index is None:
+            result["final_target_reached"] = False
+            return False
+        try:
+            current = self._scalar_value(view.get_joint_positions()[:, joint_index])
+            initial = self._scalar_value(result.get("initial_joint_position"))
+            threshold = abs(float(result.get("success_threshold", 0.0)))
+            mode = str(result.get("success_mode", "abs") or "abs").lower()
+            if current is None:
+                reached = False
+            elif mode == "zero":
+                # A close task must both finish near zero and demonstrate real
+                # articulation motion; this rejects objects initialized inside
+                # the target band without any robot actuation.
+                minimum_motion = float(result.get("minimum_joint_motion", 0.02))
+                reached = (
+                    abs(current) <= threshold
+                    and initial is not None
+                    and abs(current - initial) >= minimum_motion
+                )
+            elif initial is None:
+                reached = False
+            elif mode == "normal":
+                reached = current - initial >= threshold
+            else:
+                reached = abs(current - initial) >= threshold
+            result["final_joint_position"] = current
+            result["final_target_reached"] = bool(reached)
+            return bool(reached)
+        except Exception:
+            result["final_target_reached"] = False
+            return False
+
     def _record_articulation_skill_result(self, skill, success):
         name = str(getattr(skill, "name", "")).lower()
         if name not in {"open", "close", "push", "pull", "rotate", "turn", "press"}:
             return
+        art_obj = getattr(skill, "art_obj", None)
+        art_obj_name = None
+        skill_cfg = getattr(skill, "skill_cfg", {}) or {}
+        configured_objects = skill_cfg.get("objects", [])
+        if configured_objects:
+            art_obj_name = str(configured_objects[0])
+        initial = self._scalar_value(
+            getattr(art_obj, "articulation_initial_joint_position", None)
+        )
+        current = None
+        view = getattr(art_obj, "_articulation_view", None)
+        joint_index = getattr(art_obj, "object_joint_index", None)
+        if view is not None and joint_index is not None:
+            try:
+                current = self._scalar_value(view.get_joint_positions()[:, joint_index])
+            except Exception:
+                current = None
         self._articulation_skill_results.append({
             "skill": name,
+            "object_name": art_obj_name,
             "skill_success": bool(success),
             "target_reached": bool(self._articulation_target_reached(skill)),
+            "initial_joint_position": initial,
+            "joint_position_at_skill_end": current,
+            "success_mode": str(getattr(skill, "success_mode", "abs") or "abs").lower(),
+            "success_threshold": abs(
+                self._scalar_value(getattr(skill, "success_threshold", 0.0)) or 0.0
+            ),
+            "minimum_joint_motion": float(skill_cfg.get("minimum_joint_motion", 0.02)),
         })
 
     def _articulation_requirements_met(self):
@@ -680,7 +750,9 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
             return True
         results = getattr(self, "_articulation_skill_results", [])
         return bool(results) and all(
-            result.get("skill_success") and result.get("target_reached")
+            result.get("skill_success")
+            and result.get("target_reached")
+            and self._articulation_result_target_reached(result)
             for result in results
         )
 
@@ -852,15 +924,14 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 robot_name for robot_name in self.task.robots
                 if robot_name in str(key)
             ]
-            # Fixed world cameras (for example split_aloha_overview) do not
-            # contain a robot prefix. Record them under the first robot's
-            # logger namespace so LMDB/MP4 saving includes the view.
-            if not camera_names and "overview" in str(key).lower():
+            # Task-level world cameras (for example ``agentview`` and
+            # ``split_aloha_overview``) do not contain a robot prefix. Record
+            # them under the first robot's logger namespace so LMDB/MP4
+            # saving includes every configured camera view.
+            if not camera_names:
                 camera_names = [next(iter(self.task.robots), None)]
             for robot_name in camera_names:
-                if robot_name is not None and (
-                    robot_name in str(key) or "overview" in str(key).lower()
-                ):
+                if robot_name is not None:
                     camera_obs = None
                     if isinstance(observations, dict):
                         cameras = observations.get("cameras")

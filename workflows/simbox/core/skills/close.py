@@ -46,6 +46,7 @@ class Close(BaseSkill):
         ]
         self.collision_valid = True
         self.process_valid = True
+        self.plan_failed = False
         self.success_mode = self.planner_setting.get("success_mode", "zero")
 
     def setup_kpam(self):
@@ -67,6 +68,7 @@ class Close(BaseSkill):
         traj_keyframes, sample_times = self.planner.get_keypose()
         if len(traj_keyframes) == 0 and len(sample_times) == 0:
             print("No keyframes found, return empty manip_list")
+            self.plan_failed = True
             self.manip_list = []
             return
 
@@ -155,8 +157,16 @@ class Close(BaseSkill):
 
         return contact
 
-    def is_feasible(self, th=5):
-        return self.controller.num_plan_failed <= th
+    def is_feasible(self, th=None):
+        """Use the task-configured CuRobo retry budget for articulation moves."""
+        if th is None:
+            task_cfg = getattr(self.task, "cfg", {}) or {}
+            data_cfg = task_cfg.get("data", {}) if hasattr(task_cfg, "get") else {}
+            th = self.skill_cfg.get(
+                "max_plan_failures",
+                data_cfg.get("max_consecutive_plan_failures", 20),
+            )
+        return self.controller.num_plan_failed <= int(th)
 
     def is_subtask_done(self, t_eps=1e-3, o_eps=5e-3):
         assert len(self.manip_list) != 0
@@ -173,7 +183,15 @@ class Close(BaseSkill):
 
     def is_done(self):
         if len(self.manip_list) == 0:
-            return True
+            # An empty command list can mean either that the articulation
+            # motion really finished or that planning produced no keyframes.
+            # Only the measured target-joint/collision/process checks may
+            # classify it as complete; this prevents a pre-plan failure from
+            # becoming a semantic success.
+            done = bool(self.is_success())
+            if not done:
+                self.process_valid = False
+            return done
         if self.is_subtask_done():
             self.manip_list.pop(0)
             print("POP one manip cmd")
@@ -183,6 +201,9 @@ class Close(BaseSkill):
         return len(self.manip_list) == 0
 
     def is_success(self):
+        if self.plan_failed:
+            return False
+
         contact = self.get_contact()
 
         if self.skill_cfg.get("collision_valid", True):

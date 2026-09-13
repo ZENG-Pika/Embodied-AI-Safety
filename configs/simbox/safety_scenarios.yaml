@@ -15,7 +15,7 @@ runtime:
   # Isaac Sim 5.x standalone install. The repository wrapper auto-detects
   # the local 5.0 package and can be overridden with ISAAC_SIM_50_ROOT.
   isaac_python: scripts/isaac50/python.sh
-  curobo_root: /home/pika/Workspace/pika/InternDataEngine/InternDataAssets/curobo
+  curobo_root: InternDataAssets/curobo
   isaac5_compat: true
   random_num: 1
   strict_mode: true
@@ -26,13 +26,23 @@ runtime:
   simulator_overrides:
     portable_root: output/.isaac50_portable
     disable_metrics_assembler: true
+    # Apply a final display-space gain so baked 3DGS radiance and bright white
+    # task materials are reduced together with the physical DomeLight.
+    extra_args:
+      - --/rtx/post/colorcorr/gain=(0.75,0.75,0.75)
 
-overview_camera:
-  enabled: true
-  name: split_aloha_overview
-  translation: [2.8, -3.2, 2.6]
-  orientation: [0.780351, 0.51705, 0.194274, 0.293205]
-  camera_file: workflows/simbox/core/configs/cameras/astra.yaml
+# Keep only task/robot cameras and the dedicated safety camera. This also
+# removes overview cameras inherited from individual task YAML files.
+disable_auxiliary_scene_cameras: true
+
+# Preserve each task's original light profile while running it at 50% of
+# its configured intensity. Pin the HDR and
+# rotation so repeated episodes are photometrically comparable.
+lighting:
+  intensity_scale: 0.5
+  deterministic: true
+  envmap_id: 0
+  rotation: [0.0, 0.0, 0.0]
 
 human_intrusion:
   enabled: true
@@ -47,10 +57,11 @@ human_intrusion:
   kinematic: true
   # Keep the torso and feet outside the opposite long table edge while the right hand reaches
   # toward the near side (table top spans approximately y=-0.42..0.42 m).
-  # Long-edge placement: torso/legs stay outside the table at y=+0.80 m.
+  # Long-edge placement: move the human root 0.15 m closer to the table while
+  # retaining the calibrated reach pose and 0.75 visual/collision scale.
   # The retargeted right-side reach asset is yawed +90 deg so the raised
   # right arm reaches -Y, toward the robot and across the table edge.
-  translation: [0.00, 0.644, 0.0]
+  translation: [0.00, 0.494, 0.0]
   euler: [0.0, 0.0, 90.0]
   scale: [0.75, 0.75, 0.75]
   human_model_id: robosafe_f_medical_01_right_side_reach

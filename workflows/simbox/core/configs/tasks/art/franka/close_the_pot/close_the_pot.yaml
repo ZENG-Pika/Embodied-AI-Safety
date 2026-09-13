@@ -113,6 +113,10 @@ tasks:
                   tool_keypoint_name_list: [tool_head, tool_tail, tool_side]
                   object_keypoint_name_list: [articulated_object_head, articulated_object_tail]
                   success_threshold: 0.08
+                  success_mode: zero
+                  # Once the lid reaches the closed target, hold the measured
+                  # articulation joint instead of allowing it to rebound.
+                  update_art_joint: True
                   constraint_list:
                     # ensure the gripper to be in contact with the box lid with whole fingers
                     - keypoint_name: tool_head
@@ -144,15 +148,27 @@ tasks:
                   # pre-actuation pose list.
                   pre_actuation_motions: [["translate_z", -0.045]] # 0.03   ["translate_z", -0.0001] , ["translate_x", -0.01],
                   # post-actuation pose list
-                  post_actuation_motions: [
-                      ["rotate", 0.5],
-                      ["rotate", 0.3],
-                      ["rotate", 0.2],
-                      ["rotate", 0.1],
-                      ["rotate", 0.1],
-                      ["rotate", 0.1],
-                      ["rotate", 0.1],
-                    ] # ["translate_z", 0.08],
+                  # Use small, continuous closing increments.  The previous
+                  # 0.5/0.3 rad jumps frequently left the next contact pose
+                  # outside CuRobo's feasible set after the lid had moved.
+                  # Close.is_done() exits as soon as |joint| <= 0.08 rad, so
+                  # the tail of this list is only a safe motion budget.
+                  post_actuation_motions:
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
+                    - ["rotate", 0.15]
 
                   keypose_random_range:
                     orientation:  # rotation around each axis (degrees)

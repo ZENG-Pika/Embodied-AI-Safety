@@ -1284,9 +1284,16 @@ class BananaBaseTask(BaseTask):
                 intensity = random.uniform(cfg["intensity_range"][0], cfg["intensity_range"][1])
                 rotation = [random.uniform(cfg["rotation_range"][0], cfg["rotation_range"][1]) for _ in range(3)]
             else:
-                envmap_id = 0
-                intensity = 1000.0
-                rotation = [0.0, 0.0, 0.0]
+                envmap_id = int(cfg.get("envmap_id", 0))
+                if not 0 <= envmap_id < len(envmap_hdr_path_list):
+                    raise ValueError(
+                        f"env_map.envmap_id {envmap_id} is outside the available "
+                        f"HDR range [0, {len(envmap_hdr_path_list) - 1}]"
+                    )
+                intensity = float(cfg.get("intensity", 1000.0))
+                rotation = list(cfg.get("rotation", [0.0, 0.0, 0.0]))
+                if len(rotation) != 3:
+                    raise ValueError("env_map.rotation must contain [x, y, z]")
             dome_prim_path = f"{self.root_prim_path}/DomeLight"
             envmap_hdr_path = envmap_hdr_path_list[envmap_id]
 

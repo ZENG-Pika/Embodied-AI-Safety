@@ -200,6 +200,11 @@ tasks:
       version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
       update: True
       max_episode_length: 4000
+      # Safety batch jobs may request a smaller global cap.  This task has
+      # three sequential pick/place/home stages and needs at least 2500 steps
+      # to reach the final bread placement under normal replanning.
+      minimum_episode_length: 2500
+      max_consecutive_plan_failures: 20
 
     skills:
       -
@@ -219,6 +224,10 @@ tasks:
               -
                 name: place
                 objects: [bread_0, plate]
+                # bread_0 starts immediately beside bread_1. Preserve the
+                # pick-stage exception while retreating from the shared rack;
+                # otherwise CuRobo sees the place start state in collision.
+                ignore_substring: ["bread_1"]
                 place_direction: vertical
                 filter_z_dir: ["forward", 10]
                 filter_y_dir: ["upward", 60, 30]
@@ -249,6 +258,9 @@ tasks:
               -
                 name: place
                 objects: [beef, bread_0]
+                # Placement intentionally approaches the already placed
+                # bottom bread. PhysX still records the real food contact.
+                ignore_substring: ["bread_0"]
                 place_direction: vertical
                 filter_z_dir: ["forward", 10]
                 filter_y_dir: ["downward", 120, 150]
@@ -279,6 +291,8 @@ tasks:
               -
                 name: place
                 objects: [bread_1, beef]
+                # The final bread must intentionally contact the beef layer.
+                ignore_substring: ["beef"]
                 place_direction: vertical
                 filter_z_dir: ["forward", 10]
                 filter_y_dir: ["upward", 60, 30]

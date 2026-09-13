@@ -32,8 +32,13 @@ tasks:
         right_joint_home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         left_joint_home_std: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         right_joint_home_std: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        ignore_substring: ["material", "table"]
-        collision_include_substrings: ["plate_shelf", "tray_0", "tray_1"]
+        # The plate is the intentional support for the final fork/spoon
+        # placements. CuRobo must not reject those goal poses as a collision;
+        # PhysX remains authoritative for the actual contact. The shelf is a
+        # support for the initial plate, not a path obstacle, so keep it out
+        # of the global mesh world; it is still present in PhysX and logging.
+        ignore_substring: ["material", "table", "plate", "plate_shelf"]
+        collision_include_substrings: ["tray_0", "tray_1"]
     objects:
       -
         name: plate
@@ -47,6 +52,10 @@ tasks:
         # translation: [0.0, -0.25, 0.76]
         # euler: [90.0, 0.0, 0.0]
         scale: [1.0, 1.0, 1.0]
+        # Keep the plate fixed on the authored shelf while the first grasp
+        # plan is computed; the shelf is a thin support and may otherwise
+        # allow a small gravity drift before contact.
+        disable_gravity: true
       -
         name: plate_shelf
         path: basic/arrange_the_tableware/plate_shelf/shelf_0/Aligned_obj.usd
@@ -89,6 +98,9 @@ tasks:
         translation: [0.0, 0.0, 0.0]
         euler: [0.0, -90.0, 0.0]
         scale: [1.0, 1.0, 1.0]
+        # Keep the thin utensil at its reset pose while CuRobo plans the
+        # pre-grasp; otherwise it can settle through the tray before contact.
+        disable_gravity: true
       -
         name: spoon
         path: basic/arrange_the_tableware/spoon/spoon_0/Aligned_obj.usd
@@ -99,6 +111,7 @@ tasks:
         translation: [0.0, 0.0, 0.0]
         euler: [0.0, -90.0, 0.0]
         scale: [1.0, 1.0, 1.0]
+        disable_gravity: true
 
     regions:
       -
@@ -148,12 +161,17 @@ tasks:
         random_type: A_in_B_region_sampler
         random_config:
           x_bias: 0.0
+          # A_in_B keeps a 5 mm settling overlap by default.  Lift the fork
+          # above tray_0 so the grasp is not pushed into the tray bottom.
+          z_bias: 0.01
       -
         object: spoon
         target: tray_1
         random_type: A_in_B_region_sampler
         random_config:
           x_bias: 0.0
+          # Same clearance for the spoon in tray_1.
+          z_bias: 0.01
       -
         object: plate
         target: plate_shelf
@@ -201,7 +219,11 @@ tasks:
       collect_info: ""
       version: "v3.0, head camerea 1280x720, wrist 640x480, y 45 degrees"
       update: True
-      max_episode_length: 1300
+      # Three complete pick/place phases (plate, then fork and spoon) need
+      # substantially more time than a single-object task.
+      minimum_episode_length: 4000
+      max_episode_length: 4000
+      max_consecutive_plan_failures: 20
 
     skills:
       -
@@ -213,8 +235,24 @@ tasks:
                 objects: [plate]
                 filter_z_dir: ["forward", 80]
                 filter_x_dir: ["downward", 130]
+                # The plate has many valid annotations but only a subset is
+                # reachable from the randomized shelf pose. Search a larger
+                # deterministic set so one unlucky top-ranked candidate does
+                # not make the entire tableware episode stop before the
+                # fork/spoon stages.
+                grasp_candidate_count: 128
+                deterministic_grasp_selection: true
                 pre_grasp_offset: 0.05
-                gripper_change_steps: 10
+                gripper_change_steps: 20
+                # The plate starts inside the rack.  Keep the rack in the
+                # global CuRobo world, but relax it only while approaching the
+                # target so the inflated support geometry does not make every
+                # grasp candidate infeasible.
+                # The two trays are supports for later picks, not obstacles
+                # on the plate approach. Keep them out of this local planning
+                # world; PhysX still detects any real robot contact.
+                ignore_substring: ["plate_shelf", "tray_0", "tray_1"]
+                lift_th: 0.02
                 post_grasp_offset_min: 0.075
                 post_grasp_offset_max: 0.125
               -
@@ -243,16 +281,26 @@ tasks:
                 filter_z_dir: ["forward", 80]
                 filter_x_dir: ["downward", 130]
                 pre_grasp_offset: 0.05
-                gripper_change_steps: 10
-                # ignore_substring: ["tray_0"]
+                gripper_change_steps: 20
+                # The fork is physically inside tray_0.  Ignoring only its
+                # support during this pick preserves tray avoidance for all
+                # other skills while allowing the final contact pose.
+                ignore_substring: ["tray_0"]
+                lift_th: 0.02
                 post_grasp_offset_min: 0.125
                 post_grasp_offset_max: 0.175
               -
                 name: place
                 objects: [fork, plate]
+                # The spoon may still be held by the other arm and tray_1 is
+                # its source support. Neither should make fork placement
+                # infeasible while other environment geometry stays active.
+                ignore_substring: ["tray_1", "spoon", "plate_shelf"]
                 place_direction: vertical
-                filter_z_dir: ["forward", 20]
-                filter_x_dir: ["downward", 150]
+                # Keep the tool axis downward, but do not over-constrain its
+                # forward axis; the old 20/150 degree intersection left only
+                # a handful of valid rotations for the left arm.
+                filter_x_dir: ["downward", 120]
                 x_ratio_range: [-0.25, -0.15]
                 y_ratio_range: [0.30, 0.70]
                 pre_place_z_offset: 0.175
@@ -267,19 +315,26 @@ tasks:
               -
                 name: pick
                 objects: [spoon]
+                # Approach from above the raised tray surface.  Keep this
+                # narrow envelope so the parallel right-arm pick remains
+                # reachable and deterministic.
                 filter_z_dir: ["forward", 80]
                 filter_x_dir: ["downward", 130]
                 pre_grasp_offset: 0.05
-                gripper_change_steps: 10
-                # ignore_substring: ["tray_1"]
+                gripper_change_steps: 20
+                # Symmetric support exception for the spoon pick.
+                ignore_substring: ["tray_1"]
+                lift_th: 0.02
                 post_grasp_offset_min: 0.125
                 post_grasp_offset_max: 0.175
               -
                 name: place
                 objects: [spoon, plate]
+                # Symmetric exception for spoon placement.
+                ignore_substring: ["tray_0", "fork", "plate_shelf"]
                 place_direction: vertical
-                filter_z_dir: ["forward", 20]
-                filter_x_dir: ["downward", 150]
+                # Same relaxed orientation envelope for the right arm.
+                filter_x_dir: ["downward", 120]
                 x_ratio_range: [1.15, 1.25]
                 y_ratio_range: [0.30, 0.70]
                 pre_place_z_offset: 0.175
