@@ -391,6 +391,299 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 joint_indices=indices,
             )
 
+    @staticmethod
+    def _capture_joint_brake_state(
+        task,
+        total_steps,
+        physics_dt_s,
+        *,
+        policy_total_steps=None,
+        start_brake_step=0,
+    ):
+        """Snapshot q/dq and construct a constant-deceleration stop target."""
+        total_steps = max(1, int(total_steps))
+        physics_dt_s = max(1.0e-6, float(physics_dt_s))
+        duration_s = total_steps * physics_dt_s
+        result = {
+            "total_steps": total_steps,
+            "policy_total_steps": int(policy_total_steps or total_steps),
+            "start_brake_step": max(0, int(start_brake_step)),
+            "physics_dt_s": physics_dt_s,
+            "robots": {},
+        }
+        for name, robot in task.robots.items():
+            joint_state = robot.get_joints_state()
+            q0 = np.asarray(joint_state.positions, dtype=float).reshape(-1).copy()
+            dq0 = np.asarray(joint_state.velocities, dtype=float).reshape(-1).copy()
+            if len(dq0) != len(q0):
+                dq0 = np.zeros_like(q0)
+            dq0[~np.isfinite(dq0)] = 0.0
+            q_stop = q0 + 0.5 * dq0 * duration_s
+            lower = upper = None
+            try:
+                limits = np.asarray(robot._articulation_view.get_dof_limits())[0]
+                if limits.shape == (len(q0), 2):
+                    lower = limits[:, 0].copy()
+                    upper = limits[:, 1].copy()
+                    q_stop = np.clip(q_stop, lower, upper)
+            except Exception:
+                pass
+            result["robots"][name] = {
+                "q0": q0,
+                "dq0": dq0,
+                "q_stop": q_stop,
+                "lower": lower,
+                "upper": upper,
+            }
+        return result
+
+    @staticmethod
+    def _joint_brake_action(task, brake_state, decision):
+        """Generate q(t) whose desired velocity decreases linearly to zero."""
+        total_steps = max(1, int(brake_state["total_steps"]))
+        dt = float(brake_state["physics_dt_s"])
+        duration_s = total_steps * dt
+        global_step = max(0, int(decision.get("brake_step", 0)))
+        brake_step = min(
+            total_steps,
+            max(0, global_step - int(brake_state.get("start_brake_step", 0))),
+        )
+        t = brake_step * dt
+        result = {}
+        for name, state in brake_state["robots"].items():
+            if name not in task.robots:
+                continue
+            if decision.get("action") == "linear_deceleration" and duration_s > 0.0:
+                target = state["q0"] + state["dq0"] * (
+                    t - 0.5 * t * t / duration_s
+                )
+            else:
+                target = state["q_stop"]
+            if state.get("lower") is not None:
+                target = np.clip(target, state["lower"], state["upper"])
+            result[name] = {
+                "joint_positions": np.asarray(target, dtype=float).copy(),
+                "joint_indices": np.arange(len(target), dtype=np.int64),
+                "raw_action": [],
+            }
+        return result
+
+    @staticmethod
+    def _fixed_hold_action(task, hold_positions):
+        result = {}
+        for name, positions in hold_positions.items():
+            if name not in task.robots:
+                continue
+            positions = np.asarray(positions, dtype=float).reshape(-1).copy()
+            result[name] = {
+                "joint_positions": positions,
+                "joint_indices": np.arange(len(positions), dtype=np.int64),
+                "raw_action": [],
+            }
+        return result
+
+    @staticmethod
+    def _interpolate_action_dict(start_action, end_action, alpha):
+        """Interpolate absolute joint targets for continuous L1 retiming."""
+        alpha = min(1.0, max(0.0, float(alpha)))
+        if not start_action:
+            return deepcopy(end_action)
+        if not end_action:
+            return deepcopy(start_action)
+        result = {}
+        for name, end_payload in end_action.items():
+            start_payload = start_action.get(name)
+            if not isinstance(start_payload, dict) or not isinstance(end_payload, dict):
+                result[name] = deepcopy(end_payload)
+                continue
+            start_indices = np.asarray(start_payload.get("joint_indices", []), dtype=np.int64).reshape(-1)
+            end_indices = np.asarray(end_payload.get("joint_indices", []), dtype=np.int64).reshape(-1)
+            start_targets = np.asarray(start_payload.get("joint_positions", []), dtype=float)
+            end_targets = np.asarray(end_payload.get("joint_positions", []), dtype=float)
+            if (
+                not np.array_equal(start_indices, end_indices)
+                or start_targets.shape != end_targets.shape
+            ):
+                result[name] = deepcopy(end_payload if alpha >= 1.0 else start_payload)
+                continue
+            targets = start_targets + alpha * (end_targets - start_targets)
+            updated = deepcopy(end_payload)
+            updated["joint_positions"] = targets
+            index_to_target = {
+                int(index): float(value)
+                for index, value in zip(end_indices.tolist(), targets.reshape(-1).tolist())
+            }
+            for raw_action in updated.get("raw_action", []) or []:
+                if not isinstance(raw_action, dict):
+                    continue
+                raw_indices = np.asarray(raw_action.get("joint_indices", []), dtype=np.int64).reshape(-1)
+                raw_targets = np.asarray(raw_action.get("joint_positions", []), dtype=float).reshape(-1)
+                if len(raw_indices) != len(raw_targets):
+                    continue
+                adjusted = np.asarray([
+                    index_to_target.get(int(index), float(value))
+                    for index, value in zip(raw_indices, raw_targets)
+                ])
+                raw_action["joint_positions"] = adjusted
+                arm_size = len(np.asarray(raw_action.get("arm_action", [])).reshape(-1))
+                gripper_size = len(np.asarray(raw_action.get("gripper_action", [])).reshape(-1))
+                if arm_size:
+                    raw_action["arm_action"] = adjusted[:arm_size]
+                if gripper_size:
+                    raw_action["gripper_action"] = adjusted[
+                        arm_size:arm_size + gripper_size
+                    ]
+            result[name] = updated
+        return result
+
+    @staticmethod
+    def _apply_intervention_to_action(task, action_dict, decision):
+        """Apply L2 braking/L3 holding to absolute joint targets.
+
+        L1 is implemented by slowing the nominal trajectory clock and
+        repeating absolute waypoints, which preserves the planner's final
+        target. Joint-position interpolation remains appropriate for L2's
+        finite braking window. A zero scale sends measured positions as hold
+        targets.
+        """
+        if not decision:
+            return action_dict
+        if (
+            decision.get("level_before_action") == "L1"
+            and decision.get("action") == "speed_limit"
+        ):
+            return action_dict
+        scale = float(decision.get("command_scale", 1.0))
+        scale = min(1.0, max(0.0, scale))
+        if scale >= 1.0:
+            return action_dict
+
+        if scale <= 0.0:
+            hold_action = {}
+            for name, robot in task.robots.items():
+                positions = np.asarray(robot.get_joints_state().positions).reshape(-1).copy()
+                hold_action[name] = {
+                    "joint_positions": positions,
+                    "joint_indices": np.arange(len(positions), dtype=np.int64),
+                    "raw_action": [],
+                }
+            return hold_action
+
+        scaled_action = {}
+        for name, payload in action_dict.items():
+            if name not in task.robots or not isinstance(payload, dict):
+                scaled_action[name] = payload
+                continue
+            targets = np.asarray(payload.get("joint_positions"), dtype=float)
+            indices = np.asarray(payload.get("joint_indices"), dtype=np.int64).reshape(-1)
+            flat_targets = targets.reshape(-1)
+            current = np.asarray(
+                task.robots[name].get_joints_state().positions, dtype=float
+            ).reshape(-1)
+            if len(flat_targets) != len(indices) or any(
+                index < 0 or index >= len(current) for index in indices
+            ):
+                scaled_action[name] = payload
+                continue
+            adjusted = current[indices] + scale * (flat_targets - current[indices])
+            updated = dict(payload)
+            updated["joint_positions"] = adjusted.reshape(targets.shape)
+            index_to_target = {
+                int(index): float(value)
+                for index, value in zip(indices.tolist(), adjusted.tolist())
+            }
+            scaled_raw_actions = []
+            for raw_action in payload.get("raw_action", []) or []:
+                if not isinstance(raw_action, dict):
+                    scaled_raw_actions.append(raw_action)
+                    continue
+                raw_updated = dict(raw_action)
+                raw_indices = np.asarray(
+                    raw_action.get("joint_indices", []), dtype=np.int64
+                ).reshape(-1)
+                raw_targets = np.asarray(
+                    raw_action.get("joint_positions", []), dtype=float
+                ).reshape(-1)
+                if len(raw_indices) == len(raw_targets):
+                    raw_adjusted = np.asarray([
+                        index_to_target.get(int(index), float(value))
+                        for index, value in zip(raw_indices, raw_targets)
+                    ])
+                    raw_updated["joint_positions"] = raw_adjusted
+                    arm_size = len(np.asarray(raw_action.get("arm_action", [])).reshape(-1))
+                    gripper_size = len(np.asarray(raw_action.get("gripper_action", [])).reshape(-1))
+                    if arm_size:
+                        raw_updated["arm_action"] = raw_adjusted[:arm_size]
+                    if gripper_size:
+                        raw_updated["gripper_action"] = raw_adjusted[
+                            arm_size:arm_size + gripper_size
+                        ]
+                scaled_raw_actions.append(raw_updated)
+            updated["raw_action"] = scaled_raw_actions
+            scaled_action[name] = updated
+        return scaled_action
+
+    @staticmethod
+    def _record_intervention_training_metadata(
+        logger, task, decision, observation, stop_state=None
+    ):
+        """Store per-frame masks next to LMDB actions for dataset filtering."""
+        if not decision or not observation:
+            return
+        level_before = str(decision.get("level_before_action", "L0"))
+        level_after = str(observation.get("level", "L0"))
+        control_eligible = bool(
+            decision.get("control_training_eligible", True) and level_after != "L3"
+        )
+        for robot_name in task.robots:
+            logger.add_scalar_data(
+                robot_name, "safety.intervention_level", level_before
+            )
+            logger.add_scalar_data(
+                robot_name, "safety.risk_level_before_action", level_before
+            )
+            logger.add_scalar_data(
+                robot_name, "safety.risk_level_after_action", level_after
+            )
+            logger.add_scalar_data(
+                robot_name,
+                "safety.intervention_action",
+                str(decision.get("action", "none")),
+            )
+            logger.add_scalar_data(
+                robot_name,
+                "safety.intervention_command_scale",
+                float(decision.get("command_scale", 1.0)),
+            )
+            logger.add_scalar_data(
+                robot_name,
+                "safety.trajectory_advanced",
+                bool(decision.get("trajectory_advanced", True)),
+            )
+            logger.add_scalar_data(
+                robot_name,
+                "safety.control_training_eligible",
+                control_eligible,
+            )
+            logger.add_scalar_data(
+                robot_name,
+                "safety.perception_training_eligible",
+                True,
+            )
+            if stop_state:
+                max_joint_speed = stop_state.get("max_joint_speed")
+                if max_joint_speed is not None:
+                    logger.add_scalar_data(
+                        robot_name,
+                        "safety.max_joint_speed",
+                        float(max_joint_speed),
+                    )
+                logger.add_scalar_data(
+                    robot_name,
+                    "safety.stop_confirmed",
+                    bool(stop_state.get("stop_confirmed", False)),
+                )
+
     def _randomization_layout_mem(self):
         # Reset world
         self.world.reset()
@@ -1401,6 +1694,36 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 raw_gt["planner_log"]["safety_gate_status"] = physx_data.get("safety_gate_status")
                 raw_gt["planner_log"]["low_level_command_sent"] = physx_data.get(
                     "low_level_command_sent"
+                )
+                raw_gt["planner_log"]["intervention_level"] = physx_data.get(
+                    "intervention_level"
+                )
+                raw_gt["planner_log"]["intervention_action"] = physx_data.get(
+                    "intervention_action"
+                )
+                raw_gt["planner_log"]["intervention_command_scale"] = physx_data.get(
+                    "intervention_command_scale"
+                )
+                raw_gt["planner_log"]["intervention_reasons"] = physx_data.get(
+                    "intervention_reasons"
+                )
+                raw_gt["planner_log"]["intervention_observation"] = physx_data.get(
+                    "intervention_observation"
+                )
+                raw_gt["planner_log"]["control_training_eligible"] = physx_data.get(
+                    "control_training_eligible"
+                )
+                raw_gt["planner_log"]["perception_training_eligible"] = physx_data.get(
+                    "perception_training_eligible"
+                )
+                raw_gt["planner_log"]["intervention_level_before_action"] = physx_data.get(
+                    "intervention_level_before_action"
+                )
+                raw_gt["planner_log"]["intervention_stop_state"] = physx_data.get(
+                    "intervention_stop_state"
+                )
+                raw_gt["planner_log"]["intervention_policy_config"] = physx_data.get(
+                    "intervention_policy_config"
                 )
                 raw_gt["planner_log"]["execution_status"] = getattr(
                     self, "_execution_status", "unknown"
@@ -3568,6 +3891,18 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 sg_cfg = self._safety_eval_cfg.get("safety_gate", {})
                 _physx_collector.configure_safety_gate(sg_cfg)
                 _physx_collector.configure_safety_context(self._safety_eval_cfg)
+                intervention_cfg = dict(
+                    self._safety_eval_cfg.get("intervention_policy", {}) or {}
+                )
+                try:
+                    intervention_cfg["physics_dt_s"] = float(
+                        self.world.get_physics_dt()
+                    )
+                except Exception:
+                    intervention_cfg.setdefault("physics_dt_s", 1.0 / 30.0)
+                _physx_collector.configure_intervention_policy(
+                    intervention_cfg
+                )
             except Exception as e:
                 print(f"[safety_risk] Warning: PhysX collector init failed: {e}")
 
@@ -3616,8 +3951,32 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     pose, _ = obj.get_world_pose()
                     self._policy_initial_z[name] = float(pose[2])
 
+        # L1 retimes absolute trajectories with interpolation. L2/L3 freeze
+        # the nominal source and use a dedicated brake/hold controller.
+        _l1_anchor_action = self._fixed_hold_action(
+            self.task, self._capture_robot_joint_positions()
+        )
+        _l1_pending_action = None
+        _l1_pending_record_flag = True
+        _l1_phase = 0.0
+        _l1_repeated_frames = 0
+        _joint_brake_state = None
+        _emergency_hold_positions = None
+
+        # Prime the stateful HS policy from the settled initial geometry. This
+        # prevents an unconstrained frame-0 command and gives L1 a measured
+        # joint-position anchor for its first interpolated waypoint.
+        if _physx_collector is not None:
+            try:
+                _physx_collector.prime_intervention_state(self.task)
+            except Exception as _prime_err:
+                print(f"[intervention] initial risk priming failed: {_prime_err}")
+
         while not (
-            step_id >= max_episode_length
+            (
+                (step_id - _l1_repeated_frames) >= max_episode_length
+                and _l1_pending_action is None
+            )
             or (not policy_enabled and not self.skills and not episode_success)
             or (not should_continue)
         ):
@@ -3625,6 +3984,11 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 self.world.get_observations(), step_id
             )
             action_dict = {}
+            _intervention_decision = (
+                _physx_collector.get_intervention_decision(step_id)
+                if _physx_collector is not None
+                else None
+            )
 
             # ── Safety gate: suppress actions if stop is active ──
             if _safety_stop_active:
@@ -3632,11 +3996,91 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     if hasattr(ctrl, 'cmd_plan'):
                         ctrl.cmd_plan = None
             record_flag = True
-            if random_dp_enabled:
+            _decision_level = str(
+                (_intervention_decision or {}).get("level_before_action", "L0")
+            )
+            _decision_action = str(
+                (_intervention_decision or {}).get("action", "none")
+            )
+            _is_l1 = _decision_level == "L1" and _decision_action == "speed_limit"
+            _is_stop_intervention = _decision_level in {"L2", "L3"}
+            _source_action_requested = not _is_stop_intervention
+            _allow_skill_state_update = not _is_stop_intervention
+
+            if _decision_level == "L2":
+                _l1_repeated_frames += 1
+                total_steps = max(
+                    1, int((_intervention_decision or {}).get("brake_total_steps", 1))
+                )
+                physics_dt_s = float(
+                    getattr(
+                        getattr(_physx_collector, "_intervention_policy", None),
+                        "physics_dt_s",
+                        1.0 / 30.0,
+                    )
+                )
+                if (
+                    _joint_brake_state is None
+                    or total_steps < int(_joint_brake_state["policy_total_steps"])
+                ):
+                    global_brake_step = max(
+                        1, int((_intervention_decision or {}).get("brake_step", 1))
+                    )
+                    remaining_steps = max(
+                        1, total_steps - global_brake_step + 1
+                    )
+                    _joint_brake_state = self._capture_joint_brake_state(
+                        self.task,
+                        remaining_steps,
+                        physics_dt_s,
+                        policy_total_steps=total_steps,
+                        start_brake_step=global_brake_step - 1,
+                    )
+                action_dict = self._joint_brake_action(
+                    self.task, _joint_brake_state, _intervention_decision or {}
+                )
+            elif _decision_level == "L3":
+                _l1_repeated_frames += 1
+                if _emergency_hold_positions is None:
+                    _emergency_hold_positions = self._capture_robot_joint_positions()
+                    for ctrl in self.controllers.values():
+                        if hasattr(ctrl, "cmd_plan"):
+                            ctrl.cmd_plan = None
+                action_dict = self._fixed_hold_action(
+                    self.task, _emergency_hold_positions
+                )
+            elif _is_l1 and _l1_anchor_action and _l1_pending_action:
+                _source_action_requested = False
+                _l1_repeated_frames += 1
+                _l1_phase += float(
+                    (_intervention_decision or {}).get("command_scale", 0.5)
+                )
+                alpha = min(1.0, _l1_phase)
+                action_dict = self._interpolate_action_dict(
+                    _l1_anchor_action, _l1_pending_action, alpha
+                )
+                record_flag = _l1_pending_record_flag
+                _allow_skill_state_update = alpha >= 1.0
+                if alpha >= 1.0:
+                    _l1_anchor_action = deepcopy(_l1_pending_action)
+                    _l1_pending_action = None
+                    _l1_phase = max(0.0, _l1_phase - 1.0)
+            elif not _is_l1 and _l1_pending_action:
+                # Finish an in-flight slowed segment before returning to the
+                # normal trajectory clock; never skip its final waypoint.
+                _source_action_requested = False
+                _l1_repeated_frames += 1
+                action_dict = deepcopy(_l1_pending_action)
+                record_flag = _l1_pending_record_flag
+                _l1_anchor_action = deepcopy(_l1_pending_action)
+                _l1_pending_action = None
+                _l1_phase = 0.0
+
+            if _source_action_requested and random_dp_enabled:
                 action_dict = self._random_diffusion_action(obs, random_dp_policy)
-            elif trained_dp_enabled:
+            elif _source_action_requested and trained_dp_enabled:
                 action_dict = self._trained_diffusion_action(obs, trained_dp_policy)
-            elif self.skills and should_continue:
+            elif _source_action_requested and self.skills and should_continue:
                 # Process current skills
                 current_skills = self.skills[0]
                 for robot_name, skill_sequences in current_skills.items():
@@ -3675,7 +4119,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                                             lr_name = getattr(ctrl, 'lr_name', robot_name)
                                             _physx_collector.capture_planned_trajectory(ctrl, arm_name=lr_name)
 
-            elif not self.skills and episode_success:
+            elif _source_action_requested and not self.skills and episode_success:
                 print("Task is successful")
                 end = True
                 # Continue real physics after task completion so placement
@@ -3709,7 +4153,52 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                 should_continue = False
                 break
 
-            command_sent = bool(action_dict) and not _safety_stop_active
+            if _source_action_requested and _is_l1 and action_dict:
+                if not _l1_anchor_action:
+                    _l1_anchor_action = deepcopy(action_dict)
+                    _l1_pending_action = None
+                    _l1_phase = 0.0
+                else:
+                    _l1_pending_action = deepcopy(action_dict)
+                    _l1_pending_record_flag = record_flag
+                    _l1_phase += float(
+                        (_intervention_decision or {}).get("command_scale", 0.5)
+                    )
+                    alpha = min(1.0, _l1_phase)
+                    action_dict = self._interpolate_action_dict(
+                        _l1_anchor_action, _l1_pending_action, alpha
+                    )
+                    _allow_skill_state_update = alpha >= 1.0
+                    if alpha >= 1.0:
+                        _l1_anchor_action = deepcopy(_l1_pending_action)
+                        _l1_pending_action = None
+                        _l1_phase = max(0.0, _l1_phase - 1.0)
+            elif _source_action_requested and not _is_l1:
+                _l1_anchor_action = deepcopy(action_dict) if action_dict else None
+                _l1_pending_action = None
+                _l1_phase = 0.0
+
+            if _intervention_decision is not None:
+                _intervention_decision["trajectory_advanced"] = bool(
+                    _source_action_requested
+                )
+
+            # Apply the intervention derived from the previous physics frame.
+            # L1 is already continuously retimed above. L2/L3 are already
+            # generated by the dedicated brake/hold controller above.
+            # This is the action that reaches task.apply_action and is the
+            # training target stored by the logger.
+            if not _is_stop_intervention:
+                action_dict = self._apply_intervention_to_action(
+                    self.task, action_dict, _intervention_decision
+                )
+            if _safety_stop_active:
+                action_dict = self._apply_intervention_to_action(
+                    self.task,
+                    action_dict,
+                    {"command_scale": 0.0},
+                )
+            command_sent = bool(action_dict)
             if command_sent:
                 self._execution_started = True
             if record_flag:
@@ -3732,6 +4221,20 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     _physx_collector.record_low_level_command_sent(
                         step_id, command_sent
                     )
+                    _intervention_observation = _physx_collector.observe_intervention_after_step(
+                        step_id, _intervention_decision
+                    )
+                    _intervention_stop_state = (
+                        _physx_collector.update_intervention_stop_state(self.task)
+                    )
+                    if record_flag:
+                        self._record_intervention_training_metadata(
+                            self.logger,
+                            self.task,
+                            _intervention_decision,
+                            _intervention_observation,
+                            _intervention_stop_state,
+                        )
                 except Exception as _record_err:
                     print(f"[safety_risk] low-level command record failed at step {step_id}: {_record_err}")
 
@@ -3752,7 +4255,33 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     _safety_stop_active = False
 
             step_id += 1
-            if trained_dp_enabled:
+            if (
+                _intervention_decision
+                and _intervention_decision.get("terminate_after_step", False)
+            ):
+                level = _intervention_decision.get("level_before_action", "L2")
+                self._execution_status = (
+                    "l3_perception_only_emergency_stop"
+                    if level == "L3"
+                    else "l2_protective_stop"
+                )
+                episode_success = False
+                should_continue = False
+                end = True
+                length = step_id
+                stop_verified = bool(
+                    _intervention_decision.get("stop_verified", False)
+                )
+                stop_timeout = bool(
+                    _intervention_decision.get("stop_timeout", False)
+                )
+                if stop_timeout and not stop_verified:
+                    self._execution_status += "_timeout"
+                print(
+                    f"[intervention] {level} stop completed at step {step_id}; "
+                    f"verified={stop_verified}, timeout={stop_timeout}"
+                )
+            if should_continue and trained_dp_enabled:
                 lifted, _, _ = self._trained_policy_lift_status()
                 trained_success_streak = trained_success_streak + 1 if lifted else 0
                 if trained_stop_on_success and trained_success_streak >= trained_success_hold_steps:
@@ -3773,17 +4302,26 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
                     )
                     self._close_trained_diffusion_policy(trained_dp_policy)
                     break
-            if self.skills and not policy_enabled:
+            if (
+                should_continue
+                and _allow_skill_state_update
+                and self.skills
+                and not policy_enabled
+            ):
                 episode_success, should_continue = self.update_skill_states(
                     self.skills, episode_success, should_continue
                 )
 
-        if random_dp_enabled and step_id >= max_episode_length:
+        _nominal_action_steps = step_id - _l1_repeated_frames
+        if random_dp_enabled and _nominal_action_steps >= max_episode_length:
             # Store a completed rollout even though an untrained policy is not
             # expected to satisfy the task semantics.
             end = True
             length = step_id
-            print(f"[random_dp] rollout complete ({step_id} steps, task_success=false)")
+            print(
+                f"[random_dp] rollout complete ({step_id} physics steps, "
+                f"{_nominal_action_steps} nominal actions, task_success=false)"
+            )
         elif trained_dp_enabled and not end:
             episode_success = self._finalize_trained_policy_rollout(trained_dp_policy)
             end = True
@@ -3797,7 +4335,7 @@ class SimBoxDualWorkFlow(NimbusWorkFlow):
         # CuRobo skills must prove actual execution and, for articulation
         # tasks, reach the configured object joint target before success.
         if not policy_enabled:
-            if step_id >= max_episode_length and not end:
+            if _nominal_action_steps >= max_episode_length and not end:
                 episode_success = False
                 self._execution_status = "max_episode_steps"
             episode_success = self._validate_scripted_success(episode_success)

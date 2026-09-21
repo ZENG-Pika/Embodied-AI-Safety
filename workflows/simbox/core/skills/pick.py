@@ -117,6 +117,19 @@ class Pick(BaseSkill):
         self.process_valid = True
         self.plan_failed = False
         self.obj_init_trans = deepcopy(self.pick_obj.get_local_pose()[0])
+        # Physical-grasp evidence is collected independently from CuRobo's
+        # planner attachment.  ``attach_obj`` only changes the planner world;
+        # it must never by itself make a pick look successful.
+        self._contact_seen_frames = 0
+        self._contact_samples = []
+        self._first_contact_obj_z = None
+        self._first_contact_ee_z = None
+        self._max_contact_obj_lift = 0.0
+        self._max_contact_ee_lift = 0.0
+        self._close_phase_started = False
+        self._strict_pick_validation = bool(
+            self.skill_cfg.get("strict_pick_validation", True)
+        )
         final_gripper_state = self.skill_cfg.get("final_gripper_state", -1)
         if final_gripper_state == 1:
             self.gripper_cmd = "open_gripper"
@@ -267,7 +280,12 @@ class Pick(BaseSkill):
         )
 
         # Pre-grasp
-        cmd = (p_base_ee_pregrasps[index], q_base_ee_pregrasps[index], "open_gripper", {})
+        cmd = (
+            p_base_ee_pregrasps[index],
+            q_base_ee_pregrasps[index],
+            "open_gripper",
+            {"phase": "pregrasp", "force_replan": True},
+        )
         manip_list.append(cmd)
         if self.skill_cfg.get("pre_grasp_hold_vec_weight", None) is not None:
             cmd = (
@@ -279,12 +297,27 @@ class Pick(BaseSkill):
             manip_list.append(cmd)
 
         # Grasp
-        cmd = (p_base_ee_grasps[index], q_base_ee_grasps[index], "open_gripper", {})
+        cmd = (
+            p_base_ee_grasps[index],
+            q_base_ee_grasps[index],
+            "open_gripper",
+            {"phase": "grasp", "force_replan": True},
+        )
         manip_list.append(cmd)
-        cmd = (p_base_ee_grasps[index], q_base_ee_grasps[index], self.gripper_cmd, {})
-        manip_list.extend(
-            [cmd] * self.skill_cfg.get("gripper_change_steps", 40)
-        )  # Default we use 40 steps to make sure the gripper is fully closed
+        gripper_steps = int(self.skill_cfg.get("gripper_change_steps", 40))
+        for close_idx in range(max(1, gripper_steps)):
+            # Replan once when the gripper-close phase starts.  The remaining
+            # close frames hold that planned arm pose while the fingers move.
+            cmd = (
+                p_base_ee_grasps[index],
+                q_base_ee_grasps[index],
+                self.gripper_cmd,
+                {
+                    "phase": "gripper_close",
+                    "force_replan": close_idx == 0,
+                },
+            )
+            manip_list.append(cmd)
         ignore_substring = deepcopy(self.controller.ignore_substring + self.skill_cfg.get("ignore_substring", []))
         cmd = (
             p_base_ee_grasps[index],
@@ -297,7 +330,11 @@ class Pick(BaseSkill):
             p_base_ee_grasps[index],
             q_base_ee_grasps[index],
             "attach_obj",
-            {"obj_prim_path": self.pick_obj.mesh_prim_path},
+            {
+                "obj_prim_path": self.pick_obj.mesh_prim_path,
+                "phase": "attach",
+                "force_replan": True,
+            },
         )
         manip_list.append(cmd)
 
@@ -308,7 +345,12 @@ class Pick(BaseSkill):
         if post_grasp_offset:
             p_base_ee_postgrasps = deepcopy(p_base_ee_grasps)
             p_base_ee_postgrasps[index][2] += post_grasp_offset
-            cmd = (p_base_ee_postgrasps[index], q_base_ee_grasps[index], self.gripper_cmd, {})
+            cmd = (
+                p_base_ee_postgrasps[index],
+                q_base_ee_grasps[index],
+                self.gripper_cmd,
+                {"phase": "lift", "force_replan": True},
+            )
             manip_list.append(cmd)
 
         # Whether return to pre-grasp
@@ -423,10 +465,89 @@ class Pick(BaseSkill):
             return T_base_ee
 
     def get_contact(self, contact_threshold=0.0):
-        contact = np.abs(self.pickcontact_view.get_contact_force_matrix()).squeeze()
-        contact = np.sum(contact, axis=-1)
-        indices = np.where(contact > contact_threshold)[0]
+        try:
+            raw_contact = self.pickcontact_view.get_contact_force_matrix()
+            contact = np.asarray(np.abs(raw_contact), dtype=float)
+            if contact.ndim == 0:
+                contact = contact.reshape(1)
+            elif contact.ndim >= 1:
+                contact = np.sum(contact, axis=-1).reshape(-1)
+            indices = np.where(contact > float(contact_threshold))[0]
+        except Exception as exc:  # keep the semantic result conservative
+            print(f"[pick_contact] unavailable for {self.pick_obj.name}: {exc}")
+            contact = np.zeros(0, dtype=float)
+            indices = np.zeros(0, dtype=int)
         return contact, indices
+
+    def _sample_physical_grasp(self):
+        """Accumulate contact/follow evidence from the live PhysX state."""
+        # The contact view is filtered to the gripper links, but the object
+        # can still touch a finger during the open pre-grasp approach.  Only
+        # begin counting evidence once the active skill command has entered
+        # the actual close phase; otherwise a pre-grasp bump could be mistaken
+        # for a successful grasp.
+        if self.manip_list:
+            active_fn = self.manip_list[0][2]
+            if active_fn == self.gripper_cmd:
+                self._close_phase_started = True
+        if not self._close_phase_started:
+            return
+        threshold = float(self.skill_cfg.get("contact_force_threshold_n", 0.01))
+        contact, indices = self.get_contact(contact_threshold=threshold)
+        if self.gripper_cmd != "close_gripper" or len(indices) == 0:
+            return
+
+        self._contact_seen_frames += 1
+        obj_pos = np.asarray(self.pick_obj.get_local_pose()[0], dtype=float)
+        try:
+            ee_pos, _ = self.controller.get_ee_pose()
+            ee_pos = np.asarray(ee_pos, dtype=float)
+            if self._first_contact_obj_z is None:
+                self._first_contact_obj_z = float(obj_pos[2])
+                self._first_contact_ee_z = float(ee_pos[2])
+            self._max_contact_obj_lift = max(
+                self._max_contact_obj_lift,
+                float(obj_pos[2]) - self._first_contact_obj_z,
+            )
+            self._max_contact_ee_lift = max(
+                self._max_contact_ee_lift,
+                float(ee_pos[2]) - self._first_contact_ee_z,
+            )
+            self._contact_samples.append(obj_pos - ee_pos)
+            # Avoid unbounded episode memory while retaining enough samples to
+            # detect an object that moves independently after finger closure.
+            self._contact_samples = self._contact_samples[-30:]
+        except Exception as exc:
+            print(f"[pick_contact] relative pose unavailable: {exc}")
+
+    def _physical_attachment_ok(self, lift_delta):
+        """Require real contact plus object motion consistent with the lift."""
+        min_frames = int(self.skill_cfg.get("min_contact_frames", 2))
+        if self._contact_seen_frames < max(1, min_frames):
+            return False
+
+        lift_th = float(self.skill_cfg.get("lift_th", 0.0))
+        if lift_th > 0.0 and lift_delta <= lift_th:
+            return False
+
+        if self._first_contact_obj_z is not None and self._first_contact_ee_z is not None:
+            # Use the maximum lift observed while contact was live.  Some
+            # skills optionally return to pre-grasp after lifting; checking
+            # only the final EE pose would reject an otherwise valid grasp.
+            if (
+                self._max_contact_obj_lift <= max(0.5 * lift_th, 0.005)
+                or self._max_contact_ee_lift <= 0.0
+            ):
+                return False
+
+        if len(self._contact_samples) >= 2:
+            samples = np.asarray(self._contact_samples, dtype=float)
+            tolerance = float(
+                self.skill_cfg.get("attachment_relative_tolerance_m", 0.05)
+            )
+            if float(np.ptp(samples, axis=0).max()) > tolerance:
+                return False
+        return True
 
     def is_feasible(self, th=None):
         """Allow task-level planner retry budgets to reach the skill.
@@ -459,6 +580,7 @@ class Pick(BaseSkill):
         return np.logical_or(pose_flag, self.plan_flag)
 
     def is_done(self):
+        self._sample_physical_grasp()
         if len(self.manip_list) == 0:
             # Empty can mean a successful final command or an infeasible
             # pre-plan. Require the physical pick check in both cases.
@@ -473,20 +595,20 @@ class Pick(BaseSkill):
     def is_success(self):
         flag = not self.plan_failed
 
-        _, indices = self.get_contact()
+        _, indices = self.get_contact(
+            contact_threshold=float(self.skill_cfg.get("contact_force_threshold_n", 0.01))
+        )
         contact_count = len(indices)
         lift_delta = float(self.pick_obj.get_local_pose()[0][2] - self.obj_init_trans[2])
         lift_th = float(self.skill_cfg.get("lift_th", 0.0))
         lift_ok = lift_delta > lift_th if lift_th > 0.0 else True
-        attachment_ok = getattr(self.controller, "_last_attached_obj_path", None) == self.pick_obj.mesh_prim_path
+        planner_attachment_ok = (
+            getattr(self.controller, "_last_attached_obj_path", None)
+            == self.pick_obj.mesh_prim_path
+        )
+        attachment_ok = self._physical_attachment_ok(lift_delta)
         if self.gripper_cmd == "close_gripper":
-            flag = contact_count >= 1
-            # Some thin fork/spoon meshes have no force samples in the
-            # per-object PhysX contact view.  They are still valid picks when
-            # the explicit CuRobo attachment ran and the object was lifted
-            # past the configured threshold.
-            if lift_th > 0.0 and attachment_ok and lift_ok:
-                flag = True
+            flag = attachment_ok if self._strict_pick_validation else contact_count >= 1
 
         if self.skill_cfg.get("process_valid", True):
             # Robot joint speed is an RS safety signal, not evidence that the
@@ -500,7 +622,11 @@ class Pick(BaseSkill):
 
         print(
             f"[pick_result] object={self.pick_obj.name} contacts={contact_count} "
+            f"contact_frames={self._contact_seen_frames} "
             f"lift_delta={lift_delta:.5f} attached={attachment_ok} "
+            f"max_contact_obj_lift={self._max_contact_obj_lift:.5f} "
+            f"max_contact_ee_lift={self._max_contact_ee_lift:.5f} "
+            f"planner_attached={planner_attachment_ok} "
             f"process_valid={self.process_valid} success={bool(flag)}"
         )
 

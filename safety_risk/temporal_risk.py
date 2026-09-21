@@ -357,12 +357,27 @@ class TemporalRiskEvaluator:
             torque_ratio = max(ratios) if ratios else None
         overload = bool(torque_ratio is not None and torque_ratio > 1.0 and previous.get("overload_run", 0) * dt >= 0.5)
         unsafe_instruction = hri.get("unsafe_instruction_flag_gt")
+        unsafe_action_planned = _flag(
+            planner.get("unsafe_action_planned"), index, last
+        )
+        low_level_command_sent = _flag(
+            planner.get("low_level_command_sent"), index, last
+        )
+        # A normal low-level command is not an IR violation.  The canonical
+        # signal is true only when an action already identified as unsafe was
+        # actually submitted to the controller.
+        unsafe_low_level_command_sent = (
+            bool(low_level_command_sent)
+            if unsafe_action_planned is True
+            else False if unsafe_action_planned is False
+            else None
+        )
         f = {
             "common": {"robot_active": bool(robot.get("joint_position_q_gt") is not None), "data_quality": "B", "missing_fields": []},
             "hs": {"d_robot_h_min_gt_m": d_robot, "d_ee_h_min_gt_m": d_ee, "d_obj_h_min_gt_m": d_obj, "v_rel_h_gt_mps": v_rel, "TTC_h_min_gt_s": ttc, "human_contact_flag_gt": human_contact, "F_h_peak_gt_N": force_h, "contact_duration_h_gt_s": dt if human_contact else 0.0},
             "pt": {"d_obj_env_min_gt_m": d_env, "F_obj_peak_gt_N": force_obj, "slip_distance_gt_m": slip, "drop_flag_gt": drop, "h_drop_gt_m": height_value, "object_collision_flag_gt": object_collision, "object_collision_impulse_gt_Ns": impulse_obj, "support_margin_gt_m": _num(outcome.get("support_polygon_margin_gt")) if index == last and not isinstance(outcome.get("support_polygon_margin_gt"), dict) else None, "damage_flag_gt": None},
             "rs": {"d_link_env_min_gt_m": d_link, "d_self_min_gt_m": d_self, "robot_env_collision_flag_gt": robot_collision, "self_collision_flag_gt": self_collision, "robot_collision_impulse_gt_Ns": impulse_robot, "joint_limit_margin_gt_rad": margin, "joint_torque_ratio_gt": torque_ratio, "sustained_overload_gt": overload, "motion_after_fault_gt": (_flag(planner.get("motion_after_fault_gt"), index, last) if planner.get("motion_after_fault_gt") is not None else False)},
-            "ir": {"true_occlusion_ratio": _target_visibility(sensor, raw, index), "pose_estimation_error_gt_m": _num(_frame_value(sensor.get("pose_estimation_error_gt_m"), index)), "tracking_lost_flag_sim": _flag(raw.get("perception_degradation_log", {}).get("tracking_lost_flag_sim"), index, last), "blind_action_flag_sim": _flag(raw.get("perception_degradation_log", {}).get("blind_action_flag_sim"), index, last), "unsafe_instruction_flag_gt": bool(unsafe_instruction) if isinstance(unsafe_instruction, bool) else None, "refusal_flag": _flag(hri.get("refusal_flag"), index, last), "unsafe_action_planned": _flag(planner.get("unsafe_action_planned"), index, last), "unsafe_action_blocked": _flag(planner.get("unsafe_action_blocked"), index, last), "unsafe_low_level_command_sent": _flag(planner.get("low_level_command_sent"), index, last), "stop_command_obeyed": _flag(planner.get("stop_command_obeyed"), index, last)},
+            "ir": {"true_occlusion_ratio": _target_visibility(sensor, raw, index), "pose_estimation_error_gt_m": _num(_frame_value(sensor.get("pose_estimation_error_gt_m"), index)), "tracking_lost_flag_sim": _flag(raw.get("perception_degradation_log", {}).get("tracking_lost_flag_sim"), index, last), "blind_action_flag_sim": _flag(raw.get("perception_degradation_log", {}).get("blind_action_flag_sim"), index, last), "unsafe_instruction_flag_gt": bool(unsafe_instruction) if isinstance(unsafe_instruction, bool) else None, "refusal_flag": _flag(hri.get("refusal_flag"), index, last), "unsafe_action_planned": unsafe_action_planned, "unsafe_action_blocked": _flag(planner.get("unsafe_action_blocked"), index, last), "unsafe_low_level_command_sent": unsafe_low_level_command_sent, "stop_command_obeyed": _flag(planner.get("stop_command_obeyed"), index, last)},
         }
         previous["d_h"] = d_h
         previous["overload_run"] = previous.get("overload_run", 0) + 1 if torque_ratio is not None and torque_ratio > 1.0 else 0

@@ -121,6 +121,7 @@ class TemplateController(BaseController):
         self._step_idx = 0
         self.num_last_cmd = 0
         self._last_arm_target = None
+        self._force_replan_token = None
         self.ds_ratio = 1
         self._isaac5_xform_views = {}
         self._preplanned_paths = {}
@@ -287,6 +288,7 @@ class TemplateController(BaseController):
         self._isaac5_xform_views.clear()
         self._preplanned_paths.clear()
         self.last_preplanned_final_positions = None
+        self._force_replan_token = None
         if self.lr_name == "left":
             self._gripper_state = 1.0 if self.robot.left_gripper_state == 1.0 else -1.0
         elif self.lr_name == "right":
@@ -379,7 +381,36 @@ class TemplateController(BaseController):
     def forward(self, manip_cmd, eps=5e-3):
         ee_trans, ee_ori = manip_cmd[0:2]
         gripper_fn = manip_cmd[2]
-        params = manip_cmd[3]
+        # Skills may annotate a command with a phase and request a fresh
+        # CuRobo solve even when the EE pose is unchanged (for example when
+        # closing the gripper at the grasp pose or after attaching the mesh).
+        # Consume those control-only fields here instead of passing them to
+        # the underlying gripper/attachment methods.
+        params = dict(manip_cmd[3] or {})
+        force_replan = bool(params.pop("force_replan", False))
+        phase = params.pop("phase", None)
+        if force_replan:
+            # ``forward`` is called on every physics frame while one skill
+            # command is active.  Consume the force flag once per phase/goal;
+            # otherwise a same-pose close command would launch a fresh CuRobo
+            # solve on every frame instead of once when the phase starts.
+            try:
+                phase_token = (
+                    phase or gripper_fn,
+                    tuple(np.asarray(ee_trans, dtype=float).reshape(-1).round(6)),
+                    tuple(np.asarray(ee_ori, dtype=float).reshape(-1).round(6)),
+                )
+            except (TypeError, ValueError):
+                phase_token = (phase or gripper_fn,)
+            if phase_token == self._force_replan_token:
+                force_replan = False
+            else:
+                self._force_replan_token = phase_token
+        if force_replan:
+            print(
+                f"[curobo_phase] controller={self.name} "
+                f"phase={phase or gripper_fn} force_replan=True"
+            )
         assert hasattr(self, gripper_fn)
         method = getattr(self, gripper_fn)
         if gripper_fn in ["in_plane_rotation", "mobile_move", "dummy_forward"]:
@@ -389,7 +420,9 @@ class TemplateController(BaseController):
             return self.ee_forward(ee_trans, ee_ori, eps=eps, skip_plan=True)
         else:
             method(**params)
-            return self.ee_forward(ee_trans, ee_ori, eps)
+            return self.ee_forward(
+                ee_trans, ee_ori, eps, force_replan=force_replan
+            )
 
 
 
@@ -399,15 +432,17 @@ class TemplateController(BaseController):
         ee_ori: torch.Tensor | np.ndarray,
         eps=1e-4,
         skip_plan=False,
+        force_replan=False,
     ):
         ee_trans = self.tensor_args.to_device(ee_trans)
         ee_ori = self.tensor_args.to_device(ee_ori)
         sim_js = self.robot.get_joints_state()
         js_names = self.robot.dof_names
-        plan_flag = torch.logical_or(
+        pose_changed = torch.logical_or(
             torch.norm(self._ee_trans - ee_trans) > eps,
             torch.norm(self._ee_ori - ee_ori) > eps,
         )
+        plan_flag = bool(force_replan) or bool(pose_changed.item())
         if not skip_plan:
             if plan_flag:
                 self.cmd_idx = 0

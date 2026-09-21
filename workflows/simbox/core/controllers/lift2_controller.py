@@ -37,7 +37,27 @@ class Lift2Controller(TemplateController):
     def forward(self, manip_cmd, eps=5e-3):
         ee_trans, ee_ori = manip_cmd[0:2]
         gripper_fn = manip_cmd[2]
-        params = manip_cmd[3]
+        params = dict(manip_cmd[3] or {})
+        force_replan = bool(params.pop("force_replan", False))
+        phase = params.pop("phase", None)
+        if force_replan:
+            try:
+                phase_token = (
+                    phase or gripper_fn,
+                    tuple(np.asarray(ee_trans, dtype=float).reshape(-1).round(6)),
+                    tuple(np.asarray(ee_ori, dtype=float).reshape(-1).round(6)),
+                )
+            except (TypeError, ValueError):
+                phase_token = (phase or gripper_fn,)
+            if phase_token == self._force_replan_token:
+                force_replan = False
+            else:
+                self._force_replan_token = phase_token
+        if force_replan:
+            print(
+                f"[curobo_phase] controller={self.name} "
+                f"phase={phase or gripper_fn} force_replan=True"
+            )
         assert hasattr(self, gripper_fn)
         method = getattr(self, gripper_fn)
         if gripper_fn in ["in_plane_rotation", "mobile_move", "dummy_forward", "joint_ctrl"]:
@@ -47,4 +67,6 @@ class Lift2Controller(TemplateController):
             return self.ee_forward(ee_trans, ee_ori, eps=eps, skip_plan=True)
         else:
             method(**params)
-            return self.ee_forward(ee_trans, ee_ori, eps=eps)
+            return self.ee_forward(
+                ee_trans, ee_ori, eps=eps, force_replan=force_replan
+            )

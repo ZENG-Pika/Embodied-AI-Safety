@@ -81,6 +81,19 @@ class PhysXDataCollector:
             "safety_gate_status": [],
             # S-PLAN-004: controller command-plan activity per step
             "low_level_command_sent": [],
+            # Online intervention supervision.  The observed risk level is
+            # evaluated after the current physics step; the action fields
+            # describe the constraint applied to that step's command.
+            "intervention_level": [],
+            "intervention_action": [],
+            "intervention_command_scale": [],
+            "intervention_reasons": [],
+            "intervention_observation": [],
+            "control_training_eligible": [],
+            "perception_training_eligible": [],
+            "intervention_level_before_action": [],
+            "intervention_stop_state": [],
+            "intervention_policy_config": None,
             # Safety gate / stop tracking (episode-level results)
             "stop_success": None,
             "stop_margin_s": None,
@@ -176,6 +189,8 @@ class PhysXDataCollector:
         self._prev_ee_obstacle_dist_m = None
         self._safety_stop_active = False
         self._safety_gate_enabled = True
+        self._intervention_policy = None
+        self._prev_intervention_distance_m = None
         self._target_object_names: List[str] = []
         self._human_surrogate_names: List[str] = []
 
@@ -184,6 +199,211 @@ class PhysXDataCollector:
         entities = (config or {}).get("entities", {}) or {}
         self._target_object_names = [str(v) for v in entities.get("target_objects", []) or []]
         self._human_surrogate_names = [str(v) for v in entities.get("human_surrogates", []) or []]
+
+    def configure_intervention_policy(self, config: Optional[dict]) -> None:
+        """Configure the per-frame L0-L3 command intervention policy."""
+        from safety_risk.intervention_policy import RiskInterventionPolicy
+
+        self._intervention_policy = RiskInterventionPolicy(config or {})
+        self._data["intervention_policy_config"] = (
+            self._intervention_policy.config_snapshot()
+        )
+        logger.info(
+            "[intervention] configured: enabled=%s, L1 scale=%.3f, "
+            "L2 brake=%d steps",
+            self._intervention_policy.enabled,
+            self._intervention_policy.l1_speed_scale,
+            self._intervention_policy.l2_brake_steps,
+        )
+
+    def update_intervention_stop_state(self, task) -> Optional[Dict[str, Any]]:
+        """Feed measured articulation speed back into stop verification."""
+        if self._intervention_policy is None:
+            return None
+        speeds = []
+        for robot in getattr(task, "robots", {}).values():
+            try:
+                velocities = np.asarray(
+                    robot.get_joints_state().velocities, dtype=float
+                ).reshape(-1)
+            except Exception:
+                continue
+            finite = np.abs(velocities[np.isfinite(velocities)])
+            if finite.size:
+                speeds.append(float(np.max(finite)))
+        max_joint_speed = max(speeds) if speeds else None
+        state = self._intervention_policy.update_stop_confirmation(max_joint_speed)
+        self._data["intervention_stop_state"].append(dict(state))
+        return state
+
+    def get_intervention_decision(self, step_id: int) -> Optional[Dict[str, Any]]:
+        """Return the action constraint derived from the previous frame."""
+        if self._intervention_policy is None:
+            return None
+        return self._intervention_policy.command_decision(step_id)
+
+    def prime_intervention_state(self, task) -> Optional[Dict[str, Any]]:
+        """Classify the initial geometry before any policy command is sent.
+
+        The temporary distance sample initializes the stateful intervention
+        policy but is removed from the report arrays, so all persisted raw-GT
+        streams remain aligned with actual physics frames.
+        """
+        if self._intervention_policy is None:
+            return None
+        distance_fields = (
+            "robot_human_distance_matrix_gt",
+            "ee_human_distance_gt",
+            "object_human_distance_gt",
+            "object_env_distance_gt",
+            "link_env_distance_gt",
+            "self_distance_gt",
+        )
+        intervention_fields = (
+            "intervention_level",
+            "intervention_action",
+            "intervention_command_scale",
+            "intervention_reasons",
+            "intervention_observation",
+            "control_training_eligible",
+            "perception_training_eligible",
+            "intervention_level_before_action",
+        )
+        fields = distance_fields + intervention_fields
+        lengths = {name: len(self._data[name]) for name in fields}
+        try:
+            self._collect_distances(task)
+            return self.observe_intervention_after_step(-1, None)
+        finally:
+            for name, length in lengths.items():
+                del self._data[name][length:]
+
+    @staticmethod
+    def _finite_values(value: Any):
+        if isinstance(value, dict):
+            for child in value.values():
+                yield from PhysXDataCollector._finite_values(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                yield from PhysXDataCollector._finite_values(child)
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            number = float(value)
+            if math.isfinite(number):
+                yield number
+
+    @staticmethod
+    def _iter_contact_records(value: Any):
+        if isinstance(value, dict):
+            if "bodyA" in value or "bodyB" in value:
+                yield value
+            else:
+                for child in value.values():
+                    yield from PhysXDataCollector._iter_contact_records(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                yield from PhysXDataCollector._iter_contact_records(child)
+
+    @staticmethod
+    def _record_is_human_contact(record: Dict[str, Any]) -> bool:
+        text = f"{record.get('bodyA', '')} {record.get('bodyB', '')}".lower()
+        return any(token in text for token in ("obstacle", "human", "mano"))
+
+    def observe_intervention_after_step(
+        self,
+        step_id: int,
+        applied_decision: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Evaluate current HS signals and align them with the applied action."""
+        if self._intervention_policy is None:
+            return None
+
+        distance_values = []
+        if self._data["robot_human_distance_matrix_gt"]:
+            distance_values.extend(self._finite_values(
+                self._data["robot_human_distance_matrix_gt"][-1]
+            ))
+        if self._data["ee_human_distance_gt"]:
+            distance_values.extend(self._finite_values(
+                self._data["ee_human_distance_gt"][-1]
+            ))
+        if self._data["object_human_distance_gt"]:
+            distance_values.extend(self._finite_values(
+                self._data["object_human_distance_gt"][-1]
+            ))
+        distance_m = min(distance_values) if distance_values else None
+
+        records = []
+        if self._data["collision_pair_gt"]:
+            records.extend(self._iter_contact_records(
+                self._data["collision_pair_gt"][-1]
+            ))
+        if self._data["contact_force_gt"]:
+            records.extend(self._iter_contact_records(
+                self._data["contact_force_gt"][-1]
+            ))
+        human_records = [r for r in records if self._record_is_human_contact(r)]
+        human_contact = bool(human_records)
+        forces = []
+        for record in human_records:
+            value = record.get("force_n", record.get("force_magnitude_n"))
+            try:
+                value = abs(float(value))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                forces.append(value)
+        contact_force_n = max(forces) if forces else (0.0 if human_contact else None)
+        if human_contact:
+            distance_m = 0.0
+
+        closing_speed_mps = 0.0
+        if distance_m is not None and self._prev_intervention_distance_m is not None:
+            closing_speed_mps = max(
+                0.0,
+                (self._prev_intervention_distance_m - distance_m)
+                / max(float(self._physics_dt_s), 1.0e-6),
+            )
+        if distance_m is not None:
+            self._prev_intervention_distance_m = distance_m
+        ttc_s = (
+            distance_m / closing_speed_mps
+            if distance_m is not None and closing_speed_mps > 0.01
+            else None
+        )
+
+        observation = self._intervention_policy.observe(
+            distance_m=distance_m,
+            closing_speed_mps=closing_speed_mps,
+            ttc_s=ttc_s,
+            human_contact=human_contact,
+            contact_force_n=contact_force_n,
+        )
+        decision = applied_decision or {
+            "level_before_action": "L0",
+            "action": "none",
+            "command_scale": 1.0,
+            "control_training_eligible": True,
+            "perception_training_eligible": True,
+            "reasons": [],
+        }
+        observed_level = observation["level"]
+        control_eligible = (
+            bool(decision.get("control_training_eligible", True))
+            and observed_level != "L3"
+        )
+        self._data["intervention_level"].append(observed_level)
+        self._data["intervention_action"].append(decision.get("action", "none"))
+        self._data["intervention_command_scale"].append(
+            float(decision.get("command_scale", 1.0))
+        )
+        self._data["intervention_reasons"].append(list(observation.get("reasons", [])))
+        self._data["intervention_observation"].append(dict(observation))
+        self._data["control_training_eligible"].append(control_eligible)
+        self._data["perception_training_eligible"].append(True)
+        self._data["intervention_level_before_action"].append(
+            decision.get("level_before_action", "L0")
+        )
+        return observation
 
     def collect_step(self, task, step_id: int) -> None:
         """Collect PhysX data for one simulation step.

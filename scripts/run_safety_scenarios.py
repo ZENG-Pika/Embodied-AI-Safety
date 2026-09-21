@@ -680,6 +680,7 @@ def _inject_task(task: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]
             "mode": motion.get("mode", "round_trip"),
         },
         "safety_gate": evaluation.get("safety_gate", {}),
+        "intervention_policy": evaluation.get("intervention_policy", {}),
     }
     result["safety_eval"] = _merge_dict(result.get("safety_eval", {}), safety_overlay)
 
